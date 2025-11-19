@@ -15,6 +15,7 @@ type Partner = {
 
 type Item = {
   id: string;
+  sku?: string;
   name: string;
   unit?: string;
   price?: number;
@@ -359,7 +360,7 @@ const InvoicesPage: React.FC = () => {
           techUserId: x.techUserId,
           lines,
           totalAmount,
-          // ✅ đã post tồn nếu có movement
+          // đã post tồn nếu có movement
           posted: Array.isArray(x.movements) && x.movements.length > 0,
         };
       });
@@ -400,6 +401,7 @@ const InvoicesPage: React.FC = () => {
       const data = unwrap<any[]>(res);
       const mapped: Item[] = data.map((i: any) => ({
         id: String(i.id),
+        sku: i.sku || i.code, // tuỳ backend, thường là i.sku
         name: i.name,
         unit: i.unit,
         price: Number(i.price ?? 0),
@@ -604,7 +606,9 @@ const InvoicesPage: React.FC = () => {
       setSelected(null);
     } catch (err: any) {
       console.error("post stock error", err);
-      const msg = err?.response?.data?.message || "Post tồn thất bại, kiểm tra log console.";
+      const msg =
+        err?.response?.data?.message ||
+        "Post tồn thất bại, kiểm tra log console.";
       alert(msg);
     }
   }
@@ -684,19 +688,18 @@ const InvoicesPage: React.FC = () => {
       await loadInvoices();
       setSelected(null);
     } catch (err: any) {
-  console.error("Save invoice error", err);
+      console.error("Save invoice error", err);
 
-  // Lấy message từ backend (Prisma P2002 -> "Mã hoá đơn đã tồn tại")
-  const message =
-    err?.response?.data?.message ??
-    (typeof err?.message === "string"
-      ? err.message
-      : "Lưu hoá đơn thất bại, vui lòng thử lại.");
+      const message =
+        err?.response?.data?.message ??
+        (typeof err?.message === "string"
+          ? err.message
+          : "Lưu hoá đơn thất bại, vui lòng thử lại.");
 
-  alert(message);
-} finally {
-  setSaving(false);
-}
+      alert(message);
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleDelete(inv: Invoice) {
@@ -1063,14 +1066,16 @@ const InvoicesPage: React.FC = () => {
                 )}
 
                 {selected.lines.map((line, idx) => {
+                  const q = line.itemName.toLowerCase();
                   const itemSuggestions =
-                    line.itemName.length > 0
+                    q.length > 0
                       ? items
-                          .filter((it) =>
-                            it.name
-                              .toLowerCase()
-                              .includes(line.itemName.toLowerCase())
-                          )
+                          .filter((it) => {
+                            const name = (it.name || "").toLowerCase();
+                            const sku = (it.sku || "").toLowerCase();
+                            // tìm theo CẢ mã lẫn tên
+                            return name.includes(q) || sku.includes(q);
+                          })
                           .slice(0, 50)
                       : [];
 
@@ -1084,7 +1089,7 @@ const InvoicesPage: React.FC = () => {
                             handleLineChange(idx, "itemName", e.target.value)
                           }
                           onFocus={() => setOpenItemSuggestIndex(idx)}
-                          placeholder="Gõ tên sản phẩm..."
+                          placeholder="Gõ mã hoặc tên sản phẩm..."
                         />
                         {openItemSuggestIndex === idx &&
                           line.itemName.length > 0 && (
@@ -1099,6 +1104,7 @@ const InvoicesPage: React.FC = () => {
                                       selectItemForLine(idx, it);
                                     }}
                                   >
+                                    {it.sku ? `[${it.sku}] ` : ""}
                                     {it.name}
                                   </div>
                                 ))
