@@ -683,12 +683,20 @@ const InvoicesPage: React.FC = () => {
 
       await loadInvoices();
       setSelected(null);
-    } catch (err) {
-      console.error("save invoice error", err);
-      alert("Lưu hóa đơn thất bại, xem log console để debug.");
-    } finally {
-      setSaving(false);
-    }
+    } catch (err: any) {
+  console.error("Save invoice error", err);
+
+  // Lấy message từ backend (Prisma P2002 -> "Mã hoá đơn đã tồn tại")
+  const message =
+    err?.response?.data?.message ??
+    (typeof err?.message === "string"
+      ? err.message
+      : "Lưu hoá đơn thất bại, vui lòng thử lại.");
+
+  alert(message);
+} finally {
+  setSaving(false);
+}
   }
 
   async function handleDelete(inv: Invoice) {
