@@ -35,7 +35,7 @@ const ChangePasswordPage: React.FC = () => {
       <h2 className="text-xl font-semibold mb-4">Đổi mật khẩu</h2>
       <form onSubmit={handleSubmit} className="max-w-md space-y-3 text-sm">
         <div>
-          <label className="block mb-1 text-lg text-red-500">
+          <label className="block mb-1 text-lg text-red-500p">
   Mật khẩu mới phải từ 6 kí tự trở lên
 </label>
 
