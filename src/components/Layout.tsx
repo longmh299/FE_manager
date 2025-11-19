@@ -115,6 +115,19 @@ const Layout: React.FC = () => {
           >
             Khách hàng
           </NavLink>
+          {isAdmin && (
+            <NavLink
+              to="users"
+              className={({ isActive }) =>
+                `block rounded px-3 py-2 ${
+                  isActive ? "bg-slate-700" : "hover:bg-slate-800"
+                }`
+              }
+            >
+             Quản lý tài khoản
+            </NavLink>
+          )}
+
 
           <NavLink
             to="change-password"
