@@ -1196,7 +1196,7 @@ const InvoicesPage: React.FC = () => {
                     }}
                   >
                     Trạng thái tồn:{" "}
-                    {selected.posted ? "ĐÃ post tồn" : "Chưa post tồn"}
+                    {selected.posted ? "Đã lưu tồn" : "Chưa lưu tồn"}
                   </span>
                   <div style={{ display: "flex", gap: 8 }}>
                     <button
@@ -1205,7 +1205,7 @@ const InvoicesPage: React.FC = () => {
                       disabled={!selected.id || selected.posted}
                       onClick={handlePostStock}
                     >
-                      Post tồn
+                      Lưu tồn
                     </button>
                     <button
                       type="button"
@@ -1213,7 +1213,7 @@ const InvoicesPage: React.FC = () => {
                       disabled={!selected.id || !selected.posted}
                       onClick={handleUnpostStock}
                     >
-                      Hủy post tồn
+                      Hủy lưu tồn
                     </button>
                   </div>
                 </div>

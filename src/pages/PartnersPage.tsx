@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { Partner } from "../types";
+import { useAuth } from "../context/AuthContext";
 
 const emptyPartner: Partner = {
   id: "",
@@ -15,6 +17,16 @@ const PartnersPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState<Partner | null>(null);
   const [q, setQ] = useState("");
+
+  const navigate = useNavigate();
+
+  // lấy user + role từ AuthContext
+  const { user } = useAuth();
+  const role = user?.role || "staff";
+
+  const canEdit = role === "accountant" || role === "admin";
+  const canDelete = role === "admin";
+  const canCreate = canEdit;
 
   const extractPartnerList = (raw: any): Partner[] => {
     if (Array.isArray(raw)) return raw;
@@ -47,7 +59,8 @@ const PartnersPage: React.FC = () => {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editing) return;
+    if (!editing || !canEdit) return;
+
     try {
       if (editing.id) {
         await api.put(`/partners/${editing.id}`, editing);
@@ -57,17 +70,26 @@ const PartnersPage: React.FC = () => {
       setEditing(null);
       fetchData();
     } catch (err: any) {
-      alert(err?.response?.data?.message || "Không lưu được khách hàng");
+      alert(
+        err?.response?.data?.error ||
+          err?.response?.data?.message ||
+          "Không lưu được khách hàng"
+      );
     }
   };
 
   const handleDelete = async (id: string) => {
+    if (!canDelete) return;
     if (!confirm("Xóa khách hàng này?")) return;
     try {
       await api.delete(`/partners/${id}`);
       fetchData();
     } catch (err: any) {
-      alert(err?.response?.data?.message || "Không xóa được khách hàng");
+      alert(
+        err?.response?.data?.error ||
+          err?.response?.data?.message ||
+          "Không xóa được khách hàng"
+      );
     }
   };
 
@@ -97,12 +119,14 @@ const PartnersPage: React.FC = () => {
           </button>
         </form>
 
-        <button
-          onClick={() => setEditing({ ...emptyPartner })}
-          className="px-4 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-500 ml-auto"
-        >
-          + Thêm khách hàng
-        </button>
+        {canCreate && (
+          <button
+            onClick={() => setEditing({ ...emptyPartner })}
+            className="px-4 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-500 ml-auto"
+          >
+            + Thêm khách hàng
+          </button>
+        )}
       </div>
 
       <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-auto text-sm">
@@ -142,18 +166,33 @@ const PartnersPage: React.FC = () => {
                   <td className="px-3 py-2 border-b">{p.phone || "-"}</td>
                   <td className="px-3 py-2 border-b">{p.address || "-"}</td>
                   <td className="px-3 py-2 border-b text-right space-x-2">
+                    {/* Xem: mọi role đều có */}
                     <button
-                      className="px-2 py-1 rounded border text-xs"
-                      onClick={() => setEditing(p)}
+                      className="px-2 py-1 rounded bg-slate-800 text-white text-xs"
+                      onClick={() => navigate(`/partners/${p.id}`)}
                     >
-                      Sửa
+                      Xem
                     </button>
-                    <button
-                      className="px-2 py-1 rounded bg-red-600 text-white text-xs"
-                      onClick={() => handleDelete(p.id)}
-                    >
-                      Xóa
-                    </button>
+
+                    {/* Sửa: accountant + admin */}
+                    {canEdit && (
+                      <button
+                        className="px-2 py-1 rounded border text-xs"
+                        onClick={() => setEditing(p)}
+                      >
+                        Sửa
+                      </button>
+                    )}
+
+                    {/* Xóa: chỉ admin */}
+                    {canDelete && (
+                      <button
+                        className="px-2 py-1 rounded bg-red-600 text-white text-xs"
+                        onClick={() => handleDelete(p.id)}
+                      >
+                        Xóa
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -161,7 +200,8 @@ const PartnersPage: React.FC = () => {
         </table>
       </div>
 
-      {editing && (
+      {/* Modal thêm/sửa: chỉ dùng khi canEdit */}
+      {editing && canEdit && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-lg text-sm">
             <h3 className="font-semibold mb-4 text-slate-800">

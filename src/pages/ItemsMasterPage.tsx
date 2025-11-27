@@ -195,7 +195,7 @@ const ItemsMasterPage: React.FC = () => {
         <table className="min-w-full">
           <thead className="bg-slate-50">
             <tr>
-              <th className="text-left px-3 py-2 border-b">SKU</th>
+              <th className="text-left px-3 py-2 border-b">Mã</th>
               <th className="text-left px-3 py-2 border-b">Tên</th>
               <th className="text-left px-3 py-2 border-b">Loại</th>
               <th className="text-right px-3 py-2 border-b">Giá bán</th>

@@ -198,7 +198,7 @@ const PartStocksPage: React.FC = () => {
                   width: 160,
                 }}
               >
-                SKU
+                Mã
               </th>
               <th
                 style={{

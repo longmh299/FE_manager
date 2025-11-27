@@ -17,6 +17,7 @@ import StockCountDetailPage from "./pages/StockCountDetailPage";
 import StockOpeningImportPage from "./pages/StockOpeningImportPage";
 import PartStocksPage from "./pages/PartStocksPage";
 import UserManagementPage from "./pages/UserManagementPage";
+import CustomerDetailPage from "./pages/CustomerDetailPage";
 const App: React.FC = () => {
   return (
     <Routes>
@@ -43,7 +44,8 @@ const App: React.FC = () => {
         <Route path="/stock-counts/:id" element={<StockCountDetailPage />} />
         <Route path="stock-import-opening" element={<StockOpeningImportPage />} />
         <Route path="part-stocks" element={<PartStocksPage />} />
-         <Route path="/users" element={<UserManagementPage />} />
+        <Route path="/users" element={<UserManagementPage />} />
+        <Route path="partners/:id" element={<CustomerDetailPage />} />
       </Route>
 
       <Route path="*" element={<div className="p-4">404 Not Found</div>} />
