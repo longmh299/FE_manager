@@ -3,7 +3,6 @@ import { Routes, Route } from "react-router-dom";
 import { RequireAuth } from "./components/RequireAuth";
 import Layout from "./components/Layout";
 import LoginPage from "./pages/LoginPage";
-import DashboardPage from "./pages/DashboardPage";
 import ItemsPage from "./pages/ItemsPage";
 import ItemsMasterPage from "./pages/ItemsMasterPage";
 import RevenuePage from "./pages/RevenuePage";
