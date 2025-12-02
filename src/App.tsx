@@ -31,7 +31,7 @@ const App: React.FC = () => {
           </RequireAuth>
         }
       >
-        <Route index element={<DashboardPage />} />
+        <Route index element={<PartStocksPage />} />
         <Route path="items" element={<ItemsPage />} />
         <Route path="items-master" element={<ItemsMasterPage />} />
         <Route path="revenue" element={<RevenuePage />} />

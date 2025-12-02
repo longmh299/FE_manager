@@ -1,6 +1,6 @@
 // src/pages/StockOpeningImportPage.tsx
 import React, { useState } from "react";
-import api from "../api/client";
+import api, { getApiBaseUrl } from "../api/client";
 
 type ImportSummary = {
   createdItems?: number;
@@ -39,14 +39,18 @@ const StockOpeningImportPage: React.FC = () => {
       formData.append("file", file);
       formData.append("mode", mode); // replace | add
 
-      const res = await api.post("/imports/stocks/opening-onefile", formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
+      const res = await api.post(
+        "/imports/stocks/opening-onefile",
+        formData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+          },
         },
-      });
+      );
 
-      const sum = res.data?.summary as ImportSummary | undefined;
-      setSummary(sum || null);
+      const sum = (res.data?.summary as ImportSummary) || null;
+      setSummary(sum);
     } catch (err: any) {
       console.error("Import opening stocks error", err);
       const msg =
@@ -59,17 +63,45 @@ const StockOpeningImportPage: React.FC = () => {
     }
   };
 
+  // 🔹 Tải file Excel mẫu
+  const handleDownloadTemplate = () => {
+    const base = getApiBaseUrl();
+    // BE sẽ tạo route GET /api/imports/stocks/opening-template
+    const url = base + "/api/imports/stocks/opening-template";
+    window.open(url, "_blank");
+  };
+
   return (
     <div style={{ padding: 16, maxWidth: 700, margin: "0 auto" }}>
       <h2 style={{ marginBottom: 12 }}>Nhập tồn đầu từ Excel</h2>
 
-      <p style={{ fontSize: 13, color: "#4a5568", marginBottom: 16 }}>
+      <p style={{ fontSize: 13, color: "#4a5568", marginBottom: 12 }}>
         File Excel nên có header:{" "}
         <code>sku, name, kind, qty, sellPrice, note</code>. <br />
         Cột <code>kind</code>: <b>MACHINE</b> cho máy, <b>PART</b> cho linh
         kiện. <br />
         Chọn chế độ <b>Ghi đè (replace)</b> để set lại toàn bộ tồn theo file.
       </p>
+
+      {/* 🔹 Nút tải file mẫu Excel */}
+      <div style={{ marginBottom: 16 }}>
+        <button
+          type="button"
+          onClick={handleDownloadTemplate}
+          style={{
+            padding: "6px 14px",
+            borderRadius: 4,
+            border: "1px solid #2563eb",
+            backgroundColor: "#f9fafb",
+            color: "#2563eb",
+            fontSize: 14,
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          Tải file mẫu Excel tồn
+        </button>
+      </div>
 
       <form onSubmit={handleSubmit} style={{ marginBottom: 16 }}>
         <div style={{ marginBottom: 12 }}>
@@ -113,7 +145,14 @@ const StockOpeningImportPage: React.FC = () => {
               Ghi đè (replace) – set lại số tồn = qty trong file
             </label>
           </div>
-          <div style={{ display: "flex", gap: 16, fontSize: 13, marginTop: 4 }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 16,
+              fontSize: 13,
+              marginTop: 4,
+            }}
+          >
             <label>
               <input
                 type="radio"

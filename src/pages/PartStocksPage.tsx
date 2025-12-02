@@ -7,6 +7,7 @@ type PartStockRow = {
   name: string;
   unit: string;
   totalQty: number;
+  sellPrice: number | null; // 🔹 thêm giá bán
 };
 
 const PAGE_SIZE = 50;
@@ -48,6 +49,10 @@ const PartStocksPage: React.FC = () => {
           name: r.name ?? "",
           unit: r.unit ?? "",
           totalQty: Number(r.totalQty ?? 0),
+          sellPrice:
+            r.sellPrice === null || r.sellPrice === undefined
+              ? null
+              : Number(r.sellPrice),
         }));
 
         // Sắp xếp tồn kho từ lớn xuống nhỏ
@@ -223,6 +228,16 @@ const PartStocksPage: React.FC = () => {
                 style={{
                   textAlign: "right",
                   padding: "8px 10px",
+                  borderRight: "1px solid #e5e7eb",
+                  width: 120,
+                }}
+              >
+                Giá bán
+              </th>
+              <th
+                style={{
+                  textAlign: "right",
+                  padding: "8px 10px",
                   width: 120,
                 }}
               >
@@ -233,13 +248,13 @@ const PartStocksPage: React.FC = () => {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={4} style={{ padding: 12, textAlign: "center" }}>
+                <td colSpan={5} style={{ padding: 12, textAlign: "center" }}>
                   Đang tải dữ liệu...
                 </td>
               </tr>
             ) : pagedRows.length === 0 ? (
               <tr>
-                <td colSpan={4} style={{ padding: 12, textAlign: "center" }}>
+                <td colSpan={5} style={{ padding: 12, textAlign: "center" }}>
                   Không có linh kiện nào thỏa điều kiện.
                 </td>
               </tr>
@@ -274,6 +289,19 @@ const PartStocksPage: React.FC = () => {
                     }}
                   >
                     {row.unit || "pcs"}
+                  </td>
+                  <td
+                    style={{
+                      padding: "6px 10px",
+                      borderTop: "1px solid #f3f4f6",
+                      borderRight: "1px solid #f3f4f6",
+                      textAlign: "right",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {row.sellPrice !== null
+                      ? row.sellPrice.toLocaleString("vi-VN")
+                      : "-"}
                   </td>
                   <td
                     style={{
