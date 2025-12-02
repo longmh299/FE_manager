@@ -1,5 +1,5 @@
 import React from "react";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import { RequireAuth } from "./components/RequireAuth";
 import Layout from "./components/Layout";
 import LoginPage from "./pages/LoginPage";
@@ -30,7 +30,7 @@ const App: React.FC = () => {
           </RequireAuth>
         }
       >
-        <Route index element={<PartStocksPage />} />
+        <Route index element={<Navigate to="/part-stocks" replace />} />
         <Route path="items" element={<ItemsPage />} />
         <Route path="items-master" element={<ItemsMasterPage />} />
         <Route path="revenue" element={<RevenuePage />} />
