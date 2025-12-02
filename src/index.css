@@ -7,3 +7,19 @@ body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
 }
+
+@media print {
+  body {
+    background: #ffffff !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  /* Ẩn sidebar / header nếu cần, ví dụ: */
+  .app-sidebar,
+  .app-header {
+    display: none !important;
+  }
+}

@@ -19,6 +19,7 @@ import StockOpeningImportPage from "./pages/StockOpeningImportPage";
 import PartStocksPage from "./pages/PartStocksPage";
 import UserManagementPage from "./pages/UserManagementPage";
 import CustomerDetailPage from "./pages/CustomerDetailPage";
+import InvoicePrintPage from "./pages/InvoicePrintPage";
 const App: React.FC = () => {
   return (
     <Routes>
@@ -48,7 +49,7 @@ const App: React.FC = () => {
         <Route path="/users" element={<UserManagementPage />} />
         <Route path="partners/:id" element={<CustomerDetailPage />} />
       </Route>
-
+      <Route path="invoices/:id/print" element={<InvoicePrintPage />} />
       <Route path="*" element={<div className="p-4">404 Not Found</div>} />
     </Routes>
   );

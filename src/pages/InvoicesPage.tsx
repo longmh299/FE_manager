@@ -49,7 +49,13 @@ type Invoice = {
   saleUserId?: string;
   techUserId?: string;
   lines: InvoiceLine[];
-  totalAmount: number;
+
+  // tiền
+  subtotal?: number; // tạm tính (chỉ tiền hàng)
+  tax?: number; // tiền thuế
+  taxPercent?: number; // % thuế user nhập
+  totalAmount: number; // tổng cộng = subtotal + tax
+
   posted?: boolean;
 };
 
@@ -135,6 +141,13 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
   },
   linkBtnDanger: { color: "#dc2626" },
+
+  statusBadge: {
+    padding: "2px 8px",
+    borderRadius: 9999,
+    fontSize: 12,
+    display: "inline-block",
+  },
 
   right: {
     width: 440,
@@ -251,7 +264,26 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     fontSize: 12,
   },
+
+  // tổng tiền
   totalText: { fontWeight: 600, textAlign: "right", marginTop: 4 },
+  summaryRow: {
+    display: "flex",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 4,
+    fontSize: 13,
+  },
+  summaryLabel: {
+    minWidth: 100,
+    textAlign: "right",
+  },
+  summaryValue: {
+    minWidth: 120,
+    textAlign: "right",
+    fontWeight: 600,
+  },
 
   formActions: {
     display: "flex",
@@ -291,6 +323,12 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 8,
     marginTop: 4,
   },
+   actionCell: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,                    // dãn khoảng cách nút
+    flexWrap: "wrap",
+  },
 };
 
 const InvoicesPage: React.FC = () => {
@@ -306,6 +344,24 @@ const InvoicesPage: React.FC = () => {
   const [showPartnerSuggest, setShowPartnerSuggest] = useState(false);
   const [openItemSuggestIndex, setOpenItemSuggestIndex] =
     useState<number | null>(null);
+
+  // -------- helpers tiền --------
+  function calcTotal(lines: InvoiceLine[]) {
+    return lines.reduce((s, l) => s + l.qty * l.price, 0);
+  }
+
+  function recalcTotals(
+    lines: InvoiceLine[],
+    taxPercent?: number
+  ): { subtotal: number; tax: number; totalAmount: number } {
+    const subtotal = calcTotal(lines);
+    let tax = 0;
+    if (taxPercent && taxPercent > 0) {
+      tax = Math.round((subtotal * taxPercent) / 100);
+    }
+    const totalAmount = subtotal + tax;
+    return { subtotal, tax, totalAmount };
+  }
 
   // -------- load data --------
   useEffect(() => {
@@ -343,7 +399,16 @@ const InvoicesPage: React.FC = () => {
             price: Number(l.unitPrice ?? l.price ?? 0),
           })) ?? [];
 
-        const totalAmount = calcTotal(lines);
+        const subtotalFromApi =
+          x.subtotal != null ? Number(x.subtotal) : calcTotal(lines);
+        const taxFromApi = x.tax != null ? Number(x.tax) : 0;
+        const totalFromApi =
+          x.total != null ? Number(x.total) : subtotalFromApi + taxFromApi;
+
+        let taxPercent = 0;
+        if (subtotalFromApi > 0 && taxFromApi > 0) {
+          taxPercent = +((taxFromApi * 100) / subtotalFromApi).toFixed(2);
+        }
 
         return {
           id: x.id,
@@ -359,7 +424,10 @@ const InvoicesPage: React.FC = () => {
           saleUserId: x.saleUserId,
           techUserId: x.techUserId,
           lines,
-          totalAmount,
+          subtotal: subtotalFromApi,
+          tax: taxFromApi,
+          taxPercent,
+          totalAmount: totalFromApi,
           // đã post tồn nếu có movement
           posted: Array.isArray(x.movements) && x.movements.length > 0,
         };
@@ -418,9 +486,9 @@ const InvoicesPage: React.FC = () => {
         params: { page: 1, pageSize: 100 },
       });
       const body = (res as any).data || {};
-      const items = (body.items || []) as any[];
+      const itemsData = (body.items || []) as any[];
 
-      const mapped: StaffUser[] = items
+      const mapped: StaffUser[] = itemsData
         .filter((u) => u.role === "staff")
         .map((u) => ({
           id: String(u.id),
@@ -434,9 +502,6 @@ const InvoicesPage: React.FC = () => {
   }
 
   // -------- helpers --------
-  function calcTotal(lines: InvoiceLine[]) {
-    return lines.reduce((s, l) => s + l.qty * l.price, 0);
-  }
 
   function handleNewInvoice() {
     const today = new Date().toISOString().slice(0, 10);
@@ -447,6 +512,9 @@ const InvoicesPage: React.FC = () => {
       type: "SALES",
       partnerName: "",
       lines: [],
+      subtotal: 0,
+      tax: 0,
+      taxPercent: 0,
       totalAmount: 0,
       posted: false,
     };
@@ -456,7 +524,10 @@ const InvoicesPage: React.FC = () => {
   }
 
   function handleSelectInvoice(inv: Invoice) {
-    const clone: Invoice = { ...inv, lines: inv.lines.map((l) => ({ ...l })) };
+    const clone: Invoice = {
+      ...inv,
+      lines: inv.lines.map((l) => ({ ...l })),
+    };
     setSelected(clone);
     setShowPartnerSuggest(false);
     setOpenItemSuggestIndex(null);
@@ -465,9 +536,15 @@ const InvoicesPage: React.FC = () => {
   function updateSelected(partial: Partial<Invoice>) {
     setSelected((prev) => {
       if (!prev) return prev;
-      const lines = partial.lines ?? prev.lines;
-      const totalAmount = calcTotal(lines);
-      return { ...prev, ...partial, lines, totalAmount };
+      const next: Invoice = { ...prev, ...partial };
+      const { subtotal, tax, totalAmount } = recalcTotals(
+        next.lines,
+        next.taxPercent
+      );
+      next.subtotal = subtotal;
+      next.tax = tax;
+      next.totalAmount = totalAmount;
+      return next;
     });
   }
 
@@ -488,13 +565,21 @@ const InvoicesPage: React.FC = () => {
     setShowPartnerSuggest(true);
   }
 
-  function handleLineChange(index: number, field: keyof InvoiceLine, value: any) {
+  function handleLineChange(
+    index: number,
+    field: keyof InvoiceLine,
+    value: any
+  ) {
     setSelected((prev) => {
       if (!prev) return prev;
       const lines = prev.lines.map((l, idx) =>
         idx === index ? { ...l, [field]: value } : l
       );
-      return { ...prev, lines, totalAmount: calcTotal(lines) };
+      const { subtotal, tax, totalAmount } = recalcTotals(
+        lines,
+        prev.taxPercent
+      );
+      return { ...prev, lines, subtotal, tax, totalAmount };
     });
   }
 
@@ -512,7 +597,11 @@ const InvoicesPage: React.FC = () => {
             }
           : l
       );
-      return { ...prev, lines, totalAmount: calcTotal(lines) };
+      const { subtotal, tax, totalAmount } = recalcTotals(
+        lines,
+        prev.taxPercent
+      );
+      return { ...prev, lines, subtotal, tax, totalAmount };
     });
     setOpenItemSuggestIndex(null);
   }
@@ -524,7 +613,11 @@ const InvoicesPage: React.FC = () => {
         ...prev.lines,
         { itemName: "", qty: 1, price: 0, unit: "" } as InvoiceLine,
       ];
-      return { ...prev, lines, totalAmount: calcTotal(lines) };
+      const { subtotal, tax, totalAmount } = recalcTotals(
+        lines,
+        prev.taxPercent
+      );
+      return { ...prev, lines, subtotal, tax, totalAmount };
     });
   }
 
@@ -532,7 +625,11 @@ const InvoicesPage: React.FC = () => {
     setSelected((prev) => {
       if (!prev) return prev;
       const lines = prev.lines.filter((_, idx) => idx !== index);
-      return { ...prev, lines, totalAmount: calcTotal(lines) };
+      const { subtotal, tax, totalAmount } = recalcTotals(
+        lines,
+        prev.taxPercent
+      );
+      return { ...prev, lines, subtotal, tax, totalAmount };
     });
   }
 
@@ -669,6 +766,7 @@ const InvoicesPage: React.FC = () => {
         partnerAddr: selected.partnerAddress,
         saleUserId: selected.saleUserId,
         techUserId: selected.techUserId,
+        taxPercent: selected.taxPercent ?? 0, // gửi % thuế lên BE
         lines: selected.lines.map((l) => ({
           id: l.id,
           itemId: l.itemId,
@@ -763,20 +861,21 @@ const InvoicesPage: React.FC = () => {
                     <th style={styles.th}>Số HĐ</th>
                     <th style={styles.th}>Khách hàng</th>
                     <th style={styles.th}>Tổng tiền</th>
+                    <th style={styles.th}>Trạng thái</th>
                     <th style={styles.th}>Thao tác</th>
                   </tr>
                 </thead>
                 <tbody>
                   {loadingList && (
                     <tr>
-                      <td style={styles.td} colSpan={4}>
+                      <td style={styles.td} colSpan={5}>
                         Đang tải dữ liệu...
                       </td>
                     </tr>
                   )}
                   {!loadingList && filteredList.length === 0 && (
                     <tr>
-                      <td style={styles.td} colSpan={4}>
+                      <td style={styles.td} colSpan={5}>
                         Không tìm thấy hóa đơn
                       </td>
                     </tr>
@@ -799,6 +898,21 @@ const InvoicesPage: React.FC = () => {
                           {inv.totalAmount.toLocaleString()} đ
                         </td>
                         <td style={styles.td}>
+                          <span
+                            style={{
+                              ...styles.statusBadge,
+                              backgroundColor: inv.posted ? "#dcfce7" : "#ffedd5",
+                              color: inv.posted ? "#166534" : "#9a3412",
+                              border: `1px solid ${
+                                inv.posted ? "#bbf7d0" : "#fed7aa"
+                              }`,
+                            }}
+                          >
+                            {inv.posted ? "Đã lưu tồn" : "Nháp"}
+                          </span>
+                        </td>
+                        <td style={styles.td}>
+                          <div style={styles.actionCell}>
                           <button
                             type="button"
                             style={styles.linkBtn}
@@ -811,6 +925,20 @@ const InvoicesPage: React.FC = () => {
                           </button>
                           <button
                             type="button"
+                            style={styles.linkBtn}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              window.open(
+                                `/invoices/${inv.id}/print`,
+                                "_blank",
+                                "noopener,noreferrer"
+                              );
+                            }}
+                          >
+                            In
+                          </button>
+                          <button
+                            type="button"
                             style={{ ...styles.linkBtn, ...styles.linkBtnDanger }}
                             onClick={(e) => {
                               e.stopPropagation();
@@ -819,6 +947,7 @@ const InvoicesPage: React.FC = () => {
                           >
                             Xóa
                           </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1104,8 +1233,7 @@ const InvoicesPage: React.FC = () => {
                                       selectItemForLine(idx, it);
                                     }}
                                   >
-                                    {it.sku ? `[${it.sku}] ` : ""}
-                                    {it.name}
+                                    {it.sku ? `[${it.sku}] ` : ""} {it.name}
                                   </div>
                                 ))
                               ) : (
@@ -1184,8 +1312,62 @@ const InvoicesPage: React.FC = () => {
                   + Thêm dòng sản phẩm
                 </button>
 
-                <div style={styles.totalText}>
-                  Tổng tiền: {selected.totalAmount.toLocaleString()} đ
+                {/* Tóm tắt tiền + thuế */}
+                <div style={{ marginTop: 8 }}>
+                  <div style={styles.summaryRow}>
+                    <span style={styles.summaryLabel}>Tạm tính:</span>
+                    <span style={styles.summaryValue}>
+                      {(selected.subtotal ?? 0).toLocaleString()} đ
+                    </span>
+                  </div>
+
+                  <div style={styles.summaryRow}>
+                    <span style={styles.summaryLabel}>Thuế (%)</span>
+                    <div
+                      style={{ display: "flex", alignItems: "center", gap: 4 }}
+                    >
+                      <input
+                        style={{
+                          ...styles.smallInput,
+                          width: 70,
+                          textAlign: "right",
+                        }}
+                        type="number"
+                        min={0}
+                        value={selected.taxPercent ?? 0}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const num = raw === "" ? 0 : Number(raw);
+                          const val = isNaN(num) ? 0 : num;
+                          setSelected((prev) => {
+                            if (!prev) return prev;
+                            const { subtotal, tax, totalAmount } = recalcTotals(
+                              prev.lines,
+                              val
+                            );
+                            return {
+                              ...prev,
+                              taxPercent: val,
+                              subtotal,
+                              tax,
+                              totalAmount,
+                            };
+                          });
+                        }}
+                      />
+                      <span>%</span>
+                      <span style={{ marginLeft: 12 }}>
+                        = {(selected.tax ?? 0).toLocaleString()} đ
+                      </span>
+                    </div>
+                  </div>
+
+                  <div style={styles.summaryRow}>
+                    <span style={styles.summaryLabel}>Tổng cộng:</span>
+                    <span style={styles.summaryValue}>
+                      {selected.totalAmount.toLocaleString()} đ
+                    </span>
+                  </div>
                 </div>
 
                 <div style={styles.postStatusRow}>
