@@ -38,7 +38,7 @@ type StaffUser = {
 type Invoice = {
   id: string | number | null;
   code: string;
-  date?: string;
+  date?: string; // luôn lưu dạng yyyy-MM-dd cho input date
   type: InvoiceType;
   partnerId?: string;
   partnerName: string;
@@ -69,6 +69,44 @@ function unwrap<T = any>(res: any): T {
     return body as T;
   }
   return res as T;
+}
+
+/** Chuẩn hoá ngày về dạng yyyy-MM-dd để dùng cho input type="date" */
+function normalizeDateForInput(raw?: string): string {
+  if (!raw) return "";
+
+  // nếu backend đã trả sẵn yyyy-MM-dd thì dùng luôn
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+  // nếu dạng dd/MM/yyyy
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
+    const [d, m, y] = raw.split("/");
+    return `${y}-${m}-${d}`;
+  }
+
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return "";
+
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+/** Format ngày hiển thị trên list: dd/MM/yyyy */
+function formatDateDisplay(raw?: string): string {
+  if (!raw) return "";
+  // nếu đang là yyyy-MM-dd
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [y, m, d] = raw.split("-");
+    return `${d}/${m}/${y}`;
+  }
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  const day = String(d.getDate()).padStart(2, "0");
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const year = d.getFullYear();
+  return `${day}/${month}/${year}`;
 }
 
 // -------- styles ----------
@@ -323,10 +361,10 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 8,
     marginTop: 4,
   },
-   actionCell: {
+  actionCell: {
     display: "flex",
     alignItems: "center",
-    gap: 10,                    // dãn khoảng cách nút
+    gap: 10, // dãn khoảng cách nút
     flexWrap: "wrap",
   },
 };
@@ -410,10 +448,14 @@ const InvoicesPage: React.FC = () => {
           taxPercent = +((taxFromApi * 100) / subtotalFromApi).toFixed(2);
         }
 
+        // lấy ngày từ BE rồi chuẩn hoá cho input date
+        const rawDate = x.date ?? x.issueDate ?? x.createdAt ?? "";
+        const normalizedDate = normalizeDateForInput(rawDate);
+
         return {
           id: x.id,
           code: x.code ?? "",
-          date: x.date ?? x.issueDate ?? "",
+          date: normalizedDate,
           type: (x.type === "PURCHASE" ? "PURCHASE" : "SALES") as InvoiceType,
           partnerId: x.partnerId,
           partnerName: x.partner?.name ?? x.partnerName ?? "",
@@ -504,7 +546,7 @@ const InvoicesPage: React.FC = () => {
   // -------- helpers --------
 
   function handleNewInvoice() {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = new Date().toISOString().slice(0, 10); // yyyy-MM-dd
     const inv: Invoice = {
       id: null,
       code: "",
@@ -756,7 +798,7 @@ const InvoicesPage: React.FC = () => {
       setSaving(true);
       const payload = {
         code: selected.code,
-        issueDate: selected.date,
+        issueDate: selected.date, // gửi yyyy-MM-dd
         type: selected.type,
         partnerId: selected.partnerId,
         partnerName: selected.partnerName,
@@ -859,6 +901,7 @@ const InvoicesPage: React.FC = () => {
                 <thead style={styles.thead}>
                   <tr>
                     <th style={styles.th}>Số HĐ</th>
+                    <th style={styles.th}>Ngày</th>
                     <th style={styles.th}>Khách hàng</th>
                     <th style={styles.th}>Tổng tiền</th>
                     <th style={styles.th}>Trạng thái</th>
@@ -868,14 +911,14 @@ const InvoicesPage: React.FC = () => {
                 <tbody>
                   {loadingList && (
                     <tr>
-                      <td style={styles.td} colSpan={5}>
+                      <td style={styles.td} colSpan={6}>
                         Đang tải dữ liệu...
                       </td>
                     </tr>
                   )}
                   {!loadingList && filteredList.length === 0 && (
                     <tr>
-                      <td style={styles.td} colSpan={5}>
+                      <td style={styles.td} colSpan={6}>
                         Không tìm thấy hóa đơn
                       </td>
                     </tr>
@@ -893,6 +936,7 @@ const InvoicesPage: React.FC = () => {
                         onClick={() => handleSelectInvoice(inv)}
                       >
                         <td style={styles.td}>{inv.code}</td>
+                        <td style={styles.td}>{formatDateDisplay(inv.date)}</td>
                         <td style={styles.td}>{inv.partnerName}</td>
                         <td style={styles.td}>
                           {inv.totalAmount.toLocaleString()} đ
@@ -913,40 +957,40 @@ const InvoicesPage: React.FC = () => {
                         </td>
                         <td style={styles.td}>
                           <div style={styles.actionCell}>
-                          <button
-                            type="button"
-                            style={styles.linkBtn}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleSelectInvoice(inv);
-                            }}
-                          >
-                            Sửa
-                          </button>
-                          <button
-                            type="button"
-                            style={styles.linkBtn}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              window.open(
-                                `/invoices/${inv.id}/print`,
-                                "_blank",
-                                "noopener,noreferrer"
-                              );
-                            }}
-                          >
-                            In
-                          </button>
-                          <button
-                            type="button"
-                            style={{ ...styles.linkBtn, ...styles.linkBtnDanger }}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDelete(inv);
-                            }}
-                          >
-                            Xóa
-                          </button>
+                            <button
+                              type="button"
+                              style={styles.linkBtn}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleSelectInvoice(inv);
+                              }}
+                            >
+                              Sửa
+                            </button>
+                            <button
+                              type="button"
+                              style={styles.linkBtn}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                window.open(
+                                  `/invoices/${inv.id}/print`,
+                                  "_blank",
+                                  "noopener,noreferrer"
+                                );
+                              }}
+                            >
+                              In
+                            </button>
+                            <button
+                              type="button"
+                              style={{ ...styles.linkBtn, ...styles.linkBtnDanger }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDelete(inv);
+                              }}
+                            >
+                              Xóa
+                            </button>
                           </div>
                         </td>
                       </tr>
