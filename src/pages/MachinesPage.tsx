@@ -29,6 +29,8 @@ type EditingMachine = {
 
 type SearchItem = Item & { id: string };
 
+const PAGE_SIZE = 40;
+
 const MachinesPage: React.FC = () => {
   const { user } = useAuth();
   const role = user?.role;
@@ -39,6 +41,7 @@ const MachinesPage: React.FC = () => {
   const [loadingMachines, setLoadingMachines] = useState(false);
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
   const [selectedMachine, setSelectedMachine] = useState<Machine | null>(null);
   const [parts, setParts] = useState<MachinePartDto[]>([]);
@@ -52,9 +55,8 @@ const MachinesPage: React.FC = () => {
   const [searchPartText, setSearchPartText] = useState("");
   const [searchPartResults, setSearchPartResults] = useState<SearchItem[]>([]);
   const [searchingParts, setSearchingParts] = useState(false);
-  const [selectedPartItem, setSelectedPartItem] = useState<SearchItem | null>(
-    null
-  );
+  const [selectedPartItem, setSelectedPartItem] =
+    useState<SearchItem | null>(null);
   const [qtyPerSet, setQtyPerSet] = useState<number | null>(1);
   const [savingPart, setSavingPart] = useState(false);
 
@@ -62,6 +64,7 @@ const MachinesPage: React.FC = () => {
 
   // -------- LOAD LIST MACHINE ----------
   useEffect(() => {
+    setPage(1); // reset về trang 1 khi đổi từ khóa
     loadMachines();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
@@ -79,11 +82,20 @@ const MachinesPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [machines]);
 
+  // đảm bảo page không vượt quá tổng trang khi list thay đổi
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(machines.length / PAGE_SIZE));
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [machines.length, page]);
+
   async function loadMachines() {
     try {
       setLoadingMachines(true);
       const res = await api.get("/machines", {
-        params: { q, page: 1, pageSize: 200 },
+        // backend vẫn trả tối đa nhiều máy, FE tự phân trang 40/mỗi trang
+        params: { q, page: 1, pageSize: 1000 },
       });
       const body = res.data ?? res;
       const list: Machine[] = Array.isArray(body)
@@ -127,7 +139,9 @@ const MachinesPage: React.FC = () => {
       const res = await api.post("/machines/sync-from-items");
       const msg =
         res.data?.message ||
-        `Đã đồng bộ dòng máy (syncedMachines = ${res.data?.syncedMachines ?? "?"})`;
+        `Đã đồng bộ dòng máy (syncedMachines = ${
+          res.data?.syncedMachines ?? "?"
+        })`;
       alert(msg);
       await loadMachines();
     } catch (err) {
@@ -200,7 +214,7 @@ const MachinesPage: React.FC = () => {
     if (!canEdit) return;
     if (
       !window.confirm(
-        `Xóa dòng máy "${m.code}"? Tất cả mapping linh kiện của dòng máy này sẽ bị xóa.`
+        `Xóa dòng máy "${m.code}"? Tất cả mapping linh kiện của dòng máy này sẽ bị xóa.`,
       )
     ) {
       return;
@@ -252,7 +266,7 @@ const MachinesPage: React.FC = () => {
         ? body.data
         : [];
       const filtered = list.filter(
-        (x) => !x.kind || x.kind === "PART" || x.kind === "LINHKIEN"
+        (x) => !x.kind || x.kind === "PART" || x.kind === "LINHKIEN",
       );
       setSearchPartResults(filtered);
     } catch (err) {
@@ -303,6 +317,11 @@ const MachinesPage: React.FC = () => {
       alert("Gỡ linh kiện thất bại, xem log console.");
     }
   }
+
+  // --- tính toán phân trang list máy (cột trái)
+  const totalPages = Math.max(1, Math.ceil(machines.length / PAGE_SIZE));
+  const startIndex = (page - 1) * PAGE_SIZE;
+  const pageMachines = machines.slice(startIndex, startIndex + PAGE_SIZE);
 
   // KHÔNG chặn xem trang nữa, staff/accountant vẫn xem list được
 
@@ -358,7 +377,7 @@ const MachinesPage: React.FC = () => {
             </div>
           )}
           {!loadingMachines &&
-            machines.map((m) => (
+            pageMachines.map((m) => (
               <div
                 key={m.id}
                 className={`px-3 py-2 text-sm border-b cursor-pointer flex justify-between items-center ${
@@ -367,8 +386,10 @@ const MachinesPage: React.FC = () => {
                 onClick={() => loadMachineDetail(m.id)}
               >
                 <div>
-                  <div className="font-medium">{m.code}</div>
-                  <div className="text-xs text-gray-600">{m.name}</div>
+                  {/* Tên máy ở trên, to & đậm */}
+                  <div className="font-semibold text-sm">{m.name}</div>
+                  {/* Mã máy ở dưới, nhỏ & xám */}
+                  <div className="text-[11px] text-gray-500">{m.code}</div>
                 </div>
                 {canEdit && (
                   <button
@@ -385,18 +406,50 @@ const MachinesPage: React.FC = () => {
               </div>
             ))}
         </div>
+
+        {/* Pagination cột dòng máy */}
+        {machines.length > 0 && (
+          <div className="px-3 py-2 border-t flex items-center justify-between text-xs bg-gray-50">
+            <div>
+              Trang {page}/{totalPages} • {machines.length} dòng máy
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                className="px-2 py-1 border rounded disabled:opacity-40"
+                disabled={page === 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                {"<"}
+              </button>
+              <button
+                type="button"
+                className="px-2 py-1 border rounded disabled:opacity-40"
+                disabled={page === totalPages}
+                onClick={() =>
+                  setPage((p) => Math.min(totalPages, p + 1))
+                }
+              >
+                {">"}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Cột phải: chi tiết dòng máy + linh kiện */}
       <div className="flex-1 border rounded bg-white flex flex-col">
         <div className="p-3 border-b flex justify-between items-center">
           <div>
-            <div className="text-sm font-semibold">
-              {selectedMachine ? selectedMachine.code : "Chưa chọn dòng máy"}
+            {/* Tên máy to, đậm ở trên */}
+            <div className="text-base font-semibold">
+              {selectedMachine
+                ? selectedMachine.name
+                : "Chưa chọn dòng máy"}
             </div>
             {selectedMachine && (
               <div className="text-xs text-gray-600">
-                {selectedMachine.name}
+                Mã: {selectedMachine.code}
               </div>
             )}
           </div>
@@ -521,7 +574,7 @@ const MachinesPage: React.FC = () => {
                   value={editing.code}
                   onChange={(e) =>
                     setEditing((prev) =>
-                      prev ? { ...prev, code: e.target.value } : prev
+                      prev ? { ...prev, code: e.target.value } : prev,
                     )
                   }
                 />
@@ -535,20 +588,22 @@ const MachinesPage: React.FC = () => {
                   value={editing.name}
                   onChange={(e) =>
                     setEditing((prev) =>
-                      prev ? { ...prev, name: e.target.value } : prev
+                      prev ? { ...prev, name: e.target.value } : prev,
                     )
                   }
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium mb-1">Ghi chú</label>
+                <label className="block text-xs font-medium mb-1">
+                  Ghi chú
+                </label>
                 <textarea
                   className="w-full border rounded px-2 py-1 text-sm"
                   rows={3}
                   value={editing.note ?? ""}
                   onChange={(e) =>
                     setEditing((prev) =>
-                      prev ? { ...prev, note: e.target.value } : prev
+                      prev ? { ...prev, note: e.target.value } : prev,
                     )
                   }
                 />
@@ -619,7 +674,8 @@ const MachinesPage: React.FC = () => {
                 <div
                   key={(it as any).id}
                   className={`px-2 py-1 text-xs border-b cursor-pointer ${
-                    selectedPartItem && (selectedPartItem as any).id === (it as any).id
+                    selectedPartItem &&
+                    (selectedPartItem as any).id === (it as any).id
                       ? "bg-blue-50"
                       : "hover:bg-gray-50"
                   }`}
@@ -631,7 +687,8 @@ const MachinesPage: React.FC = () => {
                   {((it as any).kind || (it as any).unit) && (
                     <div className="text-[11px] text-gray-500">
                       {((it as any).kind && `Loại: ${(it as any).kind}`) || ""}{" "}
-                      {((it as any).unit && ` | ĐVT: ${(it as any).unit}`) || ""}
+                      {((it as any).unit &&
+                        ` | ĐVT: ${(it as any).unit}`) || ""}
                     </div>
                   )}
                 </div>
@@ -665,7 +722,7 @@ const MachinesPage: React.FC = () => {
                   value={qtyPerSet ?? ""}
                   onChange={(e) =>
                     setQtyPerSet(
-                      e.target.value ? Number(e.target.value) || 1 : null
+                      e.target.value ? Number(e.target.value) || 1 : null,
                     )
                   }
                 />
