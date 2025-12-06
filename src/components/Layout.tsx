@@ -9,15 +9,22 @@ const Layout: React.FC = () => {
   const isAccountant = role === "accountant";
 
   return (
-    <div className="min-h-screen flex bg-slate-100">
+    // cả app cao đúng 1 màn hình, chặn scroll body
+    <div className="h-screen flex bg-slate-100 overflow-hidden">
       {/* SIDEBAR */}
-      <aside className="w-64 bg-slate-900 text-slate-100 flex flex-col">
+      <aside
+        className="
+          w-64 bg-slate-900 text-slate-100 flex flex-col
+          sticky top-0 h-screen
+        "
+      >
         <div className="p-4 border-b border-slate-700">
           <h1 className="font-bold text-lg">Quản Lý Kho</h1>
           <p className="text-xs text-slate-300 mt-1">MCBROTHER</p>
         </div>
 
-        <nav className="flex-1 p-2 space-y-1 text-sm">
+        {/* nav có scroll riêng nếu dài */}
+        <nav className="flex-1 p-2 space-y-1 text-sm overflow-y-auto">
           <NavLink
             to="part-stocks"
             end
@@ -52,8 +59,7 @@ const Layout: React.FC = () => {
             Tồn máy móc
           </NavLink>
 
-        
-           <NavLink
+          <NavLink
             to="revenue"
             className={({ isActive }) =>
               `block rounded px-3 py-2 ${
@@ -63,7 +69,7 @@ const Layout: React.FC = () => {
           >
             Báo cáo doanh thu
           </NavLink>
-          {/* Quản lý hóa đơn: admin + accountant */}
+
           {(isAdmin || isAccountant) && (
             <NavLink
               to="invoices"
@@ -77,7 +83,6 @@ const Layout: React.FC = () => {
             </NavLink>
           )}
 
-          {/* Kiểm kê tồn: chỉ admin */}
           {isAdmin && (
             <NavLink
               to="stock-counts"
@@ -91,7 +96,6 @@ const Layout: React.FC = () => {
             </NavLink>
           )}
 
-          {/* Khởi tạo tồn đầu: chỉ admin */}
           {isAdmin && (
             <NavLink
               to="stock-import-opening"
@@ -115,6 +119,7 @@ const Layout: React.FC = () => {
           >
             Khách hàng
           </NavLink>
+
           {isAdmin && (
             <NavLink
               to="users"
@@ -124,10 +129,9 @@ const Layout: React.FC = () => {
                 }`
               }
             >
-             Quản lý tài khoản
+              Quản lý tài khoản
             </NavLink>
           )}
-
 
           <NavLink
             to="change-password"
@@ -159,14 +163,15 @@ const Layout: React.FC = () => {
       </aside>
 
       {/* MAIN */}
-      <main className="flex-1 flex flex-col">
+      <main className="flex-1 flex flex-col max-h-screen overflow-hidden">
         <header className="h-14 bg-white border-b border-slate-200 flex items-center px-4">
           <h2 className="font-semibold text-slate-800 text-lg">
             Hệ thống quản lý kho
           </h2>
         </header>
 
-        <div className="flex-1 p-4">
+        {/* vùng này mới scroll */}
+        <div className="flex-1 p-4 overflow-auto">
           <Outlet />
         </div>
       </main>

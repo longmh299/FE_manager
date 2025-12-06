@@ -1,5 +1,5 @@
 // src/pages/MachineStocksPage.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import api, { extractList, getApiBaseUrl } from "../api/client";
 
 type MachineStockRow = {
@@ -9,7 +9,7 @@ type MachineStockRow = {
   totalQty: number;
 };
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 30;
 
 const MachineStocksPage: React.FC = () => {
   const [rows, setRows] = useState<MachineStockRow[]>([]);
@@ -21,10 +21,24 @@ const MachineStocksPage: React.FC = () => {
 
   const [page, setPage] = useState(1);
 
+  // ref để kéo lên đầu khi đổi trang
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
   const totalItems = rows.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
 
   const pagedRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  const scrollToTop = () => {
+    if (containerRef.current) {
+      containerRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    } else {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
 
   // Load data từ API, chỉ lấy kind=MACHINE, sort theo tồn kho giảm dần
   useEffect(() => {
@@ -56,6 +70,7 @@ const MachineStocksPage: React.FC = () => {
 
         setRows(mapped);
         setPage(1);
+        scrollToTop();
       } catch (e: any) {
         console.error(e);
         setError(e?.message || "Lỗi tải dữ liệu");
@@ -65,6 +80,7 @@ const MachineStocksPage: React.FC = () => {
     }
 
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
@@ -84,14 +100,14 @@ const MachineStocksPage: React.FC = () => {
   const goToPage = (p: number) => {
     if (p < 1 || p > totalPages) return;
     setPage(p);
+    scrollToTop();
   };
 
   // tạo danh sách số trang (ít máy nên thường < 10)
   const pageNumbers = Array.from({ length: totalPages }, (_, i) => i + 1);
 
   return (
-    <div className="page-container">
-
+    <div className="page-container" ref={containerRef}>
       <div className="page-subtitle">Tồn kho theo máy</div>
 
       {/* Thanh tìm kiếm + nút export */}

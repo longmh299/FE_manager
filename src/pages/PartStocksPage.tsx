@@ -1,5 +1,5 @@
 // src/pages/PartStocksPage.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import api, { extractList, getApiBaseUrl } from "../api/client";
 
 type PartStockRow = {
@@ -10,7 +10,7 @@ type PartStockRow = {
   sellPrice: number | null; // 🔹 thêm giá bán
 };
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 30;
 
 const PartStocksPage: React.FC = () => {
   const [rows, setRows] = useState<PartStockRow[]>([]);
@@ -22,10 +22,24 @@ const PartStocksPage: React.FC = () => {
 
   const [page, setPage] = useState(1);
 
+  // ref để scroll về đầu trang khi đổi page
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
   const totalItems = rows.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
 
   const pagedRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  const scrollToTop = () => {
+    if (containerRef.current) {
+      containerRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    } else {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
 
   // Load data từ API, chỉ lấy kind=PART, sort theo tồn kho giảm dần
   useEffect(() => {
@@ -60,6 +74,8 @@ const PartStocksPage: React.FC = () => {
 
         setRows(mapped);
         setPage(1);
+        // sau khi filter lại cũng đẩy lên đầu danh sách
+        scrollToTop();
       } catch (e: any) {
         console.error(e);
         setError(e?.message || "Lỗi tải dữ liệu");
@@ -69,6 +85,7 @@ const PartStocksPage: React.FC = () => {
     }
 
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
@@ -88,13 +105,14 @@ const PartStocksPage: React.FC = () => {
   const goToPage = (p: number) => {
     if (p < 1 || p > totalPages) return;
     setPage(p);
+    scrollToTop();
   };
 
   // tạo danh sách số trang
   const pageNumbers = Array.from({ length: totalPages }, (_, i) => i + 1);
 
   return (
-    <div className="page-container">
+    <div className="page-container" ref={containerRef}>
       <div className="page-subtitle">Tồn kho theo linh kiện</div>
 
       {/* Thanh tìm kiếm + nút export */}
