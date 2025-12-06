@@ -13,7 +13,7 @@ const Layout: React.FC = () => {
       {/* SIDEBAR */}
       <aside className="w-64 bg-slate-900 text-slate-100 flex flex-col">
         <div className="p-4 border-b border-slate-700">
-          <h1 className="font-bold text-lg">Warehouse Admin</h1>
+          <h1 className="font-bold text-lg">Quản Lý Kho</h1>
           <p className="text-xs text-slate-300 mt-1">MCBROTHER</p>
         </div>
 

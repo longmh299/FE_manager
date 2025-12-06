@@ -291,8 +291,14 @@ const MachinesPage: React.FC = () => {
         itemId: (selectedPartItem as any).id,
         qtyPerSet: qtyPerSet ?? null,
       });
+
+      // cập nhật lại list linh kiện bên phải
       await loadMachineDetail(selectedMachine.id);
-      closeAddPart();
+
+      // ❗ GIỮ MODAL MỞ – reset lựa chọn hiện tại để chọn tiếp
+      setSelectedPartItem(null);
+      setQtyPerSet(1);
+      // searchPartText & searchPartResults giữ nguyên để không phải gõ lại
     } catch (err: any) {
       console.error("save part error", err);
       const msg =
@@ -426,9 +432,7 @@ const MachinesPage: React.FC = () => {
                 type="button"
                 className="px-2 py-1 border rounded disabled:opacity-40"
                 disabled={page === totalPages}
-                onClick={() =>
-                  setPage((p) => Math.min(totalPages, p + 1))
-                }
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               >
                 {">"}
               </button>
