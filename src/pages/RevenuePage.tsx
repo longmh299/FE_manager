@@ -109,9 +109,7 @@ const RevenuePage: React.FC = () => {
         code: inv.code,
         issueDate: inv.issueDate,
         total:
-          typeof inv.total === "number"
-            ? inv.total
-            : Number(inv.total || 0),
+          typeof inv.total === "number" ? inv.total : Number(inv.total || 0),
         partnerName: inv.partnerName,
         saleUserName: inv.saleUserName,
         techUserName: inv.techUserName,
@@ -146,8 +144,8 @@ const RevenuePage: React.FC = () => {
       <section className="bg-white shadow-sm rounded-md p-4">
         <h3 className="font-semibold mb-1">{title}</h3>
         <p className="text-xs text-gray-500 mb-2">
-          Click vào dòng nhân viên để xem lịch sử hóa đơn trong khoảng thời gian
-          trên.
+          Click vào dòng nhân viên để xem lịch sử hóa đơn trong khoảng thời
+          gian trên.
         </p>
         {rows.length === 0 ? (
           <p className="text-sm text-gray-600">Không có dữ liệu.</p>
@@ -157,13 +155,10 @@ const RevenuePage: React.FC = () => {
               <thead className="bg-gray-100">
                 <tr>
                   <th className="px-2 py-1 border border-gray-200 text-left text-xs font-semibold">
-                    #
+                    STT
                   </th>
                   <th className="px-2 py-1 border border-gray-200 text-left text-xs font-semibold">
                     Username
-                  </th>
-                  <th className="px-2 py-1 border border-gray-200 text-left text-xs font-semibold">
-                    Tên
                   </th>
                   <th className="px-2 py-1 border border-gray-200 text-right text-xs font-semibold">
                     Số hóa đơn
@@ -194,9 +189,6 @@ const RevenuePage: React.FC = () => {
                       <td className="px-2 py-1 border border-gray-200">
                         {u.username}
                       </td>
-                      <td className="px-2 py-1 border border-gray-200">
-                        {u.fullName || "-"}
-                      </td>
                       <td className="px-2 py-1 border border-gray-200 text-right">
                         {u.invoiceCount}
                       </td>
@@ -226,7 +218,7 @@ const RevenuePage: React.FC = () => {
               <thead className="bg-gray-100">
                 <tr>
                   <th className="px-2 py-1 border border-gray-200 text-left text-xs font-semibold">
-                    #
+                    STT
                   </th>
                   <th className="px-2 py-1 border border-gray-200 text-left text-xs font-semibold">
                     Mã SP

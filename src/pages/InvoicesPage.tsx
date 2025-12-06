@@ -383,6 +383,10 @@ const InvoicesPage: React.FC = () => {
   const [openItemSuggestIndex, setOpenItemSuggestIndex] =
     useState<number | null>(null);
 
+  // mode: view | edit | create
+  const [mode, setMode] = useState<"view" | "edit" | "create">("view");
+  const isViewMode = mode === "view";
+
   // -------- helpers tiền --------
   function calcTotal(lines: InvoiceLine[]) {
     return lines.reduce((s, l) => s + l.qty * l.price, 0);
@@ -476,6 +480,10 @@ const InvoicesPage: React.FC = () => {
       });
 
       setInvoices(mapped);
+      // khi reload list sau lưu/xoá thì quay về chế độ xem
+      if (!selected) {
+        setMode("view");
+      }
     } catch (err) {
       console.error("loadInvoices error", err);
     } finally {
@@ -563,9 +571,13 @@ const InvoicesPage: React.FC = () => {
     setSelected(inv);
     setShowPartnerSuggest(false);
     setOpenItemSuggestIndex(null);
+    setMode("create");
   }
 
-  function handleSelectInvoice(inv: Invoice) {
+  function handleSelectInvoice(
+    inv: Invoice,
+    nextMode: "view" | "edit" = "view"
+  ) {
     const clone: Invoice = {
       ...inv,
       lines: inv.lines.map((l) => ({ ...l })),
@@ -573,6 +585,7 @@ const InvoicesPage: React.FC = () => {
     setSelected(clone);
     setShowPartnerSuggest(false);
     setOpenItemSuggestIndex(null);
+    setMode(nextMode);
   }
 
   function updateSelected(partial: Partial<Invoice>) {
@@ -678,6 +691,8 @@ const InvoicesPage: React.FC = () => {
   // -------- save customer to partners --------
   async function handleSavePartner() {
     if (!selected) return;
+    if (isViewMode) return;
+
     if (selected.partnerId) {
       alert("Khách hàng này đã có trong danh sách đối tác.");
       return;
@@ -743,6 +758,7 @@ const InvoicesPage: React.FC = () => {
       await loadInvoices();
       alert("Đã post tồn cho hóa đơn.");
       setSelected(null);
+      setMode("view");
     } catch (err: any) {
       console.error("post stock error", err);
       const msg =
@@ -777,6 +793,7 @@ const InvoicesPage: React.FC = () => {
       await loadInvoices();
       alert("Đã hủy post tồn cho hóa đơn.");
       setSelected(null);
+      setMode("view");
     } catch (err: any) {
       console.error("unpost stock error", err);
       const msg =
@@ -789,6 +806,8 @@ const InvoicesPage: React.FC = () => {
   // -------- save/delete --------
   async function handleSave() {
     if (!selected) return;
+    if (isViewMode) return;
+
     if (!selected.code.trim()) {
       alert("Mã hóa đơn là bắt buộc.");
       return;
@@ -827,6 +846,7 @@ const InvoicesPage: React.FC = () => {
 
       await loadInvoices();
       setSelected(null);
+      setMode("view");
     } catch (err: any) {
       console.error("Save invoice error", err);
 
@@ -848,7 +868,10 @@ const InvoicesPage: React.FC = () => {
     try {
       await api.delete(`/invoices/${inv.id}`);
       await loadInvoices();
-      if (selected?.id === inv.id) setSelected(null);
+      if (selected?.id === inv.id) {
+        setSelected(null);
+        setMode("view");
+      }
     } catch (err) {
       console.error("delete invoice error", err);
       alert("Xóa hóa đơn thất bại, xem log console.");
@@ -933,7 +956,7 @@ const InvoicesPage: React.FC = () => {
                             ? styles.rowSelected
                             : {}),
                         }}
-                        onClick={() => handleSelectInvoice(inv)}
+                        onClick={() => handleSelectInvoice(inv, "view")}
                       >
                         <td style={styles.td}>{inv.code}</td>
                         <td style={styles.td}>{formatDateDisplay(inv.date)}</td>
@@ -962,7 +985,7 @@ const InvoicesPage: React.FC = () => {
                               style={styles.linkBtn}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleSelectInvoice(inv);
+                                handleSelectInvoice(inv, "edit");
                               }}
                             >
                               Sửa
@@ -1003,12 +1026,19 @@ const InvoicesPage: React.FC = () => {
 
         {/* RIGHT: form hóa đơn */}
         <div style={styles.right}>
-          <h2 style={styles.rightTitle}>Thông tin hóa đơn</h2>
+          <h2 style={styles.rightTitle}>
+            Thông tin hóa đơn{" "}
+            {mode === "create"
+              ? "(tạo mới)"
+              : mode === "edit"
+              ? "(đang sửa)"
+              : "(xem)"}
+          </h2>
 
           {!selected && (
             <div style={styles.rightEmpty}>
-              Chọn một hóa đơn bên trái để xem / sửa, hoặc bấm{" "}
-              <b>“Thêm hóa đơn”</b>.
+              Chọn một hóa đơn bên trái để xem, hoặc bấm{" "}
+              <b>“Thêm hóa đơn”</b> để tạo mới.
             </div>
           )}
 
@@ -1017,7 +1047,9 @@ const InvoicesPage: React.FC = () => {
               style={styles.form}
               onSubmit={(e) => {
                 e.preventDefault();
-                handleSave();
+                if (!isViewMode) {
+                  handleSave();
+                }
               }}
             >
               {/* Thông tin đơn hàng */}
@@ -1033,6 +1065,7 @@ const InvoicesPage: React.FC = () => {
                       updateSelected({ code: e.target.value.toUpperCase() })
                     }
                     placeholder="VD: HD0001"
+                    disabled={isViewMode}
                   />
                 </div>
 
@@ -1046,6 +1079,7 @@ const InvoicesPage: React.FC = () => {
                       onChange={(e) =>
                         updateSelected({ date: e.target.value })
                       }
+                      disabled={isViewMode}
                     />
                   </div>
                   <div style={styles.flex1}>
@@ -1058,6 +1092,7 @@ const InvoicesPage: React.FC = () => {
                           type: e.target.value as InvoiceType,
                         })
                       }
+                      disabled={isViewMode}
                     >
                       <option value="SALES">Bán hàng</option>
                       <option value="PURCHASE">Nhập hàng</option>
@@ -1082,11 +1117,16 @@ const InvoicesPage: React.FC = () => {
                   <input
                     style={styles.input}
                     value={selected.partnerName}
-                    onChange={(e) => handlePartnerNameChange(e.target.value)}
-                    onFocus={() => setShowPartnerSuggest(true)}
+                    onChange={(e) =>
+                      !isViewMode && handlePartnerNameChange(e.target.value)
+                    }
+                    onFocus={() =>
+                      !isViewMode && setShowPartnerSuggest(true)
+                    }
                     placeholder="Nhập tên khách hàng..."
+                    disabled={isViewMode}
                   />
-                  {showPartnerSuggest && partnerSuggestions.length > 0 && (
+                  {!isViewMode && showPartnerSuggest && partnerSuggestions.length > 0 && (
                     <div style={styles.suggestBox}>
                       {partnerSuggestions.map((p) => (
                         <div
@@ -1107,13 +1147,15 @@ const InvoicesPage: React.FC = () => {
                       ))}
                     </div>
                   )}
-                  {showPartnerSuggest && partnerSuggestions.length === 0 && (
-                    <div style={styles.suggestBox}>
-                      <div style={styles.suggestItemMuted}>
-                        Không tìm thấy khách hàng phù hợp
+                  {!isViewMode &&
+                    showPartnerSuggest &&
+                    partnerSuggestions.length === 0 && (
+                      <div style={styles.suggestBox}>
+                        <div style={styles.suggestItemMuted}>
+                          Không tìm thấy khách hàng phù hợp
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
                 </div>
 
                 <div style={styles.formRow}>
@@ -1124,6 +1166,7 @@ const InvoicesPage: React.FC = () => {
                     onChange={(e) =>
                       updateSelected({ partnerAddress: e.target.value })
                     }
+                    disabled={isViewMode}
                   />
                 </div>
 
@@ -1136,6 +1179,7 @@ const InvoicesPage: React.FC = () => {
                       onChange={(e) =>
                         updateSelected({ partnerPhone: e.target.value })
                       }
+                      disabled={isViewMode}
                     />
                   </div>
                   <div style={styles.flex1}>
@@ -1146,6 +1190,7 @@ const InvoicesPage: React.FC = () => {
                       onChange={(e) =>
                         updateSelected({ partnerTaxCode: e.target.value })
                       }
+                      disabled={isViewMode}
                     />
                   </div>
                 </div>
@@ -1158,6 +1203,7 @@ const InvoicesPage: React.FC = () => {
                     onChange={(e) =>
                       updateSelected({ partnerEmail: e.target.value })
                     }
+                    disabled={isViewMode}
                   />
                 </div>
 
@@ -1166,6 +1212,7 @@ const InvoicesPage: React.FC = () => {
                     type="button"
                     style={styles.secondarySmallBtn}
                     onClick={handleSavePartner}
+                    disabled={isViewMode}
                   >
                     Lưu khách hàng vào danh sách đối tác
                   </button>
@@ -1187,6 +1234,7 @@ const InvoicesPage: React.FC = () => {
                           saleUserId: e.target.value || undefined,
                         })
                       }
+                      disabled={isViewMode}
                     >
                       <option value="">-- Chọn NV sale --</option>
                       {staffs.map((s) => (
@@ -1207,6 +1255,7 @@ const InvoicesPage: React.FC = () => {
                           techUserId: e.target.value || undefined,
                         })
                       }
+                      disabled={isViewMode}
                     >
                       <option value="">-- Chọn NV kỹ thuật --</option>
                       {staffs.map((s) => (
@@ -1259,12 +1308,17 @@ const InvoicesPage: React.FC = () => {
                           style={styles.smallInput}
                           value={line.itemName}
                           onChange={(e) =>
+                            !isViewMode &&
                             handleLineChange(idx, "itemName", e.target.value)
                           }
-                          onFocus={() => setOpenItemSuggestIndex(idx)}
+                          onFocus={() =>
+                            !isViewMode && setOpenItemSuggestIndex(idx)
+                          }
                           placeholder="Gõ mã hoặc tên sản phẩm..."
+                          disabled={isViewMode}
                         />
-                        {openItemSuggestIndex === idx &&
+                        {!isViewMode &&
+                          openItemSuggestIndex === idx &&
                           line.itemName.length > 0 && (
                             <div style={styles.suggestBox}>
                               {itemSuggestions.length > 0 ? (
@@ -1294,8 +1348,10 @@ const InvoicesPage: React.FC = () => {
                           style={styles.smallInput}
                           value={line.unit || ""}
                           onChange={(e) =>
+                            !isViewMode &&
                             handleLineChange(idx, "unit", e.target.value)
                           }
+                          disabled={isViewMode}
                         />
                       </div>
 
@@ -1306,12 +1362,14 @@ const InvoicesPage: React.FC = () => {
                           min={0}
                           value={line.qty}
                           onChange={(e) =>
+                            !isViewMode &&
                             handleLineChange(
                               idx,
                               "qty",
                               Number(e.target.value) || 0
                             )
                           }
+                          disabled={isViewMode}
                         />
                       </div>
 
@@ -1322,12 +1380,14 @@ const InvoicesPage: React.FC = () => {
                           min={0}
                           value={line.price}
                           onChange={(e) =>
+                            !isViewMode &&
                             handleLineChange(
                               idx,
                               "price",
                               Number(e.target.value) || 0
                             )
                           }
+                          disabled={isViewMode}
                         />
                       </div>
 
@@ -1340,6 +1400,7 @@ const InvoicesPage: React.FC = () => {
                           type="button"
                           style={styles.smallBtn}
                           onClick={() => removeLine(idx)}
+                          disabled={isViewMode}
                         >
                           Xóa
                         </button>
@@ -1352,6 +1413,7 @@ const InvoicesPage: React.FC = () => {
                   type="button"
                   style={styles.addLineBtn}
                   onClick={addLine}
+                  disabled={isViewMode}
                 >
                   + Thêm dòng sản phẩm
                 </button>
@@ -1380,6 +1442,7 @@ const InvoicesPage: React.FC = () => {
                         min={0}
                         value={selected.taxPercent ?? 0}
                         onChange={(e) => {
+                          if (isViewMode) return;
                           const raw = e.target.value;
                           const num = raw === "" ? 0 : Number(raw);
                           const val = isNaN(num) ? 0 : num;
@@ -1398,6 +1461,7 @@ const InvoicesPage: React.FC = () => {
                             };
                           });
                         }}
+                        disabled={isViewMode}
                       />
                       <span>%</span>
                       <span style={{ marginLeft: 12 }}>
@@ -1445,22 +1509,41 @@ const InvoicesPage: React.FC = () => {
                 </div>
               </div>
 
-              <div style={styles.formActions}>
-                <button
-                  type="button"
-                  style={styles.secondaryBtn}
-                  onClick={() => setSelected(null)}
-                >
-                  Hủy
-                </button>
-                <button
-                  type="submit"
-                  style={styles.primaryBtn}
-                  disabled={saving}
-                >
-                  {saving ? "Đang lưu..." : "Lưu hóa đơn"}
-                </button>
-              </div>
+              {/* Chỉ hiện nút khi đang tạo/sửa */}
+              {mode !== "view" && (
+                <div style={styles.formActions}>
+                  <button
+                    type="button"
+                    style={styles.secondaryBtn}
+                    onClick={() => {
+                      if (mode === "edit" && selected?.id) {
+                        // quay về xem lại bản gốc
+                        const original = invoices.find(
+                          (i) => i.id === selected.id
+                        );
+                        if (original) {
+                          handleSelectInvoice(original, "view");
+                        } else {
+                          setSelected(null);
+                        }
+                      } else {
+                        // create -> bỏ chọn
+                        setSelected(null);
+                      }
+                      setMode("view");
+                    }}
+                  >
+                    Hủy
+                  </button>
+                  <button
+                    type="submit"
+                    style={styles.primaryBtn}
+                    disabled={saving}
+                  >
+                    {saving ? "Đang lưu..." : "Lưu hóa đơn"}
+                  </button>
+                </div>
+              )}
             </form>
           )}
         </div>
