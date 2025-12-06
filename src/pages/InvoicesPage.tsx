@@ -480,7 +480,6 @@ const InvoicesPage: React.FC = () => {
       });
 
       setInvoices(mapped);
-      // khi reload list sau lưu/xoá thì quay về chế độ xem
       if (!selected) {
         setMode("view");
       }
@@ -511,19 +510,28 @@ const InvoicesPage: React.FC = () => {
     }
   }
 
+  // ⚠️ FIX loadItems: luôn lấy sku từ sku/code/itemCode, tăng pageSize
   async function loadItems() {
     try {
       const res = await api.get("/items", {
-        params: { q: "", page: 1, pageSize: 1000 },
+        params: { q: "", page: 1, pageSize: 5000 },
       });
       const data = unwrap<any[]>(res);
-      const mapped: Item[] = data.map((i: any) => ({
-        id: String(i.id),
-        sku: i.sku || i.code, // tuỳ backend, thường là i.sku
-        name: i.name,
-        unit: i.unit,
-        price: Number(i.price ?? 0),
-      }));
+      const mapped: Item[] = data.map((i: any) => {
+        const sku =
+          (i.sku ?? "").trim() ||
+          (i.code ?? "").trim() ||
+          (i.itemCode ?? "").trim() ||
+          "";
+
+        return {
+          id: String(i.id),
+          sku,
+          name: i.name ?? sku,
+          unit: i.unit ?? "",
+          price: Number(i.sellPrice ?? i.price ?? 0),
+        };
+      });
       setItems(mapped);
     } catch (err) {
       console.error("loadItems error", err);
@@ -1126,27 +1134,29 @@ const InvoicesPage: React.FC = () => {
                     placeholder="Nhập tên khách hàng..."
                     disabled={isViewMode}
                   />
-                  {!isViewMode && showPartnerSuggest && partnerSuggestions.length > 0 && (
-                    <div style={styles.suggestBox}>
-                      {partnerSuggestions.map((p) => (
-                        <div
-                          key={p.id}
-                          style={styles.suggestItem}
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            selectPartner(p);
-                          }}
-                        >
-                          {p.name}
-                          {p.taxCode && (
-                            <span style={{ color: "#9ca3af", marginLeft: 4 }}>
-                              ({p.taxCode})
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  {!isViewMode &&
+                    showPartnerSuggest &&
+                    partnerSuggestions.length > 0 && (
+                      <div style={styles.suggestBox}>
+                        {partnerSuggestions.map((p) => (
+                          <div
+                            key={p.id}
+                            style={styles.suggestItem}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              selectPartner(p);
+                            }}
+                          >
+                            {p.name}
+                            {p.taxCode && (
+                              <span style={{ color: "#9ca3af", marginLeft: 4 }}>
+                                ({p.taxCode})
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   {!isViewMode &&
                     showPartnerSuggest &&
                     partnerSuggestions.length === 0 && (
@@ -1288,15 +1298,24 @@ const InvoicesPage: React.FC = () => {
                 )}
 
                 {selected.lines.map((line, idx) => {
-                  const q = line.itemName.toLowerCase();
+                  // ⚠️ FIX filter gợi ý: trim + tìm theo cả sku + name, sort ưu tiên mã bắt đầu bằng q
+                  const q = line.itemName.trim().toLowerCase();
+
                   const itemSuggestions =
                     q.length > 0
                       ? items
                           .filter((it) => {
                             const name = (it.name || "").toLowerCase();
                             const sku = (it.sku || "").toLowerCase();
-                            // tìm theo CẢ mã lẫn tên
-                            return name.includes(q) || sku.includes(q);
+                            return sku.includes(q) || name.includes(q);
+                          })
+                          .sort((a, b) => {
+                            const aSku = (a.sku || "").toLowerCase();
+                            const bSku = (b.sku || "").toLowerCase();
+                            const aStarts = aSku.startsWith(q) ? 0 : 1;
+                            const bStarts = bSku.startsWith(q) ? 0 : 1;
+                            if (aStarts !== bStarts) return aStarts - bStarts;
+                            return aSku.localeCompare(bSku);
                           })
                           .slice(0, 50)
                       : [];
@@ -1330,8 +1349,9 @@ const InvoicesPage: React.FC = () => {
                                       e.preventDefault();
                                       selectItemForLine(idx, it);
                                     }}
+                                    title={it.sku ? `[${it.sku}] ${it.name}` : it.name} // tooltip nếu cần xem mã
                                   >
-                                    {it.sku ? `[${it.sku}] ` : ""} {it.name}
+                                    {it.name}
                                   </div>
                                 ))
                               ) : (
