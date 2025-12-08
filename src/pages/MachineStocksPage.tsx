@@ -1,6 +1,7 @@
 // src/pages/MachineStocksPage.tsx
 import React, { useEffect, useRef, useState } from "react";
 import api, { extractList, getApiBaseUrl } from "../api/client";
+import { useAuth } from "../context/AuthContext";
 
 type MachineStockRow = {
   sku: string;
@@ -9,9 +10,17 @@ type MachineStockRow = {
   totalQty: number;
 };
 
+type ToastState = {
+  type: "success" | "error";
+  message: string;
+} | null;
+
 const PAGE_SIZE = 30;
 
 const MachineStocksPage: React.FC = () => {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+
   const [rows, setRows] = useState<MachineStockRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,6 +38,14 @@ const MachineStocksPage: React.FC = () => {
 
   const pagedRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
+  const [toast, setToast] = useState<ToastState>(null);
+
+  // state tạo nhanh máy
+  const [newSku, setNewSku] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newUnit, setNewUnit] = useState("pcs");
+  const [creating, setCreating] = useState(false);
+
   const scrollToTop = () => {
     if (containerRef.current) {
       containerRef.current.scrollIntoView({
@@ -40,46 +57,51 @@ const MachineStocksPage: React.FC = () => {
     }
   };
 
+  const showToast = (type: "success" | "error", message: string) => {
+    setToast({ type, message });
+    setTimeout(() => setToast(null), 3500);
+  };
+
   // Load data từ API, chỉ lấy kind=MACHINE, sort theo tồn kho giảm dần
-  useEffect(() => {
-    async function loadData() {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await api.get("/stocks/summary-by-item", {
-          params: {
-            kind: "MACHINE",
-            // để chắc chắn lấy hết máy (khoảng 300), cho pageSize lớn
-            page: 1,
-            pageSize: 1000,
-            q: q.trim() || undefined,
-          },
-        });
+  async function fetchStocks(keyword: string) {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.get("/stocks/summary-by-item", {
+        params: {
+          kind: "MACHINE",
+          // để chắc chắn lấy hết máy (khoảng 300), cho pageSize lớn
+          page: 1,
+          pageSize: 1000,
+          q: keyword.trim() || undefined,
+        },
+      });
 
-        const list = extractList<any>(res.data) || [];
+      const list = extractList<any>(res.data) || [];
 
-        const mapped: MachineStockRow[] = list.map((r: any) => ({
-          sku: r.sku ?? "",
-          name: r.name ?? "",
-          unit: r.unit ?? "",
-          totalQty: Number(r.totalQty ?? 0),
-        }));
+      const mapped: MachineStockRow[] = list.map((r: any) => ({
+        sku: r.sku ?? "",
+        name: r.name ?? "",
+        unit: r.unit ?? "",
+        totalQty: Number(r.totalQty ?? 0),
+      }));
 
-        // Sắp xếp tồn kho từ lớn xuống nhỏ
-        mapped.sort((a, b) => b.totalQty - a.totalQty);
+      // Sắp xếp tồn kho từ lớn xuống nhỏ
+      mapped.sort((a, b) => b.totalQty - a.totalQty);
 
-        setRows(mapped);
-        setPage(1);
-        scrollToTop();
-      } catch (e: any) {
-        console.error(e);
-        setError(e?.message || "Lỗi tải dữ liệu");
-      } finally {
-        setLoading(false);
-      }
+      setRows(mapped);
+      setPage(1);
+      scrollToTop();
+    } catch (e: any) {
+      console.error(e);
+      setError(e?.message || "Lỗi tải dữ liệu");
+    } finally {
+      setLoading(false);
     }
+  }
 
-    loadData();
+  useEffect(() => {
+    fetchStocks(q);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
 
@@ -106,9 +128,219 @@ const MachineStocksPage: React.FC = () => {
   // tạo danh sách số trang (ít máy nên thường < 10)
   const pageNumbers = Array.from({ length: totalPages }, (_, i) => i + 1);
 
+  // ✅ tạo nhanh máy (chỉ admin mới có UI)
+  const handleCreateMachine = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isAdmin) return;
+
+    if (!newName.trim()) {
+      showToast("error", "Vui lòng nhập TÊN máy.");
+      return;
+    }
+
+    try {
+      setCreating(true);
+
+      const payload: any = {
+        sku: newSku.trim() || undefined,
+        name: newName.trim(),
+        unit: newUnit.trim() || "pcs",
+        kind: "MACHINE", // gắn loại máy
+      };
+
+      await api.post("/items", payload);
+
+      showToast("success", "Đã tạo máy mới.");
+
+      setNewSku("");
+      setNewName("");
+      setNewUnit("pcs");
+
+      // reload danh sách tồn máy
+      fetchStocks(q);
+    } catch (err: any) {
+      console.error("create machine error", err);
+      const msg =
+        err?.response?.data?.message ||
+        "Tạo máy mới thất bại, vui lòng kiểm tra log.";
+      showToast("error", msg);
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <div className="page-container" ref={containerRef}>
       <div className="page-subtitle">Tồn kho theo máy</div>
+
+      {/* Toast thông báo */}
+      {toast && (
+        <div
+          style={{
+            marginBottom: 10,
+            padding: "8px 12px",
+            borderRadius: 6,
+            fontSize: 13,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            border: "1px solid",
+            backgroundColor:
+              toast.type === "success" ? "#ecfdf3" : "#fef2f2",
+            borderColor:
+              toast.type === "success" ? "#4ade80" : "#fecaca",
+            color: toast.type === "success" ? "#166534" : "#b91c1c",
+          }}
+        >
+          <span
+            style={{
+              fontWeight: 600,
+              textTransform: "uppercase",
+              fontSize: 11,
+            }}
+          >
+            {toast.type === "success" ? "THÀNH CÔNG" : "LỖI"}
+          </span>
+          <span>{toast.message}</span>
+        </div>
+      )}
+
+      {/* ✅ Block tạo mới máy nhanh – chỉ Admin thấy */}
+      {isAdmin && (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: 12,
+            borderRadius: 6,
+            border: "1px dashed #d1d5db",
+            backgroundColor: "#f9fafb",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 14,
+              fontWeight: 600,
+              marginBottom: 8,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <span>Tạo mới máy nhanh</span>
+            <span style={{ fontSize: 11, color: "#6b7280" }}>
+              (Chỉ dành cho Admin)
+            </span>
+          </div>
+
+          <form
+            onSubmit={handleCreateMachine}
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              alignItems: "flex-end",
+            }}
+          >
+            <div style={{ minWidth: 140, flex: "0 0 auto" }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  marginBottom: 4,
+                }}
+              >
+                Mã máy
+              </label>
+              <input
+                type="text"
+                value={newSku}
+                onChange={(e) => setNewSku(e.target.value)}
+                placeholder="VD: DZ-500"
+                style={{
+                  width: "100%",
+                  padding: "6px 10px",
+                  borderRadius: 4,
+                  border: "1px solid #d0d7de",
+                  fontSize: 13,
+                }}
+              />
+            </div>
+
+            <div style={{ minWidth: 220, flex: 1 }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  marginBottom: 4,
+                }}
+              >
+                Tên máy *
+              </label>
+              <input
+                type="text"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="Nhập tên máy..."
+                style={{
+                  width: "100%",
+                  padding: "6px 10px",
+                  borderRadius: 4,
+                  border: "1px solid #d0d7de",
+                  fontSize: 13,
+                }}
+              />
+            </div>
+
+            <div style={{ minWidth: 80, flex: "0 0 auto" }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  marginBottom: 4,
+                }}
+              >
+                ĐVT
+              </label>
+              <input
+                type="text"
+                value={newUnit}
+                onChange={(e) => setNewUnit(e.target.value)}
+                placeholder="pcs"
+                style={{
+                  width: "100%",
+                  padding: "6px 10px",
+                  borderRadius: 4,
+                  border: "1px solid #d0d7de",
+                  fontSize: 13,
+                }}
+              />
+            </div>
+
+            <div style={{ flex: "0 0 auto" }}>
+              <button
+                type="submit"
+                disabled={creating}
+                style={{
+                  padding: "8px 16px",
+                  borderRadius: 4,
+                  border: "1px solid #16a34a",
+                  backgroundColor: creating ? "#bbf7d0" : "#16a34a",
+                  color: "#fff",
+                  fontSize: 13,
+                  cursor: creating ? "default" : "pointer",
+                  fontWeight: 500,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {creating ? "Đang tạo..." : "Tạo máy"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Thanh tìm kiếm + nút export */}
       <div

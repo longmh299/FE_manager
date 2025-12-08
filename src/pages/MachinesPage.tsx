@@ -9,6 +9,7 @@ type Machine = {
   code: string;
   name: string;
   note?: string | null;
+  stockQty?: number; // tồn kho của dòng máy để hiển thị ở list
 };
 
 type MachinePartDto = {
@@ -47,6 +48,9 @@ const MachinesPage: React.FC = () => {
   const [parts, setParts] = useState<MachinePartDto[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
+  // tồn kho của máy đang xem chi tiết (header bên phải)
+  const [machineStockQty, setMachineStockQty] = useState<number | null>(null);
+
   const [editing, setEditing] = useState<EditingMachine | null>(null);
   const [savingMachine, setSavingMachine] = useState(false);
 
@@ -78,6 +82,7 @@ const MachinesPage: React.FC = () => {
       setSelectedId(null);
       setSelectedMachine(null);
       setParts([]);
+      setMachineStockQty(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [machines]);
@@ -93,17 +98,54 @@ const MachinesPage: React.FC = () => {
   async function loadMachines() {
     try {
       setLoadingMachines(true);
+
+      // 1) Lấy danh sách dòng máy theo từ khóa
       const res = await api.get("/machines", {
-        // backend vẫn trả tối đa nhiều máy, FE tự phân trang 40/mỗi trang
         params: { q, page: 1, pageSize: 1000 },
       });
       const body = res.data ?? res;
-      const list: Machine[] = Array.isArray(body)
+      let list: Machine[] = Array.isArray(body)
         ? body
         : Array.isArray(body.items)
         ? body.items
         : [];
-      setMachines(list);
+
+      // 2) Lấy summary tồn kho theo item kind=MACHINE
+      let stockMap: Record<string, number> = {};
+      try {
+        const stockRes = await api.get("/stocks/summary-by-item", {
+          params: { kind: "MACHINE", page: 1, pageSize: 2000 },
+        });
+        const sBody = stockRes.data ?? stockRes;
+        const sList: any[] = Array.isArray(sBody)
+          ? sBody
+          : Array.isArray(sBody.items)
+          ? sBody.items
+          : Array.isArray(sBody.data)
+          ? sBody.data
+          : [];
+
+        sList.forEach((r) => {
+          const sku = r.sku ?? "";
+          if (!sku) return;
+          const qty = Number(r.totalQty ?? 0);
+          stockMap[sku] = qty;
+        });
+      } catch (err) {
+        console.error("load machine stocks error", err);
+      }
+
+      // 3) Gán tồn kho cho từng dòng máy + sort giảm dần theo tồn
+      const withStock = list.map((m) => ({
+        ...m,
+        stockQty: stockMap[m.code] ?? 0,
+      }));
+
+      withStock.sort(
+        (a, b) => (b.stockQty ?? 0) - (a.stockQty ?? 0)
+      );
+
+      setMachines(withStock);
     } catch (err) {
       console.error("loadMachines error", err);
       setMachines([]);
@@ -112,20 +154,63 @@ const MachinesPage: React.FC = () => {
     }
   }
 
+  // ---- load tồn kho của 1 dòng máy (header chi tiết) ----
+  async function loadMachineStock(machine: Machine) {
+    try {
+      setMachineStockQty(null);
+      const res = await api.get("/stocks/summary-by-item", {
+        params: {
+          kind: "MACHINE",
+          page: 1,
+          pageSize: 20,
+          q: machine.code || machine.name,
+        },
+      });
+
+      const body = res.data ?? res;
+      const list: any[] = Array.isArray(body)
+        ? body
+        : Array.isArray(body.items)
+        ? body.items
+        : Array.isArray(body.data)
+        ? body.data
+        : [];
+
+      const row =
+        list.find((x) => x.sku === machine.code) ||
+        list.find((x) => x.name === machine.name) ||
+        list[0];
+
+      if (row && row.totalQty !== undefined && row.totalQty !== null) {
+        setMachineStockQty(Number(row.totalQty));
+      } else {
+        setMachineStockQty(0);
+      }
+    } catch (err) {
+      console.error("loadMachineStock error", err);
+      setMachineStockQty(null);
+    }
+  }
+
   // -------- LOAD DETAIL MACHINE ----------
   async function loadMachineDetail(id: string) {
     try {
       setLoadingDetail(true);
+      setMachineStockQty(null);
       const res = await api.get(`/machines/${id}`);
       const body = res.data ?? res;
       const data = body.data ?? body;
-      setSelectedMachine(data.machine as Machine);
+      const machine = data.machine as Machine;
+      setSelectedMachine(machine);
       setParts((data.parts || []) as MachinePartDto[]);
       setSelectedId(id);
+
+      await loadMachineStock(machine);
     } catch (err) {
       console.error("loadMachineDetail error", err);
       setSelectedMachine(null);
       setParts([]);
+      setMachineStockQty(null);
     } finally {
       setLoadingDetail(false);
     }
@@ -226,6 +311,7 @@ const MachinesPage: React.FC = () => {
         setSelectedId(null);
         setSelectedMachine(null);
         setParts([]);
+        setMachineStockQty(null);
       }
     } catch (err) {
       console.error("deleteMachine error", err);
@@ -292,13 +378,10 @@ const MachinesPage: React.FC = () => {
         qtyPerSet: qtyPerSet ?? null,
       });
 
-      // cập nhật lại list linh kiện bên phải
       await loadMachineDetail(selectedMachine.id);
 
-      // ❗ GIỮ MODAL MỞ – reset lựa chọn hiện tại để chọn tiếp
       setSelectedPartItem(null);
       setQtyPerSet(1);
-      // searchPartText & searchPartResults giữ nguyên để không phải gõ lại
     } catch (err: any) {
       console.error("save part error", err);
       const msg =
@@ -328,8 +411,6 @@ const MachinesPage: React.FC = () => {
   const totalPages = Math.max(1, Math.ceil(machines.length / PAGE_SIZE));
   const startIndex = (page - 1) * PAGE_SIZE;
   const pageMachines = machines.slice(startIndex, startIndex + PAGE_SIZE);
-
-  // KHÔNG chặn xem trang nữa, staff/accountant vẫn xem list được
 
   return (
     <div className="p-6 h-full flex gap-4">
@@ -394,8 +475,10 @@ const MachinesPage: React.FC = () => {
                 <div>
                   {/* Tên máy ở trên, to & đậm */}
                   <div className="font-semibold text-sm">{m.name}</div>
-                  {/* Mã máy ở dưới, nhỏ & xám */}
-                  <div className="text-[11px] text-gray-500">{m.code}</div>
+                  {/* Dòng nhỏ ở dưới: hiện tồn kho */}
+                  <div className="text-[11px] text-gray-500">
+                    Tồn: {(m.stockQty ?? 0).toLocaleString("vi-VN")}
+                  </div>
                 </div>
                 {canEdit && (
                   <button
@@ -445,7 +528,6 @@ const MachinesPage: React.FC = () => {
       <div className="flex-1 border rounded bg-white flex flex-col">
         <div className="p-3 border-b flex justify-between items-center">
           <div>
-            {/* Tên máy to, đậm ở trên */}
             <div className="text-base font-semibold">
               {selectedMachine
                 ? selectedMachine.name
@@ -453,7 +535,10 @@ const MachinesPage: React.FC = () => {
             </div>
             {selectedMachine && (
               <div className="text-xs text-gray-600">
-                Mã: {selectedMachine.code}
+                Tồn kho:{" "}
+                {machineStockQty !== null
+                  ? machineStockQty.toLocaleString("vi-VN")
+                  : "-"}
               </div>
             )}
           </div>
@@ -533,7 +618,7 @@ const MachinesPage: React.FC = () => {
                             {p.qtyPerSet ?? "-"}
                           </td>
                           <td className="px-3 py-1.5 text-right">
-                            {p.currentQty.toLocaleString()}
+                            {p.currentQty.toLocaleString("vi-VN")}
                           </td>
                           <td className="px-3 py-1.5 text-right">
                             {canEdit ? (

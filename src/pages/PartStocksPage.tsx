@@ -1,6 +1,8 @@
 // src/pages/PartStocksPage.tsx
 import React, { useEffect, useRef, useState } from "react";
 import api, { extractList, getApiBaseUrl } from "../api/client";
+// 👇 nhớ chỉnh import này cho đúng đường dẫn hook auth của anh
+import { useAuth } from "../context/AuthContext";
 
 type PartStockRow = {
   sku: string;
@@ -10,9 +12,17 @@ type PartStockRow = {
   sellPrice: number | null; // 🔹 thêm giá bán
 };
 
+type ToastState = {
+  type: "success" | "error";
+  message: string;
+} | null;
+
 const PAGE_SIZE = 30;
 
 const PartStocksPage: React.FC = () => {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+
   const [rows, setRows] = useState<PartStockRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,6 +31,15 @@ const PartStocksPage: React.FC = () => {
   const [q, setQ] = useState(""); // từ khóa đang áp dụng cho API
 
   const [page, setPage] = useState(1);
+
+  // ✅ state cho tạo nhanh linh kiện
+  const [newSku, setNewSku] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newUnit, setNewUnit] = useState("pcs");
+  const [newSellPrice, setNewSellPrice] = useState<string>("");
+  const [creating, setCreating] = useState(false);
+
+  const [toast, setToast] = useState<ToastState>(null);
 
   // ref để scroll về đầu trang khi đổi page
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -41,50 +60,58 @@ const PartStocksPage: React.FC = () => {
     }
   };
 
+  // --- helper: hiển thị toast, auto ẩn ---
+  const showToast = (type: "success" | "error", message: string) => {
+    setToast({ type, message });
+    setTimeout(() => {
+      setToast(null);
+    }, 3500);
+  };
+
   // Load data từ API, chỉ lấy kind=PART, sort theo tồn kho giảm dần
-  useEffect(() => {
-    async function loadData() {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await api.get("/stocks/summary-by-item", {
-          params: {
-            kind: "PART", // 🔹 chỉ lấy linh kiện
-            page: 1,
-            pageSize: 2000, // linh kiện thường nhiều hơn máy, để rộng ra
-            q: q.trim() || undefined,
-          },
-        });
+  async function fetchStocks(keyword: string) {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.get("/stocks/summary-by-item", {
+        params: {
+          kind: "PART", // 🔹 chỉ lấy linh kiện
+          page: 1,
+          pageSize: 2000, // linh kiện thường nhiều hơn máy, để rộng ra
+          q: keyword.trim() || undefined,
+        },
+      });
 
-        const list = extractList<any>(res.data) || [];
+      const list = extractList<any>(res.data) || [];
 
-        const mapped: PartStockRow[] = list.map((r: any) => ({
-          sku: r.sku ?? "",
-          name: r.name ?? "",
-          unit: r.unit ?? "",
-          totalQty: Number(r.totalQty ?? 0),
-          sellPrice:
-            r.sellPrice === null || r.sellPrice === undefined
-              ? null
-              : Number(r.sellPrice),
-        }));
+      const mapped: PartStockRow[] = list.map((r: any) => ({
+        sku: r.sku ?? "",
+        name: r.name ?? "",
+        unit: r.unit ?? "",
+        totalQty: Number(r.totalQty ?? 0),
+        sellPrice:
+          r.sellPrice === null || r.sellPrice === undefined
+            ? null
+            : Number(r.sellPrice),
+      }));
 
-        // Sắp xếp tồn kho từ lớn xuống nhỏ
-        mapped.sort((a, b) => b.totalQty - a.totalQty);
+      // Sắp xếp tồn kho từ lớn xuống nhỏ
+      mapped.sort((a, b) => b.totalQty - a.totalQty);
 
-        setRows(mapped);
-        setPage(1);
-        // sau khi filter lại cũng đẩy lên đầu danh sách
-        scrollToTop();
-      } catch (e: any) {
-        console.error(e);
-        setError(e?.message || "Lỗi tải dữ liệu");
-      } finally {
-        setLoading(false);
-      }
+      setRows(mapped);
+      setPage(1);
+      // sau khi filter lại cũng đẩy lên đầu danh sách
+      scrollToTop();
+    } catch (e: any) {
+      console.error(e);
+      setError(e?.message || "Lỗi tải dữ liệu");
+    } finally {
+      setLoading(false);
     }
+  }
 
-    loadData();
+  useEffect(() => {
+    fetchStocks(q);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
 
@@ -111,9 +138,258 @@ const PartStocksPage: React.FC = () => {
   // tạo danh sách số trang
   const pageNumbers = Array.from({ length: totalPages }, (_, i) => i + 1);
 
+  // ✅ tạo nhanh linh kiện mới (chỉ admin mới chạy được vì UI chỉ hiện cho admin)
+  const handleCreatePart = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isAdmin) return; // safety
+
+    if (!newName.trim()) {
+      showToast("error", "Vui lòng nhập TÊN linh kiện.");
+      return;
+    }
+
+    const sellPriceNumber =
+      newSellPrice.trim() === "" ? null : Number(newSellPrice.replace(/,/g, ""));
+
+    if (sellPriceNumber !== null && Number.isNaN(sellPriceNumber)) {
+      showToast("error", "Giá bán không hợp lệ.");
+      return;
+    }
+
+    try {
+      setCreating(true);
+
+      const payload: any = {
+        sku: newSku.trim() || undefined,
+        name: newName.trim(),
+        unit: newUnit.trim() || "pcs",
+        sellPrice: sellPriceNumber ?? undefined,
+        kind: "PART", // ✅ gợi ý cho BE: tạo item loại linh kiện
+      };
+
+      await api.post("/items", payload);
+
+      showToast("success", "Đã tạo linh kiện mới.");
+
+      // reset form
+      setNewSku("");
+      setNewName("");
+      setNewUnit("pcs");
+      setNewSellPrice("");
+
+      // reload tồn linh kiện
+      fetchStocks(q);
+    } catch (err: any) {
+      console.error("create part error", err);
+      const msg =
+        err?.response?.data?.message ||
+        "Tạo linh kiện thất bại, vui lòng kiểm tra log.";
+      showToast("error", msg);
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <div className="page-container" ref={containerRef}>
       <div className="page-subtitle">Tồn kho theo linh kiện</div>
+
+      {/* ✅ Toast thông báo đẹp */}
+      {toast && (
+        <div
+          style={{
+            marginBottom: 10,
+            padding: "8px 12px",
+            borderRadius: 6,
+            fontSize: 13,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            border: "1px solid",
+            backgroundColor:
+              toast.type === "success" ? "#ecfdf3" : "#fef2f2",
+            borderColor:
+              toast.type === "success" ? "#4ade80" : "#fecaca",
+            color: toast.type === "success" ? "#166534" : "#b91c1c",
+          }}
+        >
+          <span
+            style={{
+              fontWeight: 600,
+              textTransform: "uppercase",
+              fontSize: 11,
+            }}
+          >
+            {toast.type === "success" ? "THÀNH CÔNG" : "LỖI"}
+          </span>
+          <span>{toast.message}</span>
+        </div>
+      )}
+
+      {/* ✅ Block tạo mới linh kiện nhanh – chỉ admin thấy */}
+      {isAdmin && (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: 12,
+            borderRadius: 6,
+            border: "1px dashed #d1d5db",
+            backgroundColor: "#f9fafb",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 14,
+              fontWeight: 600,
+              marginBottom: 8,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <span>Tạo mới linh kiện nhanh</span>
+            <span style={{ fontSize: 11, color: "#6b7280" }}>
+              (Chỉ dành cho Admin)
+            </span>
+          </div>
+
+          <form
+            onSubmit={handleCreatePart}
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              alignItems: "flex-end",
+            }}
+          >
+            <div style={{ minWidth: 140, flex: "0 0 auto" }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  marginBottom: 4,
+                }}
+              >
+                Mã linh kiện
+              </label>
+              <input
+                type="text"
+                value={newSku}
+                onChange={(e) => setNewSku(e.target.value)}
+                placeholder="VD: KP-001"
+                style={{
+                  width: "100%",
+                  padding: "6px 10px",
+                  borderRadius: 4,
+                  border: "1px solid #d0d7de",
+                  fontSize: 13,
+                }}
+              />
+            </div>
+
+            <div style={{ minWidth: 220, flex: 1 }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  marginBottom: 4,
+                }}
+              >
+                Tên linh kiện *
+              </label>
+              <input
+                type="text"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="Nhập tên linh kiện..."
+                style={{
+                  width: "100%",
+                  padding: "6px 10px",
+                  borderRadius: 4,
+                  border: "1px solid #d0d7de",
+                  fontSize: 13,
+                }}
+              />
+            </div>
+
+            <div style={{ minWidth: 80, flex: "0 0 auto" }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  marginBottom: 4,
+                }}
+              >
+                ĐVT
+              </label>
+              <input
+                type="text"
+                value={newUnit}
+                onChange={(e) => setNewUnit(e.target.value)}
+                placeholder="pcs"
+                style={{
+                  width: "100%",
+                  padding: "6px 10px",
+                  borderRadius: 4,
+                  border: "1px solid #d0d7de",
+                  fontSize: 13,
+                }}
+              />
+            </div>
+
+            <div style={{ minWidth: 140, flex: "0 0 auto" }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  marginBottom: 4,
+                }}
+              >
+                Giá bán (VND)
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={newSellPrice}
+                onChange={(e) => setNewSellPrice(e.target.value)}
+                placeholder="VD: 150000"
+                style={{
+                  width: "100%",
+                  padding: "6px 10px",
+                  borderRadius: 4,
+                  border: "1px solid #d0d7de",
+                  fontSize: 13,
+                  textAlign: "right",
+                }}
+              />
+            </div>
+
+            <div style={{ flex: "0 0 auto" }}>
+              <button
+                type="submit"
+                disabled={creating}
+                style={{
+                  padding: "8px 16px",
+                  borderRadius: 4,
+                  border: "1px solid #16a34a",
+                  backgroundColor: creating ? "#bbf7d0" : "#16a34a",
+                  color: "#fff",
+                  fontSize: 13,
+                  cursor: creating ? "default" : "pointer",
+                  fontWeight: 500,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {creating ? "Đang tạo..." : "Tạo linh kiện"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Thanh tìm kiếm + nút export */}
       <div
