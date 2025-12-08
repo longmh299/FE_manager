@@ -25,8 +25,12 @@ function formatDate(iso?: string | null) {
   return `${dd}/${mm}/${yyyy}`;
 }
 
-// Đọc số tiền thành chữ (đơn giản)
-
+// Bỏ phần [ ... ] trong tên sản phẩm khi in
+function stripBracketPart(name: string): string {
+  if (!name) return "";
+  // Xoá khoảng trắng + đoạn [ ... ]
+  return name.replace(/\s*\[[^\]]*]/g, "");
+}
 
 // Đọc số tiền VND thành chữ tiếng Việt
 function numberToVietnamese(amount: number): string {
@@ -97,8 +101,6 @@ function numberToVietnamese(amount: number): string {
   return result;
 }
 
-
-
 // ================= types =================
 type ApiInvoiceLine = {
   id: string;
@@ -161,7 +163,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "8mm 10mm 10mm",
     display: "flex",
     flexDirection: "column",
-    justifyContent: "flex-start",           // ❗ không kéo chữ ký sát mép
+    justifyContent: "flex-start", // ❗ không kéo chữ ký sát mép
     fontFamily: "'Times New Roman', Arial, sans-serif",
     fontSize: 13,
     color: "#000",
@@ -265,8 +267,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   bold: { fontWeight: 600 },
   signaturesWrapper: {
-    marginTop: "18mm",        // khoảng cách từ bảng tổng xuống hàng ký
-    marginBottom: "20mm",     // CHỪA TRỐNG 2cm phía dưới để ký thoải mái
+    marginTop: "18mm", // khoảng cách từ bảng tổng xuống hàng ký
+    marginBottom: "20mm", // CHỪA TRỐNG 2cm phía dưới để ký thoải mái
   },
   signaturesRow: {
     display: "flex",
@@ -317,7 +319,8 @@ const InvoicePrintPage: React.FC = () => {
   const lines: Line[] =
     invoice.lines?.map((l) => ({
       id: l.id,
-      name: l.item?.name ?? l.itemName ?? "",
+      // Bỏ phần [ ... ] trong tên hàng khi in
+      name: stripBracketPart(l.item?.name ?? l.itemName ?? ""),
       unit: l.item?.unit ?? l.unit ?? "",
       qty: Number(l.qty ?? 0),
       price: Number(l.price ?? 0),
@@ -343,7 +346,7 @@ const InvoicePrintPage: React.FC = () => {
   return (
     <>
       <style>
-  {`
+        {`
     @page {
       size: A4;
       /* top right bottom left
@@ -364,8 +367,7 @@ const InvoicePrintPage: React.FC = () => {
       print-color-adjust: exact;
     }
   `}
-</style>
-
+      </style>
 
       <div style={styles.root}>
         <div style={styles.borderBox}>
@@ -438,7 +440,6 @@ const InvoicePrintPage: React.FC = () => {
               <thead>
                 <tr>
                   <th style={{ ...styles.th, width: "6%" }}>STT</th>
-                  <th style={{ ...styles.th, width: "8%" }}>Mã hàng</th>
                   <th style={{ ...styles.th, width: "40%" }}>Tên hàng hóa</th>
                   <th style={{ ...styles.th, width: "8%" }}>ĐVT</th>
                   <th style={{ ...styles.th, width: "8%" }}>Số lượng</th>
@@ -452,7 +453,6 @@ const InvoicePrintPage: React.FC = () => {
                     <td style={{ ...styles.td, ...styles.tdCenter }}>
                       {idx + 1}
                     </td>
-                    <td style={{ ...styles.td, ...styles.tdCenter }}></td>
                     <td style={styles.td}>{l.name}</td>
                     <td style={{ ...styles.td, ...styles.tdCenter }}>
                       {l.unit}

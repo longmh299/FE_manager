@@ -6,7 +6,6 @@ import type {
   RevenueSummary,
   RevenueUserStat,
   RevenueProductStat,
-  RevenueInvoice,
 } from "../types";
 
 type SelectedUser = {
@@ -15,7 +14,20 @@ type SelectedUser = {
   username: string;
 };
 
-type InvoiceListItem = RevenueInvoice;
+type InvoiceListItem = {
+  id: string | number;
+  code: string;
+  issueDate: string;
+  total: number;
+  partnerName?: string;
+  saleUserId?: string;
+  techUserId?: string;
+};
+
+type SimpleUser = {
+  id: string;
+  username: string;
+};
 
 // ===== Helpers dùng chung =====
 function getCurrentMonthRange() {
@@ -58,6 +70,14 @@ const RevenuePage: React.FC = () => {
   const [userInvoices, setUserInvoices] = useState<InvoiceListItem[]>([]);
   const [loadingUserInvoices, setLoadingUserInvoices] = useState(false);
 
+  const [users, setUsers] = useState<SimpleUser[]>([]);
+
+  const getUsernameById = (id?: string) => {
+    if (!id) return "-";
+    const u = users.find((x) => x.id === id);
+    return u?.username || "-";
+  };
+
   // ===== Load summary =====
   const loadSummary = async () => {
     try {
@@ -73,8 +93,27 @@ const RevenuePage: React.FC = () => {
     }
   };
 
+  // ===== Load users (để map id -> username) =====
+  const loadUsers = async () => {
+    try {
+      const res = await api.get("/users", {
+        params: { page: 1, pageSize: 200 },
+      });
+      const body = (res as any).data || {};
+      const items: any[] = body.items || body.data || [];
+      const mapped: SimpleUser[] = items.map((u) => ({
+        id: String(u.id),
+        username: u.username || (u as any).fullName || "",
+      }));
+      setUsers(mapped);
+    } catch (err) {
+      console.error("load users error", err);
+    }
+  };
+
   useEffect(() => {
     loadSummary();
+    loadUsers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -110,9 +149,9 @@ const RevenuePage: React.FC = () => {
         issueDate: inv.issueDate,
         total:
           typeof inv.total === "number" ? inv.total : Number(inv.total || 0),
-        partnerName: inv.partnerName,
-        saleUserName: inv.saleUserName,
-        techUserName: inv.techUserName,
+        partnerName: inv.partner?.name ?? inv.partnerName,
+        saleUserId: inv.saleUserId ?? undefined,
+        techUserId: inv.techUserId ?? undefined,
       }));
 
       setUserInvoices(list);
@@ -145,7 +184,7 @@ const RevenuePage: React.FC = () => {
         <h3 className="font-semibold mb-1">{title}</h3>
         <p className="text-xs text-gray-500 mb-2">
           Click vào dòng nhân viên để xem lịch sử hóa đơn trong khoảng thời
-          gian trên.
+          gian trên (chỉ tính hóa đơn đã thanh toán đủ).
         </p>
         {rows.length === 0 ? (
           <p className="text-sm text-gray-600">Không có dữ liệu.</p>
@@ -209,7 +248,9 @@ const RevenuePage: React.FC = () => {
   const renderTopProducts = (rows: RevenueProductStat[]) => {
     return (
       <section className="bg-white shadow-sm rounded-md p-4">
-        <h3 className="font-semibold mb-2">Top 10 sản phẩm theo doanh thu</h3>
+        <h3 className="font-semibold mb-2">
+          Top 10 sản phẩm theo doanh thu (không VAT)
+        </h3>
         {rows.length === 0 ? (
           <p className="text-sm text-gray-600">Không có dữ liệu.</p>
         ) : (
@@ -262,6 +303,7 @@ const RevenuePage: React.FC = () => {
     );
   };
 
+  // ======= RENDER =======
   return (
     <div className="p-4 space-y-6">
       <h2 className="text-lg font-semibold mb-2">Thống kê doanh thu</h2>
@@ -312,9 +354,15 @@ const RevenuePage: React.FC = () => {
               </div>
             </div>
             <div className="bg-white shadow-sm rounded-md p-4">
-              <div className="text-xs text-gray-500 mb-1">Tổng doanh thu</div>
+              <div className="text-xs text-gray-500 mb-1">
+                Tổng doanh thu (chỉ hóa đơn đã thanh toán, không VAT)
+              </div>
               <div className="font-semibold text-green-700">
-                {formatCurrencyVND(data.totalRevenue)}
+                {/* Ưu tiên dùng tổng tiền đã thu (totalPaid) nếu backend trả về,
+                    nếu không có thì fallback về totalRevenue như cũ */}
+                {formatCurrencyVND(
+                  (data as any).totalPaid ?? data.totalRevenue
+                )}
               </div>
             </div>
             <div className="bg-white shadow-sm rounded-md p-4">
@@ -378,7 +426,7 @@ const RevenuePage: React.FC = () => {
                         Nhân viên kỹ thuật
                       </th>
                       <th className="px-2 py-1 border border-gray-200 text-right text-xs font-semibold">
-                        Tổng tiền
+                        Doanh thu (không VAT)
                       </th>
                     </tr>
                   </thead>
@@ -395,10 +443,10 @@ const RevenuePage: React.FC = () => {
                           {inv.partnerName || "-"}
                         </td>
                         <td className="px-2 py-1 border border-gray-200">
-                          {inv.saleUserName || "-"}
+                          {getUsernameById(inv.saleUserId)}
                         </td>
                         <td className="px-2 py-1 border border-gray-200">
-                          {inv.techUserName || "-"}
+                          {getUsernameById(inv.techUserId)}
                         </td>
                         <td className="px-2 py-1 border border-gray-200 text-right">
                           {formatCurrencyVND(inv.total)}

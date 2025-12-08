@@ -20,6 +20,8 @@ import PartStocksPage from "./pages/PartStocksPage";
 import UserManagementPage from "./pages/UserManagementPage";
 import CustomerDetailPage from "./pages/CustomerDetailPage";
 import InvoicePrintPage from "./pages/InvoicePrintPage";
+import InvoiceDetailPage from "./pages/InvoiceDetailPage";
+
 const App: React.FC = () => {
   return (
     <Routes>
@@ -48,6 +50,8 @@ const App: React.FC = () => {
         <Route path="part-stocks" element={<PartStocksPage />} />
         <Route path="/users" element={<UserManagementPage />} />
         <Route path="partners/:id" element={<CustomerDetailPage />} />
+        <Route path="/invoices/new" element={<InvoiceDetailPage />} />
+        <Route path="/invoices/:id" element={<InvoiceDetailPage />} />
       </Route>
       <Route path="invoices/:id/print" element={<InvoicePrintPage />} />
       <Route path="*" element={<div className="p-4">404 Not Found</div>} />
