@@ -322,6 +322,24 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 8,
     marginTop: 8,
   },
+
+  // Thông báo đẹp cho post / unpost tồn
+  notice: {
+    marginTop: 8,
+    padding: "8px 10px",
+    borderRadius: 4,
+    fontSize: 13,
+  },
+  noticeSuccess: {
+    background: "#ecfdf3",
+    border: "1px solid #22c55e",
+    color: "#166534",
+  },
+  noticeError: {
+    background: "#fef2f2",
+    border: "1px solid #f87171",
+    color: "#b91c1c",
+  },
 };
 
 function calcTotal(lines: InvoiceLine[]) {
@@ -375,6 +393,12 @@ const InvoiceDetailPage: React.FC = () => {
   const [showPartnerSuggest, setShowPartnerSuggest] = useState(false);
   const [openItemSuggestIndex, setOpenItemSuggestIndex] =
     useState<number | null>(null);
+
+  // Thông báo cho thao tác Lưu tồn / Hủy lưu tồn
+  const [stockMessage, setStockMessage] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
 
   useEffect(() => {
     async function init() {
@@ -686,15 +710,23 @@ const InvoiceDetailPage: React.FC = () => {
     }
 
     try {
+      setStockMessage(null);
       await api.post(`/invoices/${invoice.id}/post`);
-      alert("Đã post tồn cho hóa đơn.");
-      navigate("/invoices");
+      // Đánh dấu đã post trên UI + thông báo đẹp
+      updateInvoice({ posted: true });
+      setStockMessage({
+        type: "success",
+        text: "Đã lưu tồn cho hóa đơn.",
+      });
     } catch (err: any) {
       console.error("post stock error", err);
       const msg =
         err?.response?.data?.message ||
         "Post tồn thất bại, kiểm tra log console.";
-      alert(msg);
+      setStockMessage({
+        type: "error",
+        text: msg,
+      });
     }
   }
 
@@ -718,15 +750,22 @@ const InvoiceDetailPage: React.FC = () => {
     }
 
     try {
+      setStockMessage(null);
       await api.post(`/invoices/${invoice.id}/unpost`);
-      alert("Đã hủy post tồn cho hóa đơn.");
-      navigate("/invoices");
+      updateInvoice({ posted: false });
+      setStockMessage({
+        type: "success",
+        text: "Đã hủy lưu tồn cho hóa đơn.",
+      });
     } catch (err: any) {
       console.error("unpost stock error", err);
       const msg =
         err?.response?.data?.message ||
         "Hủy post tồn thất bại, kiểm tra log console.";
-      alert(msg);
+      setStockMessage({
+        type: "error",
+        text: msg,
+      });
     }
   }
 
@@ -1301,6 +1340,20 @@ const InvoiceDetailPage: React.FC = () => {
                   </span>
                 </div>
               </div>
+
+              {/* Thông báo post tồn / hủy tồn */}
+              {stockMessage && (
+                <div
+                  style={{
+                    ...styles.notice,
+                    ...(stockMessage.type === "success"
+                      ? styles.noticeSuccess
+                      : styles.noticeError),
+                  }}
+                >
+                  {stockMessage.text}
+                </div>
+              )}
 
               <div style={styles.postStatusRow}>
                 <span

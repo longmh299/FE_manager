@@ -111,6 +111,16 @@ const InvoicesPage: React.FC = () => {
 
   const handleDelete = async (inv: InvoiceListItem) => {
     if (!inv.id) return;
+
+    // CHẶN XOÁ HÓA ĐƠN ĐÃ LƯU TỒN
+    if (inv.posted) {
+      alert(
+        "Hóa đơn này đã được lưu tồn, không thể xóa.\n" +
+          "Nếu cần chỉnh sửa, hãy hủy lưu tồn hoặc dùng chức năng xóa cứng trong hệ thống."
+      );
+      return;
+    }
+
     if (!window.confirm("Bạn có chắc muốn xóa hóa đơn này?")) return;
     try {
       await api.delete(`/invoices/${inv.id}`);
@@ -320,7 +330,13 @@ const InvoicesPage: React.FC = () => {
                         </button>
                         <button
                           type="button"
-                          className="text-red-600 hover:underline"
+                          disabled={inv.posted}
+                          className={
+                            "hover:underline " +
+                            (inv.posted
+                              ? "text-gray-400 cursor-not-allowed"
+                              : "text-red-600")
+                          }
                           onClick={() => handleDelete(inv)}
                         >
                           Xóa
