@@ -22,6 +22,8 @@ type InvoiceListItem = {
   partnerName?: string;
   saleUserId?: string;
   techUserId?: string;
+  paymentStatus?: "UNPAID" | "PARTIAL" | "PAID";
+  posted?: boolean;
 };
 
 type SimpleUser = {
@@ -133,6 +135,8 @@ const RevenuePage: React.FC = () => {
         type: "SALES",
         from,
         to,
+        // ✅ Chỉ lấy hóa đơn đã thanh toán đủ
+        paymentStatus: "PAID",
       };
       if (u.type === "sale") {
         params.saleUserId = u.id;
@@ -143,18 +147,42 @@ const RevenuePage: React.FC = () => {
       const res = await api.get("/invoices", { params });
       const payload = res.data;
 
-      const list: InvoiceListItem[] = (payload.data || []).map((inv: any) => ({
-        id: inv.id,
-        code: inv.code,
-        issueDate: inv.issueDate,
-        total:
-          typeof inv.total === "number" ? inv.total : Number(inv.total || 0),
-        partnerName: inv.partner?.name ?? inv.partnerName,
-        saleUserId: inv.saleUserId ?? undefined,
-        techUserId: inv.techUserId ?? undefined,
-      }));
+      const rawList: InvoiceListItem[] = (payload.data || []).map(
+        (inv: any) => {
+          const total =
+            typeof inv.total === "number"
+              ? inv.total
+              : Number(inv.total || 0);
 
-      setUserInvoices(list);
+          // posted: nếu BE trả về movements hoặc cờ posted thì map sang
+          const posted =
+            Array.isArray(inv.movements) && inv.movements.length > 0
+              ? true
+              : (inv as any).posted ?? undefined;
+
+          return {
+            id: inv.id,
+            code: inv.code,
+            issueDate: inv.issueDate,
+            total,
+            partnerName: inv.partner?.name ?? inv.partnerName,
+            saleUserId: inv.saleUserId ?? undefined,
+            techUserId: inv.techUserId ?? undefined,
+            paymentStatus: inv.paymentStatus,
+            posted,
+          };
+        }
+      );
+
+      // ✅ Nếu có thông tin posted thì chỉ giữ những hóa đơn đã lưu tồn
+      const hasPostedFlag = rawList.some(
+        (inv) => typeof inv.posted === "boolean"
+      );
+      const filtered = hasPostedFlag
+        ? rawList.filter((inv) => inv.posted)
+        : rawList;
+
+      setUserInvoices(filtered);
     } catch (err) {
       console.error(err);
       setUserInvoices([]);
@@ -184,7 +212,7 @@ const RevenuePage: React.FC = () => {
         <h3 className="font-semibold mb-1">{title}</h3>
         <p className="text-xs text-gray-500 mb-2">
           Click vào dòng nhân viên để xem lịch sử hóa đơn trong khoảng thời
-          gian trên (chỉ tính hóa đơn đã thanh toán đủ).
+          gian trên (chỉ tính hóa đơn đã thanh toán đủ và đã lưu tồn).
         </p>
         {rows.length === 0 ? (
           <p className="text-sm text-gray-600">Không có dữ liệu.</p>
@@ -358,11 +386,9 @@ const RevenuePage: React.FC = () => {
                 Tổng doanh thu (chỉ hóa đơn đã thanh toán, không VAT)
               </div>
               <div className="font-semibold text-green-700">
-                {/* Ưu tiên dùng tổng tiền đã thu (totalPaid) nếu backend trả về,
-                    nếu không có thì fallback về totalRevenue như cũ */}
-                {formatCurrencyVND(
-                  (data as any).totalPaid ?? data.totalRevenue
-                )}
+                {(data as any).totalPaid != null
+                  ? formatCurrencyVND((data as any).totalPaid)
+                  : formatCurrencyVND(data.totalRevenue)}
               </div>
             </div>
             <div className="bg-white shadow-sm rounded-md p-4">
