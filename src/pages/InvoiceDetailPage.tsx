@@ -8,6 +8,7 @@ type PaymentStatus = "UNPAID" | "PARTIAL" | "PAID";
 type Partner = {
   id: string;
   name: string;
+  code?: string; // NEW: mã khách hàng
   address?: string;
   phone?: string;
   taxCode?: string;
@@ -43,6 +44,7 @@ type Invoice = {
   type: InvoiceType;
   partnerId?: string;
   partnerName: string;
+  partnerCode?: string; // NEW: mã KH gắn với khách trên hóa đơn
   partnerAddress?: string;
   partnerPhone?: string;
   partnerTaxCode?: string;
@@ -367,6 +369,7 @@ function createEmptyInvoice(): Invoice {
     date: today,
     type: "SALES",
     partnerName: "",
+    partnerCode: "", // NEW
     lines: [],
     subtotal: 0,
     tax: 0,
@@ -427,6 +430,7 @@ const InvoiceDetailPage: React.FC = () => {
       const mapped: Partner[] = data.map((p: any) => ({
         id: String(p.id),
         name: p.name,
+        code: p.code, // NEW
         address: p.address,
         phone: p.phone,
         taxCode: p.taxCode,
@@ -520,6 +524,7 @@ const InvoiceDetailPage: React.FC = () => {
         type: (x.type === "PURCHASE" ? "PURCHASE" : "SALES") as InvoiceType,
         partnerId: x.partnerId,
         partnerName: x.partner?.name ?? x.partnerName ?? "",
+        partnerCode: x.partner?.code ?? x.partnerCode ?? "", // NEW
         partnerAddress: x.partner?.address ?? x.partnerAddr,
         partnerPhone: x.partner?.phone ?? x.partnerPhone,
         partnerTaxCode: x.partner?.taxCode ?? x.partnerTax,
@@ -569,6 +574,7 @@ const InvoiceDetailPage: React.FC = () => {
     updateInvoice({
       partnerId: p.id,
       partnerName: p.name,
+      partnerCode: p.code, // NEW: fill luôn mã KH nếu có
       partnerAddress: p.address,
       partnerPhone: p.phone,
       partnerTaxCode: p.taxCode,
@@ -660,6 +666,7 @@ const InvoiceDetailPage: React.FC = () => {
 
     try {
       const payload = {
+        code: invoice.partnerCode || undefined, // NEW: gửi mã KH
         name: invoice.partnerName,
         address: invoice.partnerAddress,
         phone: invoice.partnerPhone,
@@ -674,6 +681,7 @@ const InvoiceDetailPage: React.FC = () => {
       const p: Partner = {
         id: String(partner.id),
         name: partner.name,
+        code: partner.code,
         address: partner.address,
         phone: partner.phone,
         taxCode: partner.taxCode,
@@ -681,7 +689,7 @@ const InvoiceDetailPage: React.FC = () => {
       };
 
       setPartners((prev) => [...prev, p]);
-      updateInvoice({ partnerId: p.id });
+      updateInvoice({ partnerId: p.id, partnerCode: p.code });
       alert("Đã lưu khách hàng vào danh sách đối tác.");
     } catch (err) {
       console.error("save partner error", err);
@@ -951,6 +959,11 @@ const InvoiceDetailPage: React.FC = () => {
                         }}
                       >
                         {p.name}
+                        {p.code && (
+                          <span style={{ color: "#6b7280", marginLeft: 4 }}>
+                            [{p.code}]
+                          </span>
+                        )}
                         {p.taxCode && (
                           <span style={{ color: "#9ca3af", marginLeft: 4 }}>
                             ({p.taxCode})
@@ -967,6 +980,19 @@ const InvoiceDetailPage: React.FC = () => {
                     </div>
                   </div>
                 )}
+              </div>
+
+              {/* NEW: Mã khách hàng ngay dưới tên KH */}
+              <div style={styles.formRow}>
+                <label style={styles.label}>Mã khách hàng</label>
+                <input
+                  style={styles.input}
+                  value={invoice.partnerCode || ""}
+                  onChange={(e) =>
+                    updateInvoice({ partnerCode: e.target.value })
+                  }
+                  placeholder="Nhập mã khách (VD: MC001)"
+                />
               </div>
 
               <div style={styles.formRow}>

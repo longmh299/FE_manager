@@ -57,6 +57,8 @@ export interface Partner {
   taxCode?: string | null;
   phone?: string | null;
   address?: string | null;
+  code?: string;      // <--- thêm mã KH
+
 }
 
 // types.ts

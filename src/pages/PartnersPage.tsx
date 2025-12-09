@@ -6,6 +6,7 @@ import { useAuth } from "../context/AuthContext";
 
 const emptyPartner: Partner = {
   id: "",
+  code: "",      // <-- thêm mã KH mặc định rỗng
   name: "",
   taxCode: "",
   phone: "",
@@ -106,7 +107,7 @@ const PartnersPage: React.FC = () => {
           className="flex items-center gap-2"
         >
           <input
-            placeholder="Tìm theo tên, mã số thuế..."
+            placeholder="Tìm theo tên, mã KH, mã số thuế..."
             value={q}
             onChange={(e) => setQ(e.target.value)}
             className="border rounded px-3 py-2 outline-none focus:ring focus:ring-blue-100 focus:border-blue-500"
@@ -134,6 +135,7 @@ const PartnersPage: React.FC = () => {
           <thead className="bg-slate-50">
             <tr>
               <th className="text-left px-3 py-2 border-b">Tên khách hàng</th>
+              <th className="text-left px-3 py-2 border-b">Mã KH</th>
               <th className="text-left px-3 py-2 border-b">Mã số thuế</th>
               <th className="text-left px-3 py-2 border-b">Điện thoại</th>
               <th className="text-left px-3 py-2 border-b">Địa chỉ</th>
@@ -143,7 +145,7 @@ const PartnersPage: React.FC = () => {
           <tbody>
             {loading && (
               <tr>
-                <td className="px-3 py-3 text-center" colSpan={5}>
+                <td className="px-3 py-3 text-center" colSpan={6}>
                   Đang tải...
                 </td>
               </tr>
@@ -152,7 +154,7 @@ const PartnersPage: React.FC = () => {
               <tr>
                 <td
                   className="px-3 py-3 text-center text-slate-500"
-                  colSpan={5}
+                  colSpan={6}
                 >
                   Không có khách hàng
                 </td>
@@ -162,6 +164,9 @@ const PartnersPage: React.FC = () => {
               partners.map((p) => (
                 <tr key={p.id} className="hover:bg-slate-50">
                   <td className="px-3 py-2 border-b">{p.name}</td>
+                  <td className="px-3 py-2 border-b">
+                    {p.code || "-"}
+                  </td>
                   <td className="px-3 py-2 border-b">{p.taxCode || "-"}</td>
                   <td className="px-3 py-2 border-b">{p.phone || "-"}</td>
                   <td className="px-3 py-2 border-b">{p.address || "-"}</td>
@@ -218,6 +223,22 @@ const PartnersPage: React.FC = () => {
                   }
                 />
               </div>
+
+              {/* MÃ KH ngay dưới tên */}
+              <div>
+                <label className="block mb-1 text-slate-700">
+                  Mã khách hàng
+                </label>
+                <input
+                  className="w-full border rounded px-3 py-2 outline-none focus:ring focus:ring-blue-100 focus:border-blue-500"
+                  value={editing.code || ""}
+                  onChange={(e) =>
+                    setEditing({ ...editing, code: e.target.value })
+                  }
+                  placeholder="VD: cm001"
+                />
+              </div>
+
               <div className="grid md:grid-cols-2 gap-3">
                 <div>
                   <label className="block mb-1 text-slate-700">
@@ -244,6 +265,7 @@ const PartnersPage: React.FC = () => {
                   />
                 </div>
               </div>
+
               <div>
                 <label className="block mb-1 text-slate-700">Địa chỉ</label>
                 <textarea

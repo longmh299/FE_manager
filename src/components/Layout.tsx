@@ -119,6 +119,18 @@ const Layout: React.FC = () => {
           >
             Khách hàng
           </NavLink>
+          {isAdmin && (
+            <NavLink
+              to="debts/by-sale"
+              className={({ isActive }) =>
+                `block rounded px-3 py-2 ${
+                  isActive ? "bg-slate-700" : "hover:bg-slate-800"
+                }`
+              }
+            >
+              Công Nợ
+            </NavLink>
+          )}
 
           {isAdmin && (
             <NavLink
