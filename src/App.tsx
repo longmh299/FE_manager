@@ -22,7 +22,6 @@ import CustomerDetailPage from "./pages/CustomerDetailPage";
 import InvoicePrintPage from "./pages/InvoicePrintPage";
 import InvoiceDetailPage from "./pages/InvoiceDetailPage";
 import DebtsBySalesPage from "./pages/DebtsBySalesPage";
-
 const App: React.FC = () => {
   return (
     <Routes>

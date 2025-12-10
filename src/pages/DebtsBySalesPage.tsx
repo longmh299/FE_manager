@@ -26,6 +26,43 @@ type SaleUser = {
   role?: string;
 };
 
+// ==== kiểu dùng cho popup chi tiết hóa đơn ====
+type InvoiceLineSummary = {
+  id: string;
+  itemName: string;
+  qty: number;
+  price: number;
+  amount: number;
+};
+
+type InvoiceDetail = {
+  invoiceId: string;
+  code: string;
+  date: string;
+  partnerCode: string;
+  partnerName: string;
+  saleUserName?: string;
+  totalAmount: number;
+  paidAmount: number;
+  debtAmount: number;
+  note?: string;
+  lines: InvoiceLineSummary[];
+};
+
+// ==== kiểu dùng cho dòng đã gộp theo hóa đơn ====
+type InvoiceDebtRow = {
+  invoiceId: string;
+  invoiceCode?: string;
+  date: string;
+  customerCode: string;
+  customerName: string;
+  totalAmount: number;
+  totalPaid: number;
+  totalDebt: number;
+  saleUserName?: string;
+  note?: string;
+};
+
 function toNumberSafe(v: any): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -39,7 +76,7 @@ function formatCurrency(value: any) {
   });
 }
 
-// Tìm mảng user trong mọi kiểu response: [], {data:[]}, {items:[]}, {users:[]}, ...
+// Tìm mảng user trong mọi kiểu response
 function extractUserList(raw: any): SaleUser[] {
   if (!raw) return [];
   if (Array.isArray(raw)) return raw;
@@ -88,6 +125,7 @@ const DebtsBySalesPage: React.FC = () => {
   const [dateTo, setDateTo] = useState(defaultTo);
   const [saleUserId, setSaleUserId] = useState<string>("");
 
+  // rows = chi tiết từng dòng (máy)
   const [rows, setRows] = useState<DebtRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [saleUsers, setSaleUsers] = useState<SaleUser[]>([]);
@@ -96,6 +134,11 @@ const DebtsBySalesPage: React.FC = () => {
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const [savingNoteIds, setSavingNoteIds] = useState<Record<string, boolean>>(
     {}
+  );
+
+  // popup chi tiết hóa đơn
+  const [selectedInvoice, setSelectedInvoice] = useState<InvoiceDetail | null>(
+    null
   );
 
   // ===== Load danh sách user (sale) =====
@@ -124,7 +167,7 @@ const DebtsBySalesPage: React.FC = () => {
     fetchSaleUsers();
   }, []);
 
-  // ===== Load bảng công nợ =====
+  // ===== Load bảng công nợ (từng dòng) =====
   const fetchData = async () => {
     try {
       setLoading(true);
@@ -159,40 +202,74 @@ const DebtsBySalesPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const totalDebt = useMemo(
-    () => rows.reduce((sum, r) => sum + toNumberSafe(r.debt), 0),
-    [rows]
-  );
+  // ===== Gộp theo hóa đơn + CHỈ GIỮ HĐ CÒN NỢ > 0 =====
+  const invoiceRows: InvoiceDebtRow[] = useMemo(() => {
+    const map: Record<string, InvoiceDebtRow> = {};
+
+    for (const r of rows) {
+      if (!r.invoiceId && !r.invoiceCode) continue;
+      const key = r.invoiceId ?? r.invoiceCode!;
+      if (!map[key]) {
+        map[key] = {
+          invoiceId: r.invoiceId ?? key,
+          invoiceCode: r.invoiceCode,
+          date: r.date,
+          customerCode: r.customerCode,
+          customerName: r.customerName,
+          totalAmount: 0,
+          totalPaid: 0,
+          totalDebt: 0,
+          saleUserName: r.saleUserName,
+          note: r.note,
+        };
+      }
+      map[key].totalAmount += toNumberSafe(r.amount);
+      map[key].totalPaid += toNumberSafe(r.paid);
+      map[key].totalDebt += toNumberSafe(r.debt);
+    }
+
+    const list = Object.values(map);
+
+    // ✅ chỉ giữ lại hóa đơn còn nợ > 0
+    return list
+      .filter((inv) => toNumberSafe(inv.totalDebt) > 0)
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }, [rows]);
+
+  // ===== Tổng cộng toàn kỳ (chỉ tính các HĐ còn nợ) =====
   const totalAmount = useMemo(
-    () => rows.reduce((sum, r) => sum + toNumberSafe(r.amount), 0),
-    [rows]
+    () =>
+      invoiceRows.reduce((sum, inv) => sum + toNumberSafe(inv.totalAmount), 0),
+    [invoiceRows]
   );
   const totalPaid = useMemo(
-    () => rows.reduce((sum, r) => sum + toNumberSafe(r.paid), 0),
-    [rows]
+    () =>
+      invoiceRows.reduce((sum, inv) => sum + toNumberSafe(inv.totalPaid), 0),
+    [invoiceRows]
+  );
+  const totalDebt = useMemo(
+    () =>
+      invoiceRows.reduce((sum, inv) => sum + toNumberSafe(inv.totalDebt), 0),
+    [invoiceRows]
   );
 
   // ===== Lưu note =====
-  const handleNoteChange = (row: DebtRow, value: string) => {
-    if (!row.invoiceId) return;
-    const key = row.invoiceId;
+  const handleNoteChange = (invoiceId: string, value: string) => {
     setNoteDrafts((prev) => ({
       ...prev,
-      [key]: value,
+      [invoiceId]: value,
     }));
   };
 
-  const handleNoteBlur = async (row: DebtRow) => {
-    if (!row.invoiceId) return;
+  const handleNoteBlur = async (row: InvoiceDebtRow) => {
     const key = row.invoiceId;
     const note = noteDrafts[key] ?? row.note ?? "";
 
     try {
       setSavingNoteIds((prev) => ({ ...prev, [key]: true }));
-      // ✅ gọi BE mới: /debts/:invoiceId/note
       await api.patch(`/debts/${key}/note`, { note });
 
-      // cập nhật lại note trong rows để UI sync
+      // cập nhật note trong rows chi tiết để sync UI
       setRows((prev) =>
         prev.map((r) =>
           r.invoiceId === key
@@ -210,7 +287,7 @@ const DebtsBySalesPage: React.FC = () => {
     }
   };
 
-  // ===== Xuất Excel qua API =====
+  // ===== Xuất Excel qua API (vẫn dùng dữ liệu chi tiết) =====
   const handleExportExcel = async () => {
     try {
       if (!rows.length) return;
@@ -242,6 +319,57 @@ const DebtsBySalesPage: React.FC = () => {
     } catch (err) {
       console.error("Failed to export excel", err);
     }
+  };
+
+  // ===== Mở popup chi tiết hóa đơn – dùng dữ liệu rows chi tiết =====
+  const handleOpenInvoiceDetail = (row: InvoiceDebtRow) => {
+    const sameInvoiceRows = rows.filter(
+      (r) => r.invoiceId === row.invoiceId
+    );
+    if (!sameInvoiceRows.length) return;
+
+    const totalAmount = sameInvoiceRows.reduce(
+      (sum, r) => sum + toNumberSafe(r.amount),
+      0
+    );
+    const paidAmount = sameInvoiceRows.reduce(
+      (sum, r) => sum + toNumberSafe(r.paid),
+      0
+    );
+    const debtAmount = sameInvoiceRows.reduce(
+      (sum, r) => sum + toNumberSafe(r.debt),
+      0
+    );
+
+    const lines: InvoiceLineSummary[] = sameInvoiceRows.map((r, idx) => ({
+      id: `${r.invoiceId}-${idx}`,
+      itemName: r.itemName,
+      qty: toNumberSafe(r.qty),
+      price: toNumberSafe(r.unitPrice),
+      amount: toNumberSafe(r.amount),
+    }));
+
+    const base = sameInvoiceRows[0];
+
+    const detail: InvoiceDetail = {
+      invoiceId: base.invoiceId!,
+      code: base.invoiceCode ?? "",
+      date: base.date,
+      partnerCode: base.customerCode,
+      partnerName: base.customerName,
+      saleUserName: base.saleUserName,
+      totalAmount,
+      paidAmount,
+      debtAmount,
+      note: base.note,
+      lines,
+    };
+
+    setSelectedInvoice(detail);
+  };
+
+  const handleCloseInvoiceDetail = () => {
+    setSelectedInvoice(null);
   };
 
   return (
@@ -305,7 +433,7 @@ const DebtsBySalesPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Card tổng hợp */}
+      {/* Card tổng hợp (chỉ hóa đơn còn nợ) */}
       <div className="mb-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="rounded-lg border border-slate-200 bg-white shadow-sm px-4 py-3">
           <div className="text-xs font-medium text-slate-500 uppercase">
@@ -333,7 +461,7 @@ const DebtsBySalesPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Bảng công nợ */}
+      {/* Bảng công nợ đã gộp theo hóa đơn (chỉ còn nợ) */}
       <div className="overflow-auto border rounded bg-white shadow-sm">
         <table className="min-w-full text-xs sm:text-sm">
           <thead className="bg-slate-100 sticky top-0 z-10">
@@ -342,28 +470,22 @@ const DebtsBySalesPage: React.FC = () => {
                 NGÀY
               </th>
               <th className="border px-2 py-1 whitespace-nowrap text-left">
+                Mã HĐ
+              </th>
+              <th className="border px-2 py-1 whitespace-nowrap text-left">
                 Mã KH
               </th>
               <th className="border px-2 py-1 whitespace-nowrap text-left">
                 Tên KH
               </th>
-              <th className="border px-2 py-1 whitespace-nowrap text-left">
-                Tên hàng
+              <th className="border px-2 py-1 whitespace-nowrap text-right">
+                Tổng tiền
               </th>
               <th className="border px-2 py-1 whitespace-nowrap text-right">
-                SL
+                Đã thanh toán
               </th>
               <th className="border px-2 py-1 whitespace-nowrap text-right">
-                ĐG
-              </th>
-              <th className="border px-2 py-1 whitespace-nowrap text-right">
-                Thành tiền
-              </th>
-              <th className="border px-2 py-1 whitespace-nowrap text-right">
-                Thanh toán
-              </th>
-              <th className="border px-2 py-1 whitespace-nowrap text-right">
-                Nợ
+                Còn nợ
               </th>
               <th className="border px-2 py-1 whitespace-nowrap text-left">
                 Sale
@@ -374,24 +496,28 @@ const DebtsBySalesPage: React.FC = () => {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, idx) => {
-              const qty = toNumberSafe(r.qty);
-              const unitPrice = toNumberSafe(r.unitPrice);
-              const amount = toNumberSafe(r.amount);
-              const paid = toNumberSafe(r.paid);
-              const debt = toNumberSafe(r.debt);
-
-              const key = r.invoiceId || r.invoiceCode || `${idx}`;
+            {invoiceRows.map((r, idx) => {
+              const key = r.invoiceId;
               const noteValue = noteDrafts[key] ?? r.note ?? "";
-              const saving = savingNoteIds[r.invoiceId || ""];
+              const saving = savingNoteIds[key];
 
               return (
                 <tr
-                  key={idx}
+                  key={r.invoiceId}
                   className={idx % 2 === 0 ? "bg-white" : "bg-slate-50"}
                 >
                   <td className="border px-2 py-1 whitespace-nowrap">
                     {r.date}
+                  </td>
+                  {/* Mã HĐ – click để mở popup chi tiết */}
+                  <td className="border px-2 py-1 whitespace-nowrap">
+                    <button
+                      type="button"
+                      className="text-blue-600 hover:underline"
+                      onClick={() => handleOpenInvoiceDetail(r)}
+                    >
+                      {r.invoiceCode}
+                    </button>
                   </td>
                   <td className="border px-2 py-1 whitespace-nowrap">
                     {r.customerCode}
@@ -399,40 +525,27 @@ const DebtsBySalesPage: React.FC = () => {
                   <td className="border px-2 py-1 whitespace-nowrap">
                     {r.customerName}
                   </td>
-                  <td className="border px-2 py-1 whitespace-nowrap">
-                    {r.itemName}
+                  <td className="border px-2 py-1 text-right whitespace-nowrap">
+                    {toNumberSafe(r.totalAmount).toLocaleString("vi-VN")}
                   </td>
                   <td className="border px-2 py-1 text-right whitespace-nowrap">
-                    {qty}
-                  </td>
-                  <td className="border px-2 py-1 text-right whitespace-nowrap">
-                    {unitPrice.toLocaleString("vi-VN")}
-                  </td>
-                  <td className="border px-2 py-1 text-right whitespace-nowrap">
-                    {amount.toLocaleString("vi-VN")}
-                  </td>
-                  <td className="border px-2 py-1 text-right whitespace-nowrap">
-                    {paid.toLocaleString("vi-VN")}
+                    {toNumberSafe(r.totalPaid).toLocaleString("vi-VN")}
                   </td>
                   <td className="border px-2 py-1 text-right whitespace-nowrap text-red-600 font-medium">
-                    {debt.toLocaleString("vi-VN")}
+                    {toNumberSafe(r.totalDebt).toLocaleString("vi-VN")}
                   </td>
                   <td className="border px-2 py-1 whitespace-nowrap">
                     {r.saleUserName}
                   </td>
                   <td className="border px-2 py-1 whitespace-nowrap max-w-[220px]">
-                    {r.invoiceId ? (
-                      <input
-                        className="w-full border rounded px-1 py-[2px] text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
-                        value={noteValue}
-                        onChange={(e) =>
-                          handleNoteChange(r, e.target.value)
-                        }
-                        onBlur={() => handleNoteBlur(r)}
-                      />
-                    ) : (
-                      <span className="text-slate-500">{r.note}</span>
-                    )}
+                    <input
+                      className="w-full border rounded px-1 py-[2px] text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      value={noteValue}
+                      onChange={(e) =>
+                        handleNoteChange(r.invoiceId, e.target.value)
+                      }
+                      onBlur={() => handleNoteBlur(r)}
+                    />
                     {saving && (
                       <span className="ml-1 text-[10px] text-slate-400">
                         (đang lưu…)
@@ -443,11 +556,11 @@ const DebtsBySalesPage: React.FC = () => {
               );
             })}
 
-            {rows.length === 0 && !loading && (
+            {invoiceRows.length === 0 && !loading && (
               <tr>
                 <td
                   className="border px-2 py-3 text-center text-slate-500"
-                  colSpan={11}
+                  colSpan={9}
                 >
                   Không có dữ liệu
                 </td>
@@ -455,12 +568,14 @@ const DebtsBySalesPage: React.FC = () => {
             )}
           </tbody>
 
-          {rows.length > 0 && (
+          {invoiceRows.length > 0 && (
             <tfoot>
               <tr className="bg-slate-100 font-semibold">
-                <td className="border px-2 py-1" colSpan={6}>
+                {/* 1:Ngày, 2:Mã HĐ, 3:Mã KH, 4:Tên KH */}
+                <td className="border px-2 py-1" colSpan={4}>
                   TỔNG
                 </td>
+                {/* 5:Tổng tiền, 6:Đã thanh toán, 7:Còn nợ */}
                 <td className="border px-2 py-1 text-right">
                   {toNumberSafe(totalAmount).toLocaleString("vi-VN")}
                 </td>
@@ -470,12 +585,115 @@ const DebtsBySalesPage: React.FC = () => {
                 <td className="border px-2 py-1 text-right text-red-600">
                   {toNumberSafe(totalDebt).toLocaleString("vi-VN")}
                 </td>
+                {/* 8:Sale, 9:Ghi chú */}
                 <td className="border px-2 py-1" colSpan={2}></td>
               </tr>
             </tfoot>
           )}
         </table>
       </div>
+
+      {/* ===== Popup chi tiết hóa đơn ===== */}
+      {selectedInvoice && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-lg shadow-lg w-full max-w-3xl max-h-[90vh] overflow-auto p-4 sm:p-6">
+            <div className="flex items-start justify-between mb-3">
+              <div>
+                <h2 className="text-lg font-semibold mb-1">
+                  Hóa đơn {selectedInvoice.code}
+                </h2>
+                <div className="text-xs text-slate-600 space-y-0.5">
+                  <div>
+                    Ngày:{" "}
+                    <span className="font-medium">
+                      {selectedInvoice.date}
+                    </span>
+                  </div>
+                  <div>
+                    Khách:{" "}
+                    <span className="font-medium">
+                      {selectedInvoice.partnerName}
+                    </span>{" "}
+                    {selectedInvoice.partnerCode && (
+                      <span className="text-slate-500">
+                        ({selectedInvoice.partnerCode})
+                      </span>
+                    )}
+                  </div>
+                  <div>
+                    Sale:{" "}
+                    <span className="font-medium">
+                      {selectedInvoice.saleUserName}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseInvoiceDetail}
+                className="ml-3 text-slate-500 hover:text-slate-800 text-xl leading-none"
+              >
+                ×
+              </button>
+            </div>
+
+            <table className="w-full text-xs sm:text-sm border border-slate-200 mb-3">
+              <thead className="bg-slate-100">
+                <tr>
+                  <th className="border px-2 py-1 text-left">Sản phẩm</th>
+                  <th className="border px-2 py-1 text-right">SL</th>
+                  <th className="border px-2 py-1 text-right">Đơn giá</th>
+                  <th className="border px-2 py-1 text-right">Thành tiền</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedInvoice.lines.map((l) => (
+                  <tr key={l.id}>
+                    <td className="border px-2 py-1">{l.itemName}</td>
+                    <td className="border px-2 py-1 text-right">
+                      {l.qty}
+                    </td>
+                    <td className="border px-2 py-1 text-right">
+                      {l.price.toLocaleString("vi-VN")}
+                    </td>
+                    <td className="border px-2 py-1 text-right">
+                      {l.amount.toLocaleString("vi-VN")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-sm">
+              <div className="space-y-0.5">
+                <div>
+                  Tổng tiền:{" "}
+                  <span className="font-semibold">
+                    {formatCurrency(selectedInvoice.totalAmount)}
+                  </span>
+                </div>
+                <div>
+                  Đã thanh toán:{" "}
+                  <span className="font-semibold text-emerald-600">
+                    {formatCurrency(selectedInvoice.paidAmount)}
+                  </span>
+                </div>
+                <div>
+                  Còn nợ:{" "}
+                  <span className="font-semibold text-red-600">
+                    {formatCurrency(selectedInvoice.debtAmount)}
+                  </span>
+                </div>
+              </div>
+              {selectedInvoice.note && (
+                <div className="text-xs text-slate-600 max-w-xs">
+                  Ghi chú: {selectedInvoice.note}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

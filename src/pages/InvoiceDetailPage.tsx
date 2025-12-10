@@ -369,7 +369,7 @@ function createEmptyInvoice(): Invoice {
     date: today,
     type: "SALES",
     partnerName: "",
-    partnerCode: "", // NEW
+    partnerCode: "",
     lines: [],
     subtotal: 0,
     tax: 0,
@@ -397,11 +397,18 @@ const InvoiceDetailPage: React.FC = () => {
   const [openItemSuggestIndex, setOpenItemSuggestIndex] =
     useState<number | null>(null);
 
-  // Thông báo cho thao tác Lưu tồn / Hủy lưu tồn
   const [stockMessage, setStockMessage] = useState<{
     type: "success" | "error";
     text: string;
   } | null>(null);
+
+  // NEW: form đã sửa nhưng chưa lưu
+  const [dirtySinceLastSave, setDirtySinceLastSave] = useState(false);
+
+  function markDirty() {
+    setDirtySinceLastSave(true);
+    setStockMessage(null); // clear thông báo tồn cũ
+  }
 
   useEffect(() => {
     async function init() {
@@ -430,7 +437,7 @@ const InvoiceDetailPage: React.FC = () => {
       const mapped: Partner[] = data.map((p: any) => ({
         id: String(p.id),
         name: p.name,
-        code: p.code, // NEW
+        code: p.code,
         address: p.address,
         phone: p.phone,
         taxCode: p.taxCode,
@@ -485,6 +492,7 @@ const InvoiceDetailPage: React.FC = () => {
   async function loadInvoiceIfNeeded() {
     if (isCreate) {
       setInvoice(createEmptyInvoice());
+      setDirtySinceLastSave(false);
       return;
     }
     if (!id) return;
@@ -524,7 +532,7 @@ const InvoiceDetailPage: React.FC = () => {
         type: (x.type === "PURCHASE" ? "PURCHASE" : "SALES") as InvoiceType,
         partnerId: x.partnerId,
         partnerName: x.partner?.name ?? x.partnerName ?? "",
-        partnerCode: x.partner?.code ?? x.partnerCode ?? "", // NEW
+        partnerCode: x.partner?.code ?? x.partnerCode ?? "",
         partnerAddress: x.partner?.address ?? x.partnerAddr,
         partnerPhone: x.partner?.phone ?? x.partnerPhone,
         partnerTaxCode: x.partner?.taxCode ?? x.partnerTax,
@@ -542,6 +550,8 @@ const InvoiceDetailPage: React.FC = () => {
       };
 
       setInvoice(inv);
+      setDirtySinceLastSave(false);
+      setStockMessage(null);
     } catch (err) {
       console.error("loadInvoice error", err);
       alert("Không tải được hóa đơn.");
@@ -549,7 +559,6 @@ const InvoiceDetailPage: React.FC = () => {
     }
   }
 
-  // ------- helpers để update invoice -------
   function updateInvoice(partial: Partial<Invoice>) {
     setInvoice((prev) => {
       if (!prev) return prev;
@@ -566,15 +575,17 @@ const InvoiceDetailPage: React.FC = () => {
   }
 
   function handlePartnerNameChange(value: string) {
+    markDirty();
     updateInvoice({ partnerName: value, partnerId: undefined });
     setShowPartnerSuggest(true);
   }
 
   function selectPartner(p: Partner) {
+    markDirty();
     updateInvoice({
       partnerId: p.id,
       partnerName: p.name,
-      partnerCode: p.code, // NEW: fill luôn mã KH nếu có
+      partnerCode: p.code,
       partnerAddress: p.address,
       partnerPhone: p.phone,
       partnerTaxCode: p.taxCode,
@@ -588,6 +599,7 @@ const InvoiceDetailPage: React.FC = () => {
     field: keyof InvoiceLine,
     value: any
   ) {
+    markDirty();
     setInvoice((prev) => {
       if (!prev) return prev;
       const lines = prev.lines.map((l, idx) =>
@@ -602,6 +614,7 @@ const InvoiceDetailPage: React.FC = () => {
   }
 
   function selectItemForLine(index: number, it: Item) {
+    markDirty();
     setInvoice((prev) => {
       if (!prev) return prev;
       const lines = prev.lines.map((l, idx) =>
@@ -625,6 +638,7 @@ const InvoiceDetailPage: React.FC = () => {
   }
 
   function addLine() {
+    markDirty();
     setInvoice((prev) => {
       if (!prev) return prev;
       const lines = [
@@ -640,6 +654,7 @@ const InvoiceDetailPage: React.FC = () => {
   }
 
   function removeLine(index: number) {
+    markDirty();
     setInvoice((prev) => {
       if (!prev) return prev;
       const lines = prev.lines.filter((_, idx) => idx !== index);
@@ -651,7 +666,6 @@ const InvoiceDetailPage: React.FC = () => {
     });
   }
 
-  // -------- save customer to partners --------
   async function handleSavePartner() {
     if (!invoice) return;
 
@@ -666,7 +680,7 @@ const InvoiceDetailPage: React.FC = () => {
 
     try {
       const payload = {
-        code: invoice.partnerCode || undefined, // NEW: gửi mã KH
+        code: invoice.partnerCode || undefined,
         name: invoice.partnerName,
         address: invoice.partnerAddress,
         phone: invoice.partnerPhone,
@@ -689,6 +703,7 @@ const InvoiceDetailPage: React.FC = () => {
       };
 
       setPartners((prev) => [...prev, p]);
+      markDirty();
       updateInvoice({ partnerId: p.id, partnerCode: p.code });
       alert("Đã lưu khách hàng vào danh sách đối tác.");
     } catch (err) {
@@ -709,6 +724,18 @@ const InvoiceDetailPage: React.FC = () => {
       return;
     }
 
+    // CHẶN khi form có thay đổi chưa lưu
+    if (dirtySinceLastSave) {
+      const text =
+        "Bạn vừa sửa hóa đơn nhưng chưa lưu. Vui lòng bấm 'Lưu hóa đơn' trước khi 'Lưu tồn'.";
+      alert(text);
+      setStockMessage({
+        type: "error",
+        text,
+      });
+      return;
+    }
+
     if (
       !window.confirm(
         "Post tồn cho hóa đơn này? Sau khi post, số lượng tồn sẽ được cập nhật."
@@ -720,7 +747,6 @@ const InvoiceDetailPage: React.FC = () => {
     try {
       setStockMessage(null);
       await api.post(`/invoices/${invoice.id}/post`);
-      // Đánh dấu đã post trên UI + thông báo đẹp
       updateInvoice({ posted: true });
       setStockMessage({
         type: "success",
@@ -794,6 +820,8 @@ const InvoiceDetailPage: React.FC = () => {
         type: invoice.type,
         partnerId: invoice.partnerId,
         partnerName: invoice.partnerName,
+        // *** GỬI LUÔN MÃ KHÁCH HÀNG LÊN BE ***
+        partnerCode: invoice.partnerCode || undefined,
         partnerAddress: invoice.partnerAddress,
         partnerPhone: invoice.partnerPhone,
         partnerTax: invoice.partnerTaxCode,
@@ -819,6 +847,8 @@ const InvoiceDetailPage: React.FC = () => {
         await api.put(`/invoices/${invoice.id}`, payload);
       }
 
+      setDirtySinceLastSave(false);
+      setStockMessage(null);
       alert("Đã lưu hóa đơn.");
       navigate("/invoices");
     } catch (err: any) {
@@ -892,9 +922,10 @@ const InvoiceDetailPage: React.FC = () => {
                 <input
                   style={styles.input}
                   value={invoice.code}
-                  onChange={(e) =>
-                    updateInvoice({ code: e.target.value.toUpperCase() })
-                  }
+                  onChange={(e) => {
+                    markDirty();
+                    updateInvoice({ code: e.target.value.toUpperCase() });
+                  }}
                   placeholder="VD: HD0001"
                 />
               </div>
@@ -906,9 +937,10 @@ const InvoiceDetailPage: React.FC = () => {
                     style={styles.input}
                     type="date"
                     value={invoice.date || ""}
-                    onChange={(e) =>
-                      updateInvoice({ date: e.target.value || undefined })
-                    }
+                    onChange={(e) => {
+                      markDirty();
+                      updateInvoice({ date: e.target.value || undefined });
+                    }}
                   />
                 </div>
                 <div style={styles.flex1}>
@@ -916,11 +948,12 @@ const InvoiceDetailPage: React.FC = () => {
                   <select
                     style={styles.select}
                     value={invoice.type}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      markDirty();
                       updateInvoice({
                         type: e.target.value as InvoiceType,
-                      })
-                    }
+                      });
+                    }}
                   >
                     <option value="SALES">Bán hàng</option>
                     <option value="PURCHASE">Nhập hàng</option>
@@ -982,15 +1015,15 @@ const InvoiceDetailPage: React.FC = () => {
                 )}
               </div>
 
-              {/* NEW: Mã khách hàng ngay dưới tên KH */}
               <div style={styles.formRow}>
                 <label style={styles.label}>Mã khách hàng</label>
                 <input
                   style={styles.input}
                   value={invoice.partnerCode || ""}
-                  onChange={(e) =>
-                    updateInvoice({ partnerCode: e.target.value })
-                  }
+                  onChange={(e) => {
+                    markDirty();
+                    updateInvoice({ partnerCode: e.target.value });
+                  }}
                   placeholder="Nhập mã khách (VD: MC001)"
                 />
               </div>
@@ -1000,9 +1033,10 @@ const InvoiceDetailPage: React.FC = () => {
                 <input
                   style={styles.input}
                   value={invoice.partnerAddress || ""}
-                  onChange={(e) =>
-                    updateInvoice({ partnerAddress: e.target.value })
-                  }
+                  onChange={(e) => {
+                    markDirty();
+                    updateInvoice({ partnerAddress: e.target.value });
+                  }}
                 />
               </div>
 
@@ -1012,9 +1046,10 @@ const InvoiceDetailPage: React.FC = () => {
                   <input
                     style={styles.input}
                     value={invoice.partnerPhone || ""}
-                    onChange={(e) =>
-                      updateInvoice({ partnerPhone: e.target.value })
-                    }
+                    onChange={(e) => {
+                      markDirty();
+                      updateInvoice({ partnerPhone: e.target.value });
+                    }}
                   />
                 </div>
                 <div style={styles.flex1}>
@@ -1022,9 +1057,10 @@ const InvoiceDetailPage: React.FC = () => {
                   <input
                     style={styles.input}
                     value={invoice.partnerTaxCode || ""}
-                    onChange={(e) =>
-                      updateInvoice({ partnerTaxCode: e.target.value })
-                    }
+                    onChange={(e) => {
+                      markDirty();
+                      updateInvoice({ partnerTaxCode: e.target.value });
+                    }}
                   />
                 </div>
               </div>
@@ -1034,9 +1070,10 @@ const InvoiceDetailPage: React.FC = () => {
                 <input
                   style={styles.input}
                   value={invoice.partnerEmail || ""}
-                  onChange={(e) =>
-                    updateInvoice({ partnerEmail: e.target.value })
-                  }
+                  onChange={(e) => {
+                    markDirty();
+                    updateInvoice({ partnerEmail: e.target.value });
+                  }}
                 />
               </div>
 
@@ -1061,11 +1098,12 @@ const InvoiceDetailPage: React.FC = () => {
                   <select
                     style={styles.select}
                     value={invoice.saleUserId || ""}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      markDirty();
                       updateInvoice({
                         saleUserId: e.target.value || undefined,
-                      })
-                    }
+                      });
+                    }}
                   >
                     <option value="">-- Chọn NV sale --</option>
                     {staffs.map((s) => (
@@ -1081,11 +1119,12 @@ const InvoiceDetailPage: React.FC = () => {
                   <select
                     style={styles.select}
                     value={invoice.techUserId || ""}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      markDirty();
                       updateInvoice({
                         techUserId: e.target.value || undefined,
-                      })
-                    }
+                      });
+                    }}
                   >
                     <option value="">-- Chọn NV kỹ thuật --</option>
                     {staffs.map((s) => (
@@ -1133,7 +1172,6 @@ const InvoiceDetailPage: React.FC = () => {
 
                 return (
                   <div key={idx} style={styles.gridRow}>
-                    {/* Sản phẩm */}
                     <div style={styles.autoWrapper}>
                       <input
                         style={styles.smallInput}
@@ -1169,7 +1207,6 @@ const InvoiceDetailPage: React.FC = () => {
                         )}
                     </div>
 
-                    {/* SL */}
                     <div>
                       <input
                         style={{
@@ -1189,7 +1226,6 @@ const InvoiceDetailPage: React.FC = () => {
                       />
                     </div>
 
-                    {/* Đơn giá */}
                     <div>
                       <input
                         style={{
@@ -1209,14 +1245,12 @@ const InvoiceDetailPage: React.FC = () => {
                       />
                     </div>
 
-                    {/* Thành tiền */}
                     <div>
                       <div style={styles.totalBox}>
                         {(line.qty * line.price).toLocaleString()}
                       </div>
                     </div>
 
-                    {/* Xoá */}
                     <div style={{ textAlign: "center" }}>
                       <button
                         type="button"
@@ -1262,6 +1296,7 @@ const InvoiceDetailPage: React.FC = () => {
                       min={0}
                       value={invoice.taxPercent ?? 0}
                       onChange={(e) => {
+                        markDirty();
                         const raw = e.target.value;
                         const num = raw === "" ? 0 : Number(raw);
                         const val = isNaN(num) ? 0 : num;
@@ -1288,7 +1323,6 @@ const InvoiceDetailPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* ĐÃ THU */}
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Đã thu:</span>
                   <div
@@ -1304,6 +1338,7 @@ const InvoiceDetailPage: React.FC = () => {
                       min={0}
                       value={invoice.paidAmount ?? 0}
                       onChange={(e) => {
+                        markDirty();
                         const raw = e.target.value;
                         const num = raw === "" ? 0 : Number(raw);
                         const paid = isNaN(num) ? 0 : num;
@@ -1326,7 +1361,6 @@ const InvoiceDetailPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* CÒN PHẢI THU */}
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Còn phải thu:</span>
                   <span style={styles.summaryValue}>
@@ -1339,7 +1373,6 @@ const InvoiceDetailPage: React.FC = () => {
                   </span>
                 </div>
 
-                {/* TRẠNG THÁI THANH TOÁN */}
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>
                     Trạng thái thanh toán:
@@ -1347,11 +1380,12 @@ const InvoiceDetailPage: React.FC = () => {
                   <select
                     style={{ ...styles.select, maxWidth: 220 }}
                     value={invoice.paymentStatus || "UNPAID"}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      markDirty();
                       updateInvoice({
                         paymentStatus: e.target.value as PaymentStatus,
-                      })
-                    }
+                      });
+                    }}
                   >
                     <option value="UNPAID">Chưa thanh toán</option>
                     <option value="PARTIAL">Thanh toán một phần</option>
@@ -1367,7 +1401,6 @@ const InvoiceDetailPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Thông báo post tồn / hủy tồn */}
               {stockMessage && (
                 <div
                   style={{
@@ -1395,7 +1428,14 @@ const InvoiceDetailPage: React.FC = () => {
                   <button
                     type="button"
                     style={styles.secondarySmallBtn}
-                    disabled={!invoice.id || invoice.posted}
+                    disabled={
+                      !invoice.id || invoice.posted || dirtySinceLastSave
+                    }
+                    title={
+                      dirtySinceLastSave
+                        ? "Bạn đã sửa hoá đơn, hãy bấm 'Lưu hóa đơn' trước khi 'Lưu tồn'."
+                        : ""
+                    }
                     onClick={handlePostStock}
                   >
                     Lưu tồn
@@ -1412,7 +1452,6 @@ const InvoiceDetailPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Nút hành động */}
             <div style={styles.formActions}>
               <button
                 type="button"
