@@ -1,5 +1,5 @@
 // src/pages/StockCountDetailPage.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../api/client";
 
@@ -40,6 +40,22 @@ type StockCountDetail = {
 
 type TabKind = "PART" | "MACHINE";
 
+function getApiErrorMessage(err: any, fallback: string) {
+  return (
+    err?.response?.data?.message ||
+    err?.message ||
+    fallback
+  );
+}
+
+function isPeriodLockMessage(msg: string) {
+  const s = String(msg || "").toLowerCase();
+  // match các message BE bạn đang dùng
+  return (
+    s.includes("kỳ sổ") && s.includes("khoá")
+  ) || s.includes("kỳ đã khoá") || s.includes("thuộc kỳ đã khoá");
+}
+
 const StockCountDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -49,6 +65,10 @@ const StockCountDetailPage: React.FC = () => {
   const [savingLineId, setSavingLineId] = useState<string | null>(null);
   const [posting, setPosting] = useState<boolean>(false);
   const [deleting, setDeleting] = useState<boolean>(false);
+
+  // ✅ lock state (BE period lock)
+  const [locked, setLocked] = useState<boolean>(false);
+  const [lockedMsg, setLockedMsg] = useState<string>("");
 
   // giá trị đang gõ trên input, key = lineId
   const [editingValues, setEditingValues] = useState<Record<string, string>>(
@@ -65,6 +85,11 @@ const StockCountDetailPage: React.FC = () => {
       const res = await api.get(`/stock-counts/${id}`);
       const detail: StockCountDetail = res.data.data;
       setData(detail);
+
+      // reset lock banner mỗi lần reload (nếu vẫn bị lock thì sẽ bật lại khi thao tác)
+      // (giữ logic nhẹ, không cần gọi thêm API /period-lock)
+      setLocked(false);
+      setLockedMsg("");
 
       const init: Record<string, string> = {};
       (detail.lines || []).forEach((l) => {
@@ -91,9 +116,39 @@ const StockCountDetailPage: React.FC = () => {
     return Number.isNaN(n) ? 0 : n;
   };
 
+  const isPosted = data?.status === "posted";
+  const isReadOnly = isPosted || locked;
+
+  const visibleLines =
+    data?.lines.filter((l) => l.item?.kind === activeTab) ?? [];
+
+  const totals = useMemo(() => {
+    const lines = visibleLines || [];
+    let book = 0;
+    let counted = 0;
+    let diff = 0;
+    for (const l of lines) {
+      const b = parseNumber(l.bookQty ?? "0");
+      const c = parseNumber(
+        (editingValues[l.id] ?? (l.countedQty as any)?.toString?.() ?? l.countedQty ?? "0") as string
+      );
+      book += b;
+      counted += c;
+      diff += c - b;
+    }
+    return { book, counted, diff };
+  }, [visibleLines, editingValues]);
+
+  const applyPeriodLockIfNeeded = (msg: string) => {
+    if (isPeriodLockMessage(msg)) {
+      setLocked(true);
+      setLockedMsg(msg);
+    }
+  };
+
   const handleUpdateCountedQty = async (line: StockCountLine) => {
     if (!id || !data) return;
-    if (data.status === "posted") return;
+    if (isReadOnly) return;
 
     const value =
       editingValues[line.id] ??
@@ -123,9 +178,11 @@ const StockCountDetailPage: React.FC = () => {
         });
         return { ...prev, lines: newLines };
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to update countedQty", err);
-      alert("Cập nhật số thực đếm thất bại");
+      const msg = getApiErrorMessage(err, "Cập nhật số thực đếm thất bại");
+      applyPeriodLockIfNeeded(msg);
+      alert(msg);
     } finally {
       setSavingLineId(null);
     }
@@ -133,10 +190,15 @@ const StockCountDetailPage: React.FC = () => {
 
   const handlePost = async () => {
     if (!id || !data) return;
-    if (data.status === "posted") {
+    if (isPosted) {
       alert("Phiếu kiểm kê đã được post.");
       return;
     }
+    if (locked) {
+      alert(lockedMsg || "Phiếu thuộc kỳ đã khoá, không thể post.");
+      return;
+    }
+
     const confirm = window.confirm(
       "Post kiểm kê sẽ điều chỉnh tồn kho theo số thực đếm. Bạn chắc chắn?"
     );
@@ -149,7 +211,9 @@ const StockCountDetailPage: React.FC = () => {
       alert("Đã post kiểm kê và điều chỉnh tồn kho.");
     } catch (err: any) {
       console.error("Failed to post stock count", err);
-      alert(err?.response?.data?.message || "Post kiểm kê thất bại");
+      const msg = getApiErrorMessage(err, "Post kiểm kê thất bại");
+      applyPeriodLockIfNeeded(msg);
+      alert(msg);
     } finally {
       setPosting(false);
     }
@@ -174,18 +238,24 @@ const StockCountDetailPage: React.FC = () => {
           : `stock_count_machines_${id}.xlsx`;
       a.click();
       window.URL.revokeObjectURL(url);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to export stock count", err);
-      alert("Xuất Excel thất bại");
+      const msg = getApiErrorMessage(err, "Xuất Excel thất bại");
+      alert(msg);
     }
   };
 
   const handleDelete = async () => {
     if (!id || !data) return;
-    if (data.status === "posted") {
+    if (isPosted) {
       alert("Không thể xoá phiếu kiểm kê đã post.");
       return;
     }
+    if (locked) {
+      alert(lockedMsg || "Phiếu thuộc kỳ đã khoá, không thể xoá.");
+      return;
+    }
+
     const confirm = window.confirm(
       "Bạn chắc chắn muốn xoá phiếu kiểm kê này? (Chỉ nên xoá phiếu test/demo)"
     );
@@ -198,7 +268,9 @@ const StockCountDetailPage: React.FC = () => {
       navigate("/stock-counts");
     } catch (err: any) {
       console.error("Failed to delete stock count", err);
-      alert(err?.response?.data?.message || "Xoá phiếu kiểm kê thất bại");
+      const msg = getApiErrorMessage(err, "Xoá phiếu kiểm kê thất bại");
+      applyPeriodLockIfNeeded(msg);
+      alert(msg);
     } finally {
       setDeleting(false);
     }
@@ -227,10 +299,6 @@ const StockCountDetailPage: React.FC = () => {
     return <div style={{ padding: 16 }}>Thiếu ID phiếu kiểm kê.</div>;
   }
 
-  // lọc theo tab
-  const visibleLines =
-    data?.lines.filter((l) => l.item?.kind === activeTab) ?? [];
-
   return (
     <div style={{ padding: 16, maxWidth: 1200, margin: "0 auto" }}>
       <button
@@ -249,8 +317,30 @@ const StockCountDetailPage: React.FC = () => {
       </button>
 
       {loading && !data && <div>Đang tải phiếu kiểm kê...</div>}
+
       {!loading && data && (
         <>
+          {/* ✅ Period lock banner */}
+          {locked && (
+            <div
+              style={{
+                border: "1px solid #fed7d7",
+                backgroundColor: "#fff5f5",
+                color: "#c53030",
+                borderRadius: 6,
+                padding: "10px 12px",
+                marginBottom: 12,
+                fontSize: 13,
+                lineHeight: 1.4,
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                ⛔ Phiếu thuộc kỳ đã khoá
+              </div>
+              <div>{lockedMsg || "Kỳ sổ đã khoá, không thể sửa / post / xoá."}</div>
+            </div>
+          )}
+
           {/* Header info */}
           <div
             style={{
@@ -285,9 +375,15 @@ const StockCountDetailPage: React.FC = () => {
                   </div>
                 )}
                 <div style={{ fontSize: 12, color: "#718096", marginTop: 4 }}>
-                  Tạo lúc:{" "}
-                  {new Date(data.createdAt).toLocaleString("vi-VN")} | Cập nhật:{" "}
-                  {new Date(data.updatedAt).toLocaleString("vi-VN")}
+                  Tạo lúc: {new Date(data.createdAt).toLocaleString("vi-VN")} | Cập
+                  nhật: {new Date(data.updatedAt).toLocaleString("vi-VN")}
+                </div>
+
+                {/* ✅ mini summary theo tab (không phá layout, chỉ thêm 1 dòng) */}
+                <div style={{ fontSize: 12, color: "#4a5568", marginTop: 6 }}>
+                  Tổng tab {activeTab === "PART" ? "Linh kiện" : "Máy"} • Tồn sổ:{" "}
+                  <b>{totals.book}</b> • Thực đếm: <b>{totals.counted}</b> • Chênh:{" "}
+                  <b>{totals.diff > 0 ? `+${totals.diff}` : totals.diff}</b>
                 </div>
               </div>
 
@@ -351,38 +447,50 @@ const StockCountDetailPage: React.FC = () => {
 
                   <button
                     type="button"
-                    disabled={data.status === "posted" || posting}
+                    disabled={isReadOnly || posting}
                     onClick={handlePost}
                     style={{
                       padding: "6px 12px",
                       borderRadius: 4,
                       border: "1px solid #2f855a",
                       backgroundColor:
-                        data.status === "posted" || posting ? "#9ae6b4" : "#38a169",
+                        isReadOnly || posting ? "#9ae6b4" : "#38a169",
                       color: "#fff",
-                      cursor:
-                        data.status === "posted" || posting ? "default" : "pointer",
+                      cursor: isReadOnly || posting ? "default" : "pointer",
                       fontSize: 13,
                     }}
+                    title={
+                      locked
+                        ? (lockedMsg || "Phiếu thuộc kỳ đã khoá")
+                        : isPosted
+                          ? "Phiếu đã post"
+                          : ""
+                    }
                   >
                     {posting ? "Đang post..." : "Post kiểm kê"}
                   </button>
 
                   <button
                     type="button"
-                    disabled={data.status === "posted" || deleting}
+                    disabled={isReadOnly || deleting}
                     onClick={handleDelete}
                     style={{
                       padding: "6px 12px",
                       borderRadius: 4,
                       border: "1px solid #e53e3e",
                       backgroundColor:
-                        data.status === "posted" || deleting ? "#fed7d7" : "#fff5f5",
+                        isReadOnly || deleting ? "#fed7d7" : "#fff5f5",
                       color: "#e53e3e",
-                      cursor:
-                        data.status === "posted" || deleting ? "default" : "pointer",
+                      cursor: isReadOnly || deleting ? "default" : "pointer",
                       fontSize: 13,
                     }}
+                    title={
+                      locked
+                        ? (lockedMsg || "Phiếu thuộc kỳ đã khoá")
+                        : isPosted
+                          ? "Phiếu đã post"
+                          : ""
+                    }
                   >
                     {deleting ? "Đang xoá..." : "Xoá phiếu"}
                   </button>
@@ -409,8 +517,7 @@ const StockCountDetailPage: React.FC = () => {
                   activeTab === "PART"
                     ? "1px solid #3182ce"
                     : "1px solid #cbd5e0",
-                backgroundColor:
-                  activeTab === "PART" ? "#ebf8ff" : "#fff",
+                backgroundColor: activeTab === "PART" ? "#ebf8ff" : "#fff",
                 fontSize: 13,
                 cursor: "pointer",
               }}
@@ -427,8 +534,7 @@ const StockCountDetailPage: React.FC = () => {
                   activeTab === "MACHINE"
                     ? "1px solid #3182ce"
                     : "1px solid #cbd5e0",
-                backgroundColor:
-                  activeTab === "MACHINE" ? "#ebf8ff" : "#fff",
+                backgroundColor: activeTab === "MACHINE" ? "#ebf8ff" : "#fff",
                 fontSize: 13,
                 cursor: "pointer",
               }}
@@ -482,14 +588,17 @@ const StockCountDetailPage: React.FC = () => {
                         <input
                           type="number"
                           value={inputValue}
-                          disabled={data.status === "posted"}
+                          disabled={isReadOnly}
                           onChange={(e) =>
                             setEditingValues((prev) => ({
                               ...prev,
                               [line.id]: e.target.value,
                             }))
                           }
-                          onBlur={() => handleUpdateCountedQty(line)}
+                          onBlur={() => {
+                            if (isReadOnly) return;
+                            handleUpdateCountedQty(line);
+                          }}
                           style={{
                             width: 100,
                             padding: "2px 4px",
@@ -499,7 +608,17 @@ const StockCountDetailPage: React.FC = () => {
                                 ? "1px solid #3182ce"
                                 : "1px solid #cbd5e0",
                             fontSize: 13,
+                            backgroundColor: isReadOnly ? "#f7fafc" : "#fff",
+                            color: isReadOnly ? "#718096" : "#111827",
+                            cursor: isReadOnly ? "not-allowed" : "text",
                           }}
+                          title={
+                            locked
+                              ? (lockedMsg || "Phiếu thuộc kỳ đã khoá")
+                              : isPosted
+                                ? "Phiếu đã post"
+                                : ""
+                          }
                         />
                       </td>
                       <td style={tdStyle}>{renderDiff(line.diff)}</td>

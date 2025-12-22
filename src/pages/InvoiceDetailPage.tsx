@@ -1,14 +1,17 @@
-import React, { useEffect, useState } from "react";
+// src/pages/InvoiceDetailPage.tsx
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../api/client";
+import { ToastHost, useToast } from "../components/Toast";
 
 type InvoiceType = "SALES" | "PURCHASE";
 type PaymentStatus = "UNPAID" | "PARTIAL" | "PAID";
+type InvoiceStatus = "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
 
 type Partner = {
   id: string;
   name: string;
-  code?: string; // NEW: mã khách hàng
+  code?: string;
   address?: string;
   phone?: string;
   taxCode?: string;
@@ -37,20 +40,31 @@ type StaffUser = {
   name: string;
 };
 
+type PaymentAccount = {
+  id: string;
+  code: string;
+  name: string;
+  type?: string;
+  isActive?: boolean;
+};
+
 type Invoice = {
   id: string | number | null;
   code: string;
   date?: string;
   type: InvoiceType;
+
   partnerId?: string;
   partnerName: string;
-  partnerCode?: string; // NEW: mã KH gắn với khách trên hóa đơn
+  partnerCode?: string;
   partnerAddress?: string;
   partnerPhone?: string;
   partnerTaxCode?: string;
   partnerEmail?: string;
-  saleUserId?: string;
-  techUserId?: string;
+
+  saleUserId?: string | null;
+  techUserId?: string | null;
+
   lines: InvoiceLine[];
 
   subtotal?: number;
@@ -61,24 +75,132 @@ type Invoice = {
   paymentStatus?: PaymentStatus;
   paidAmount?: number;
 
-  posted?: boolean;
+  receiveAccountId?: string | null;
+  note?: string;
+
+  status?: InvoiceStatus;
+
+  // ✅ BẢO HÀNH (treo 5%)
+  hasWarrantyHold?: boolean;
+  warrantyHoldAmount?: number;
+  warrantyDueDate?: string | null;
 };
 
-// unwrap { ok: true, data: ... }
-function unwrap<T = any>(res: any): T {
-  if (res && typeof res === "object" && "data" in res) {
-    const body = (res as any).data;
-    if (body && typeof body === "object" && "data" in body) {
-      return body.data as T;
-    }
-    return body as T;
+/** ========================= Payment history types ========================= **/
+type PaymentAllocation = {
+  invoiceId: string;
+  amount: number;
+  invoice?: { id: string; code?: string };
+};
+
+type PaymentRow = {
+  id: string;
+
+  // ngày nghiệp vụ (YYYY-MM-DD) - có thể trùng nhau
+  date?: string;
+
+  // ✅ timestamp tạo phiếu (phân biệt lần 1/lần 2)
+  createdAt?: string;
+
+  type?: string; // RECEIPT / PAYMENT
+  amount?: number;
+  refNo?: string | null;
+  method?: string | null;
+  note?: string | null;
+  account?: { id: string; code?: string; name?: string } | null;
+  allocations?: PaymentAllocation[];
+};
+
+/** ========================= Money input helpers (FORMAT ,) ========================= **/
+function fmtMoneyInput(v: number | string | null | undefined) {
+  const n = Number(String(v ?? "").replace(/[^\d\-]/g, "")) || 0;
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(n);
+}
+function parseMoneyInput(s: string) {
+  return Number(String(s ?? "").replace(/[^\d\-]/g, "")) || 0;
+}
+
+/** ========================= Component: Price input per line (NO HOOK IN MAP) ========================= **/
+const LinePriceInput: React.FC<{
+  value: number;
+  disabled?: boolean;
+  onChange: (v: number) => void;
+  styleInput?: React.CSSProperties;
+}> = ({ value, disabled, onChange, styleInput }) => {
+  const [text, setText] = useState(fmtMoneyInput(value));
+
+  useEffect(() => {
+    setText(fmtMoneyInput(value));
+  }, [value]);
+
+  return (
+    <input
+      style={styleInput}
+      disabled={disabled}
+      value={text}
+      onChange={(e) => {
+        const raw = parseMoneyInput(e.target.value);
+        setText(fmtMoneyInput(raw));
+        onChange(raw);
+      }}
+      onBlur={() => setText(fmtMoneyInput(value))}
+      inputMode="numeric"
+    />
+  );
+};
+
+/** ========================= Component: Paid amount input (keeps number logic) ========================= **/
+const PaidAmountInput: React.FC<{
+  value: number;
+  disabled?: boolean;
+  onChange: (v: number) => void;
+  styleInput?: React.CSSProperties;
+}> = ({ value, disabled, onChange, styleInput }) => {
+  const [text, setText] = useState(fmtMoneyInput(value));
+
+  useEffect(() => {
+    setText(fmtMoneyInput(value));
+  }, [value]);
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      <input
+        style={styleInput}
+        disabled={disabled}
+        value={text}
+        onChange={(e) => {
+          const raw = parseMoneyInput(e.target.value);
+          setText(fmtMoneyInput(raw));
+          onChange(raw);
+        }}
+        onBlur={() => setText(fmtMoneyInput(value))}
+        inputMode="numeric"
+      />
+      <span>đ</span>
+    </div>
+  );
+};
+
+function getAuthUser(): { id?: string; role?: string } {
+  try {
+    const raw = localStorage.getItem("user") || localStorage.getItem("authUser");
+    if (!raw) return {};
+    const u = JSON.parse(raw);
+    return { id: u?.id ? String(u.id) : undefined, role: u?.role };
+  } catch {
+    return {};
   }
-  return res as T;
+}
+
+// unwrap { ok: true, data: ... } OR direct
+function unwrap<T = any>(res: any): T {
+  const body = res?.data;
+  if (body && typeof body === "object" && "data" in body) return body.data as T;
+  return body as T;
 }
 
 function normalizeDateForInput(raw?: string): string {
   if (!raw) return "";
-
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
 
   if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
@@ -88,24 +210,44 @@ function normalizeDateForInput(raw?: string): string {
 
   const d = new Date(raw);
   if (Number.isNaN(d.getTime())) return "";
-
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
-// -------- styles ----------
+function formatDateTimeDisplay(raw?: string) {
+  if (!raw) return "";
+
+  // nếu backend trả "YYYY-MM-DD" thì coi là 00:00:00
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [y, m, d] = raw.split("-");
+    return `${d}/${m}/${y} 00:00:00`;
+  }
+
+  const dt = new Date(raw);
+  if (Number.isNaN(dt.getTime())) return raw;
+
+  const dd = String(dt.getDate()).padStart(2, "0");
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const yyyy = dt.getFullYear();
+
+  const hh = String(dt.getHours()).padStart(2, "0");
+  const mi = String(dt.getMinutes()).padStart(2, "0");
+  const ss = String(dt.getSeconds()).padStart(2, "0");
+
+  return `${dd}/${mm}/${yyyy} ${hh}:${mi}:${ss}`;
+}
+
+function formatMoney(n: number) {
+  return Number(n || 0).toLocaleString("vi-VN");
+}
+
+// -------- styles (GIỮ NGUYÊN styles của bạn) ----------
 const styles: Record<string, React.CSSProperties> = {
-  page: {
-    display: "flex",
-    flexDirection: "column",
-    height: "100%",
-    minHeight: 0,
-  },
+  page: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 },
   header: { padding: "12px 16px", borderBottom: "1px solid #e5e7eb" },
   headerTitle: { margin: 0, fontSize: 20, fontWeight: 600 },
-
   body: {
     flex: 1,
     minHeight: 0,
@@ -114,11 +256,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     overflowY: "auto",
   },
-  content: {
-    width: "100%",
-    maxWidth: 900,
-  },
-
+  content: { width: "100%", maxWidth: 900 },
   backBtn: {
     border: "none",
     background: "none",
@@ -128,14 +266,7 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: 12,
     fontSize: 14,
   },
-
-  form: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 10,
-    fontSize: 14,
-  },
-
+  form: { display: "flex", flexDirection: "column", gap: 10, fontSize: 14 },
   sectionBox: {
     border: "1px solid #e5e7eb",
     borderRadius: 6,
@@ -148,19 +279,9 @@ const styles: Record<string, React.CSSProperties> = {
     borderBottom: "1px solid #f3f4f6",
     paddingBottom: 4,
   },
-
-  formRow: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 4,
-    marginBottom: 8,
-  },
-  rowInline: {
-    display: "flex",
-    gap: 12,
-  },
+  formRow: { display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 },
+  rowInline: { display: "flex", gap: 12 },
   flex1: { flex: 1 },
-
   label: { fontWeight: 500, fontSize: 13 },
   input: {
     padding: "6px 10px",
@@ -179,7 +300,6 @@ const styles: Record<string, React.CSSProperties> = {
     width: "100%",
     boxSizing: "border-box",
   },
-
   autoWrapper: { position: "relative" },
   suggestBox: {
     position: "absolute",
@@ -198,10 +318,9 @@ const styles: Record<string, React.CSSProperties> = {
   suggestItem: { padding: "4px 8px", fontSize: 13, cursor: "pointer" },
   suggestItemMuted: { padding: "4px 8px", fontSize: 12, color: "#9ca3af" },
 
-  // Dòng sản phẩm
   gridHeader: {
     display: "grid",
-    gridTemplateColumns: "4fr 1fr 2fr 2fr 70px", // SP - SL - ĐG - TT - Xóa
+    gridTemplateColumns: "4fr 1fr 2fr 2fr 70px",
     columnGap: 8,
     fontSize: 12,
     fontWeight: 600,
@@ -264,8 +383,6 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: "right",
     whiteSpace: "nowrap",
   },
-
-  // tổng tiền
   summaryRow: {
     display: "flex",
     justifyContent: "flex-start",
@@ -274,23 +391,10 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: 6,
     fontSize: 13,
   },
-  summaryLabel: {
-    width: 160,
-    textAlign: "left",
-    fontWeight: 500,
-  },
-  summaryValue: {
-    width: 200,
-    textAlign: "right",
-    fontWeight: 600,
-  },
+  summaryLabel: { width: 160, textAlign: "left", fontWeight: 500 },
+  summaryValue: { width: 200, textAlign: "right", fontWeight: 600 },
 
-  formActions: {
-    display: "flex",
-    justifyContent: "space-between",
-    marginTop: 12,
-    gap: 8,
-  },
+  formActions: { display: "flex", justifyContent: "space-between", marginTop: 12, gap: 8 },
   primaryBtn: {
     padding: "6px 16px",
     borderRadius: 4,
@@ -325,38 +429,245 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: 8,
   },
 
-  // Thông báo đẹp cho post / unpost tồn
-  notice: {
-    marginTop: 8,
-    padding: "8px 10px",
+  notice: { marginTop: 8, padding: "8px 10px", borderRadius: 4, fontSize: 13 },
+  noticeSuccess: { background: "#ecfdf3", border: "1px solid #22c55e", color: "#166534" },
+  noticeError: { background: "#fef2f2", border: "1px solid #f87171", color: "#b91c1c" },
+};
+
+/** ========================= Modal styles (đẹp hơn confirm/prompt native) ========================= **/
+const modalOverlay: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(2, 6, 23, 0.45)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 14,
+  zIndex: 2000,
+};
+
+const modalCard: React.CSSProperties = {
+  width: "min(560px, 96vw)",
+  borderRadius: 10,
+  background: "#fff",
+  border: "1px solid #e5e7eb",
+  boxShadow: "0 18px 40px rgba(0,0,0,0.22)",
+  overflow: "hidden",
+  display: "flex",
+  flexDirection: "column",
+  maxHeight: "86vh",
+};
+
+const modalHeader: React.CSSProperties = {
+  padding: 12,
+  borderBottom: "1px solid #f3f4f6",
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: 8,
+};
+
+const modalTitle: React.CSSProperties = { fontWeight: 700, fontSize: 14 };
+
+const modalCloseBtn: React.CSSProperties = {
+  padding: "4px 10px",
+  borderRadius: 6,
+  border: "1px solid #d1d5db",
+  background: "#fff",
+  cursor: "pointer",
+  fontWeight: 700,
+  lineHeight: 1.1,
+};
+
+const modalBody: React.CSSProperties = { padding: 12, overflow: "auto" };
+
+const modalFooter: React.CSSProperties = {
+  padding: 12,
+  borderTop: "1px solid #f3f4f6",
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 8,
+  background: "#fff",
+};
+
+function dangerBtn(disabled?: boolean): React.CSSProperties {
+  return {
+    padding: "6px 12px",
     borderRadius: 4,
+    border: "none",
+    background: disabled ? "rgba(239, 68, 68, 0.35)" : "#ef4444",
+    color: "#fff",
+    cursor: disabled ? "not-allowed" : "pointer",
     fontSize: 13,
-  },
-  noticeSuccess: {
-    background: "#ecfdf3",
-    border: "1px solid #22c55e",
-    color: "#166534",
-  },
-  noticeError: {
-    background: "#fef2f2",
-    border: "1px solid #f87171",
-    color: "#b91c1c",
-  },
+    fontWeight: 700,
+  };
+}
+
+function primarySmallBtn(disabled?: boolean): React.CSSProperties {
+  return {
+    padding: "6px 12px",
+    borderRadius: 4,
+    border: "none",
+    background: disabled ? "rgba(37, 99, 235, 0.35)" : "#2563eb",
+    color: "#fff",
+    cursor: disabled ? "not-allowed" : "pointer",
+    fontSize: 13,
+    fontWeight: 700,
+  };
+}
+
+const ConfirmModal: React.FC<{
+  open: boolean;
+  title: string;
+  message: string;
+  confirmText?: string;
+  cancelText?: string;
+  tone?: "default" | "danger";
+  busy?: boolean;
+  onConfirm: () => void | Promise<void>;
+  onClose: () => void;
+}> = ({ open, title, message, confirmText = "Xác nhận", cancelText = "Hủy", tone = "default", busy, onConfirm, onClose }) => {
+  useEffect(() => {
+    if (!open) return;
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+      if (e.key === "Enter") {
+        // Enter để xác nhận, nhưng tránh khi đang busy
+        if (!busy) onConfirm();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, busy, onClose, onConfirm]);
+
+  if (!open) return null;
+
+  return (
+    <div style={modalOverlay} onMouseDown={onClose}>
+      <div style={modalCard} onMouseDown={(e) => e.stopPropagation()}>
+        <div style={modalHeader}>
+          <div>
+            <div style={modalTitle}>{title}</div>
+            <div style={{ fontSize: 12.5, color: "#6b7280", marginTop: 4 }}>{message}</div>
+          </div>
+          <button style={modalCloseBtn} onClick={onClose} disabled={!!busy} title="Đóng (ESC)">
+            ✕
+          </button>
+        </div>
+
+        <div style={modalBody} />
+
+        <div style={modalFooter}>
+          <button style={styles.secondarySmallBtn} onClick={onClose} disabled={!!busy}>
+            {cancelText}
+          </button>
+          <button
+            style={tone === "danger" ? dangerBtn(!!busy) : primarySmallBtn(!!busy)}
+            onClick={onConfirm}
+            disabled={!!busy}
+          >
+            {busy ? "Đang xử lý..." : confirmText}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const PromptModal: React.FC<{
+  open: boolean;
+  title: string;
+  message?: string;
+  placeholder?: string;
+  defaultValue?: string;
+  confirmText?: string;
+  cancelText?: string;
+  busy?: boolean;
+  onConfirm: (value: string) => void | Promise<void>;
+  onClose: () => void;
+}> = ({
+  open,
+  title,
+  message,
+  placeholder = "",
+  defaultValue = "",
+  confirmText = "Xác nhận",
+  cancelText = "Hủy",
+  busy,
+  onConfirm,
+  onClose,
+}) => {
+  const [val, setVal] = useState(defaultValue);
+
+  useEffect(() => {
+    if (open) setVal(defaultValue || "");
+  }, [open, defaultValue]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+      if (e.key === "Enter") {
+        // Enter: xác nhận (nếu không bận)
+        if (!busy) onConfirm(val);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, busy, onClose, onConfirm, val]);
+
+  if (!open) return null;
+
+  return (
+    <div style={modalOverlay} onMouseDown={onClose}>
+      <div style={modalCard} onMouseDown={(e) => e.stopPropagation()}>
+        <div style={modalHeader}>
+          <div>
+            <div style={modalTitle}>{title}</div>
+            {message ? <div style={{ fontSize: 12.5, color: "#6b7280", marginTop: 4 }}>{message}</div> : null}
+          </div>
+          <button style={modalCloseBtn} onClick={onClose} disabled={!!busy} title="Đóng (ESC)">
+            ✕
+          </button>
+        </div>
+
+        <div style={modalBody}>
+          <textarea
+            style={{ ...styles.input, minHeight: 90, resize: "vertical" }}
+            placeholder={placeholder}
+            value={val}
+            disabled={!!busy}
+            onChange={(e) => setVal(e.target.value)}
+            autoFocus
+          />
+          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
+            (Có thể để trống. Nhấn <b>Enter</b> để xác nhận, <b>ESC</b> để đóng.)
+          </div>
+        </div>
+
+        <div style={modalFooter}>
+          <button style={styles.secondarySmallBtn} onClick={onClose} disabled={!!busy}>
+            {cancelText}
+          </button>
+          <button style={primarySmallBtn(!!busy)} onClick={() => onConfirm(val)} disabled={!!busy}>
+            {busy ? "Đang xử lý..." : confirmText}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 function calcTotal(lines: InvoiceLine[]) {
   return lines.reduce((s, l) => s + l.qty * l.price, 0);
 }
 
-function recalcTotals(
-  lines: InvoiceLine[],
-  taxPercent?: number
-): { subtotal: number; tax: number; totalAmount: number } {
+function recalcTotals(lines: InvoiceLine[], taxPercent?: number) {
   const subtotal = calcTotal(lines);
   let tax = 0;
-  if (taxPercent && taxPercent > 0) {
-    tax = Math.round((subtotal * taxPercent) / 100);
-  }
+  if (taxPercent && taxPercent > 0) tax = Math.round((subtotal * taxPercent) / 100);
   const totalAmount = subtotal + tax;
   return { subtotal, tax, totalAmount };
 }
@@ -377,8 +688,21 @@ function createEmptyInvoice(): Invoice {
     totalAmount: 0,
     paymentStatus: "UNPAID",
     paidAmount: 0,
-    posted: false,
+    receiveAccountId: null,
+    note: "",
+    status: "DRAFT",
+
+    // ✅ warranty default
+    hasWarrantyHold: false,
+    warrantyHoldAmount: 0,
+    warrantyDueDate: null,
   };
+}
+
+function safeId(v: any): string | null {
+  const s = String(v ?? "").trim();
+  if (!s || s === "undefined" || s === "null") return null;
+  return s;
 }
 
 const InvoiceDetailPage: React.FC = () => {
@@ -386,40 +710,114 @@ const InvoiceDetailPage: React.FC = () => {
   const { id } = useParams<{ id?: string }>();
   const isCreate = !id || id === "new";
 
+  const me = useMemo(() => getAuthUser(), []);
+  const isAdmin = (me.role || "").toLowerCase() === "admin";
+
+  // ✅ Toast (đúng theo component của bạn)
+  const { toasts, push, remove } = useToast();
+  const toastSuccess = (message: string, title = "Thành công") => push({ type: "success", title, message });
+  const toastError = (message: string, title = "Có lỗi") => push({ type: "error", title, message });
+
+  // show toast rồi điều hướng list cho user nhìn thấy
+  const gotoListSoon = () => setTimeout(() => navigate("/invoices"), 350);
+
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [partners, setPartners] = useState<Partner[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [staffs, setStaffs] = useState<StaffUser[]>([]);
+  const [accounts, setAccounts] = useState<PaymentAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const [showPartnerSuggest, setShowPartnerSuggest] = useState(false);
-  const [openItemSuggestIndex, setOpenItemSuggestIndex] =
-    useState<number | null>(null);
+  const [openItemSuggestIndex, setOpenItemSuggestIndex] = useState<number | null>(null);
 
-  const [stockMessage, setStockMessage] = useState<{
-    type: "success" | "error";
-    text: string;
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [accountLoadError, setAccountLoadError] = useState<string | null>(null);
+  const [dirtySinceLastSave, setDirtySinceLastSave] = useState(false);
+
+  /** ========================= Payment history state ========================= **/
+  const [paymentHistoryLoading, setPaymentHistoryLoading] = useState(false);
+  const [paymentHistoryError, setPaymentHistoryError] = useState<string | null>(null);
+  const [paymentHistoryRows, setPaymentHistoryRows] = useState<
+    Array<
+      PaymentRow & {
+        allocatedAmount: number; // số tiền phân bổ cho invoice hiện tại
+      }
+    >
+  >([]);
+
+  /** ========================= Confirm/Prompt modal state ========================= **/
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [confirmCfg, setConfirmCfg] = useState<{
+    title: string;
+    message: string;
+    confirmText?: string;
+    cancelText?: string;
+    tone?: "default" | "danger";
+    onConfirm: () => Promise<void> | void;
   } | null>(null);
 
-  // NEW: form đã sửa nhưng chưa lưu
-  const [dirtySinceLastSave, setDirtySinceLastSave] = useState(false);
+  const [promptOpen, setPromptOpen] = useState(false);
+  const [promptBusy, setPromptBusy] = useState(false);
+  const [promptCfg, setPromptCfg] = useState<{
+    title: string;
+    message?: string;
+    placeholder?: string;
+    defaultValue?: string;
+    confirmText?: string;
+    cancelText?: string;
+    onConfirm: (value: string) => Promise<void> | void;
+  } | null>(null);
+
+  function openConfirm(cfg: {
+    title: string;
+    message: string;
+    confirmText?: string;
+    cancelText?: string;
+    tone?: "default" | "danger";
+    onConfirm: () => Promise<void> | void;
+  }) {
+    setConfirmCfg(cfg);
+    setConfirmBusy(false);
+    setConfirmOpen(true);
+  }
+  function closeConfirm() {
+    if (confirmBusy) return;
+    setConfirmOpen(false);
+    setConfirmCfg(null);
+  }
+
+  function openPrompt(cfg: {
+    title: string;
+    message?: string;
+    placeholder?: string;
+    defaultValue?: string;
+    confirmText?: string;
+    cancelText?: string;
+    onConfirm: (value: string) => Promise<void> | void;
+  }) {
+    setPromptCfg(cfg);
+    setPromptBusy(false);
+    setPromptOpen(true);
+  }
+  function closePrompt() {
+    if (promptBusy) return;
+    setPromptOpen(false);
+    setPromptCfg(null);
+  }
 
   function markDirty() {
     setDirtySinceLastSave(true);
-    setStockMessage(null); // clear thông báo tồn cũ
+    setMessage(null);
   }
 
   useEffect(() => {
     async function init() {
       try {
         setLoading(true);
-        await Promise.all([
-          loadPartners(),
-          loadItems(),
-          loadStaffs(),
-          loadInvoiceIfNeeded(),
-        ]);
+        await Promise.all([loadPartners(), loadItems(), loadStaffs(), loadPaymentAccounts(), loadInvoiceIfNeeded()]);
       } finally {
         setLoading(false);
       }
@@ -428,13 +826,24 @@ const InvoiceDetailPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  // ✅ load payment history sau khi invoice có id
+  useEffect(() => {
+    if (!invoice?.id || isCreate) {
+      setPaymentHistoryRows([]);
+      setPaymentHistoryError(null);
+      setPaymentHistoryLoading(false);
+      return;
+    }
+    loadPaymentHistoryForInvoice();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoice?.id]);
+
   async function loadPartners() {
     try {
-      const res = await api.get("/partners", {
-        params: { q: "", page: 1, pageSize: 100 },
-      });
-      const data = unwrap<any[]>(res);
-      const mapped: Partner[] = data.map((p: any) => ({
+      const res = await api.get("/partners", { params: { q: "", page: 1, pageSize: 100 } });
+      const data = unwrap<any>(res);
+      const arr: any[] = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+      const mapped: Partner[] = arr.map((p: any) => ({
         id: String(p.id),
         name: p.name,
         code: p.code,
@@ -451,11 +860,10 @@ const InvoiceDetailPage: React.FC = () => {
 
   async function loadItems() {
     try {
-      const res = await api.get("/items", {
-        params: { q: "", page: 1, pageSize: 1000 },
-      });
-      const data = unwrap<any[]>(res);
-      const mapped: Item[] = data.map((i: any) => ({
+      const res = await api.get("/items", { params: { q: "", page: 1, pageSize: 1000 } });
+      const data = unwrap<any>(res);
+      const arr: any[] = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+      const mapped: Item[] = arr.map((i: any) => ({
         id: String(i.id),
         sku: i.sku || i.code,
         name: i.name,
@@ -470,22 +878,56 @@ const InvoiceDetailPage: React.FC = () => {
 
   async function loadStaffs() {
     try {
-      const res = await api.get("/users", {
-        params: { page: 1, pageSize: 100 },
-      });
-      const body = (res as any).data || {};
-      const itemsData = (body.items || []) as any[];
+      const res = await api.get("/users", { params: { page: 1, pageSize: 200 } });
+      const data = unwrap<any>(res);
 
-      const mapped: StaffUser[] = itemsData
-        .filter((u) => u.role === "staff")
-        .map((u) => ({
-          id: String(u.id),
-          name: u.username as string,
-        }));
+      const arr: any[] =
+        (Array.isArray(data?.items) && data.items) ||
+        (Array.isArray(data?.data?.items) && data.data.items) ||
+        (Array.isArray(data?.data) && data.data) ||
+        (Array.isArray(data) && data) ||
+        [];
+
+      const mapped: StaffUser[] = arr
+        .filter((u) => u && (u.role === "staff" || u.role === "accountant" || u.role === "admin"))
+        .map((u) => ({ id: String(u.id), name: String(u.username || u.name || u.email || u.id) }))
+        .filter((u) => safeId(u.id));
 
       setStaffs(mapped);
     } catch (err) {
       console.error("loadStaffs error", err);
+      setStaffs([]);
+    }
+  }
+
+  async function loadPaymentAccounts() {
+    try {
+      setAccountLoadError(null);
+
+      const res = await api.get("/payment-accounts", { params: { active: 1 } });
+      const data = unwrap<any>(res);
+      const arr: any[] = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+
+      const mapped: PaymentAccount[] = arr
+        .map((a: any) => ({
+          id: String(a.id),
+          code: String(a.code || ""),
+          name: String(a.name || ""),
+          type: a.type,
+          isActive: a.isActive,
+        }))
+        .filter((a) => safeId(a.id));
+
+      setAccounts(mapped);
+    } catch (err: any) {
+      console.error("loadPaymentAccounts error", err);
+      const msg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        "Không tải được danh sách tài khoản nhận tiền.";
+      setAccountLoadError(msg);
+      setAccounts([]);
     }
   }
 
@@ -511,51 +953,128 @@ const InvoiceDetailPage: React.FC = () => {
           price: Number(l.unitPrice ?? l.price ?? 0),
         })) ?? [];
 
-      const subtotalFromApi =
-        x.subtotal != null ? Number(x.subtotal) : calcTotal(lines);
+      const subtotalFromApi = x.subtotal != null ? Number(x.subtotal) : calcTotal(lines);
       const taxFromApi = x.tax != null ? Number(x.tax) : 0;
-      const totalFromApi =
-        x.total != null ? Number(x.total) : subtotalFromApi + taxFromApi;
+      const totalFromApi = x.total != null ? Number(x.total) : subtotalFromApi + taxFromApi;
 
       let taxPercent = 0;
-      if (subtotalFromApi > 0 && taxFromApi > 0) {
-        taxPercent = +((taxFromApi * 100) / subtotalFromApi).toFixed(2);
-      }
+      if (subtotalFromApi > 0 && taxFromApi > 0) taxPercent = +((taxFromApi * 100) / subtotalFromApi).toFixed(2);
 
       const rawDate = x.date ?? x.issueDate ?? x.createdAt ?? "";
       const normalizedDate = normalizeDateForInput(rawDate);
+
+      const status: InvoiceStatus = (x.status as InvoiceStatus) ?? "DRAFT";
 
       const inv: Invoice = {
         id: x.id,
         code: x.code ?? "",
         date: normalizedDate,
         type: (x.type === "PURCHASE" ? "PURCHASE" : "SALES") as InvoiceType,
+
         partnerId: x.partnerId,
         partnerName: x.partner?.name ?? x.partnerName ?? "",
         partnerCode: x.partner?.code ?? x.partnerCode ?? "",
-        partnerAddress: x.partner?.address ?? x.partnerAddr,
+        partnerAddress: x.partner?.address ?? x.partnerAddr ?? x.partnerAddress,
         partnerPhone: x.partner?.phone ?? x.partnerPhone,
-        partnerTaxCode: x.partner?.taxCode ?? x.partnerTax,
+        partnerTaxCode: x.partner?.taxCode ?? x.partnerTax ?? x.partnerTaxCode,
         partnerEmail: x.partner?.email ?? x.partnerEmail,
-        saleUserId: x.saleUserId,
-        techUserId: x.techUserId,
+
+        saleUserId: x.saleUserId ?? null,
+        techUserId: x.techUserId ?? null,
+
         lines,
         subtotal: subtotalFromApi,
         tax: taxFromApi,
         taxPercent,
         totalAmount: totalFromApi,
+
         paymentStatus: (x.paymentStatus as PaymentStatus) ?? "UNPAID",
         paidAmount: x.paidAmount != null ? Number(x.paidAmount) : 0,
-        posted: Array.isArray(x.movements) && x.movements.length > 0,
+
+        receiveAccountId: x.receiveAccountId ?? null,
+        note: x.note ?? "",
+
+        status,
+
+        // ✅ warranty from API
+        hasWarrantyHold: x.hasWarrantyHold ?? false,
+        warrantyHoldAmount: x.warrantyHoldAmount != null ? Number(x.warrantyHoldAmount) : 0,
+        warrantyDueDate: x.warrantyDueDate ?? null,
       };
 
       setInvoice(inv);
       setDirtySinceLastSave(false);
-      setStockMessage(null);
+      setMessage(null);
     } catch (err) {
       console.error("loadInvoice error", err);
-      alert("Không tải được hóa đơn.");
+      toastError("Không tải được hóa đơn.");
       navigate("/invoices");
+    }
+  }
+
+  async function loadPaymentHistoryForInvoice() {
+    if (!invoice?.id) return;
+
+    setPaymentHistoryLoading(true);
+    setPaymentHistoryError(null);
+
+    try {
+      // gọi list payments; nếu có partnerId thì lọc bớt cho nhẹ
+      const params: any = {};
+      if (invoice.partnerId) params.partnerId = invoice.partnerId;
+
+      const res = await api.get("/payments", { params });
+      const data = unwrap<any>(res);
+      const arr: any[] = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+
+      const invoiceIdStr = String(invoice.id);
+
+      const mapped = (arr as any[]).map((p: any) => {
+        const allocations: PaymentAllocation[] = Array.isArray(p.allocations)
+          ? p.allocations.map((a: any) => ({
+              invoiceId: String(a.invoiceId),
+              amount: Number(a.amount ?? 0),
+              invoice: a.invoice ? { id: String(a.invoice.id), code: a.invoice.code } : undefined,
+            }))
+          : [];
+
+        const allocatedAmount = allocations
+          .filter((a) => String(a.invoiceId) === invoiceIdStr)
+          .reduce((s, a) => s + Number(a.amount || 0), 0);
+
+        const row: PaymentRow & { allocatedAmount: number } = {
+          id: String(p.id),
+          date: p.date,
+          createdAt: p.createdAt, // ✅ FIX: dùng createdAt để phân biệt từng lần thanh toán
+          type: p.type,
+          amount: p.amount != null ? Number(p.amount) : undefined,
+          refNo: p.refNo ?? null,
+          method: p.method ?? null,
+          note: p.note ?? null,
+          account: p.account ? { id: String(p.account.id), code: p.account.code, name: p.account.name } : null,
+          allocations,
+          allocatedAmount,
+        };
+        return row;
+      });
+
+      const filtered = mapped
+        .filter((r) => r.allocatedAmount > 0)
+        .sort((a, b) => {
+          // ✅ FIX: sort theo createdAt trước, fallback date
+          const ta = a.createdAt ? new Date(a.createdAt).getTime() : a.date ? new Date(a.date).getTime() : 0;
+          const tb = b.createdAt ? new Date(b.createdAt).getTime() : b.date ? new Date(b.date).getTime() : 0;
+          return tb - ta;
+        });
+
+      setPaymentHistoryRows(filtered);
+    } catch (err: any) {
+      console.error("loadPaymentHistoryForInvoice error", err);
+      const msg = err?.response?.data?.message || err?.message || "Không tải được lịch sử thanh toán.";
+      setPaymentHistoryError(msg);
+      setPaymentHistoryRows([]);
+    } finally {
+      setPaymentHistoryLoading(false);
     }
   }
 
@@ -563,13 +1082,18 @@ const InvoiceDetailPage: React.FC = () => {
     setInvoice((prev) => {
       if (!prev) return prev;
       const next: Invoice = { ...prev, ...partial };
-      const { subtotal, tax, totalAmount } = recalcTotals(
-        next.lines,
-        next.taxPercent
-      );
+      const { subtotal, tax, totalAmount } = recalcTotals(next.lines, next.taxPercent);
       next.subtotal = subtotal;
       next.tax = tax;
       next.totalAmount = totalAmount;
+
+      // ✅ nếu đang bật bảo hành thì recalculte lại hold theo total mới
+      if (next.hasWarrantyHold) {
+        next.warrantyHoldAmount = Math.round(Number(next.totalAmount || 0) * 0.05);
+      } else {
+        next.warrantyHoldAmount = 0;
+      }
+
       return next;
     });
   }
@@ -594,22 +1118,17 @@ const InvoiceDetailPage: React.FC = () => {
     setShowPartnerSuggest(false);
   }
 
-  function handleLineChange(
-    index: number,
-    field: keyof InvoiceLine,
-    value: any
-  ) {
+  function handleLineChange(index: number, field: keyof InvoiceLine, value: any) {
     markDirty();
     setInvoice((prev) => {
       if (!prev) return prev;
-      const lines = prev.lines.map((l, idx) =>
-        idx === index ? { ...l, [field]: value } : l
-      );
-      const { subtotal, tax, totalAmount } = recalcTotals(
-        lines,
-        prev.taxPercent
-      );
-      return { ...prev, lines, subtotal, tax, totalAmount };
+      const lines = prev.lines.map((l, idx) => (idx === index ? { ...l, [field]: value } : l));
+      const { subtotal, tax, totalAmount } = recalcTotals(lines, prev.taxPercent);
+
+      const hasWarrantyHold = !!prev.hasWarrantyHold;
+      const warrantyHoldAmount = hasWarrantyHold ? Math.round(Number(totalAmount || 0) * 0.05) : 0;
+
+      return { ...prev, lines, subtotal, tax, totalAmount, warrantyHoldAmount };
     });
   }
 
@@ -618,21 +1137,14 @@ const InvoiceDetailPage: React.FC = () => {
     setInvoice((prev) => {
       if (!prev) return prev;
       const lines = prev.lines.map((l, idx) =>
-        idx === index
-          ? {
-              ...l,
-              itemId: it.id,
-              itemName: it.name,
-              unit: it.unit,
-              price: l.price || it.price || 0,
-            }
-          : l
+        idx === index ? { ...l, itemId: it.id, itemName: it.name, unit: it.unit, price: l.price || it.price || 0 } : l
       );
-      const { subtotal, tax, totalAmount } = recalcTotals(
-        lines,
-        prev.taxPercent
-      );
-      return { ...prev, lines, subtotal, tax, totalAmount };
+      const { subtotal, tax, totalAmount } = recalcTotals(lines, prev.taxPercent);
+
+      const hasWarrantyHold = !!prev.hasWarrantyHold;
+      const warrantyHoldAmount = hasWarrantyHold ? Math.round(Number(totalAmount || 0) * 0.05) : 0;
+
+      return { ...prev, lines, subtotal, tax, totalAmount, warrantyHoldAmount };
     });
     setOpenItemSuggestIndex(null);
   }
@@ -641,15 +1153,13 @@ const InvoiceDetailPage: React.FC = () => {
     markDirty();
     setInvoice((prev) => {
       if (!prev) return prev;
-      const lines = [
-        ...prev.lines,
-        { itemName: "", qty: 1, price: 0, unit: "" } as InvoiceLine,
-      ];
-      const { subtotal, tax, totalAmount } = recalcTotals(
-        lines,
-        prev.taxPercent
-      );
-      return { ...prev, lines, subtotal, tax, totalAmount };
+      const lines = [...prev.lines, { itemName: "", qty: 1, price: 0, unit: "" } as InvoiceLine];
+      const { subtotal, tax, totalAmount } = recalcTotals(lines, prev.taxPercent);
+
+      const hasWarrantyHold = !!prev.hasWarrantyHold;
+      const warrantyHoldAmount = hasWarrantyHold ? Math.round(Number(totalAmount || 0) * 0.05) : 0;
+
+      return { ...prev, lines, subtotal, tax, totalAmount, warrantyHoldAmount };
     });
   }
 
@@ -658,11 +1168,12 @@ const InvoiceDetailPage: React.FC = () => {
     setInvoice((prev) => {
       if (!prev) return prev;
       const lines = prev.lines.filter((_, idx) => idx !== index);
-      const { subtotal, tax, totalAmount } = recalcTotals(
-        lines,
-        prev.taxPercent
-      );
-      return { ...prev, lines, subtotal, tax, totalAmount };
+      const { subtotal, tax, totalAmount } = recalcTotals(lines, prev.taxPercent);
+
+      const hasWarrantyHold = !!prev.hasWarrantyHold;
+      const warrantyHoldAmount = hasWarrantyHold ? Math.round(Number(totalAmount || 0) * 0.05) : 0;
+
+      return { ...prev, lines, subtotal, tax, totalAmount, warrantyHoldAmount };
     });
   }
 
@@ -670,11 +1181,11 @@ const InvoiceDetailPage: React.FC = () => {
     if (!invoice) return;
 
     if (invoice.partnerId) {
-      alert("Khách hàng này đã có trong danh sách đối tác.");
+      toastError("Khách hàng này đã có trong danh sách đối tác.", "Không thể lưu");
       return;
     }
     if (!invoice.partnerName.trim()) {
-      alert("Vui lòng nhập tên khách hàng trước.");
+      toastError("Vui lòng nhập tên khách hàng trước.", "Thiếu thông tin");
       return;
     }
 
@@ -705,135 +1216,94 @@ const InvoiceDetailPage: React.FC = () => {
       setPartners((prev) => [...prev, p]);
       markDirty();
       updateInvoice({ partnerId: p.id, partnerCode: p.code });
-      alert("Đã lưu khách hàng vào danh sách đối tác.");
+      toastSuccess("Đã lưu khách hàng vào danh sách đối tác.");
     } catch (err) {
       console.error("save partner error", err);
-      alert("Lưu khách hàng thất bại, kiểm tra log console.");
+      toastError("Lưu khách hàng thất bại, kiểm tra log console.");
     }
   }
 
-  // -------- post / unpost tồn --------
-  async function handlePostStock() {
-    if (!invoice) return;
-    if (!invoice.id) {
-      alert("Cần lưu hóa đơn trước khi post tồn.");
-      return;
-    }
-    if (invoice.posted) {
-      alert("Hóa đơn này đã post tồn rồi.");
-      return;
-    }
+  function applyPaymentStatus(status: PaymentStatus, manualPaid?: number) {
+    setInvoice((prev) => {
+      if (!prev) return prev;
+      const total = prev.totalAmount ?? 0;
 
-    // CHẶN khi form có thay đổi chưa lưu
-    if (dirtySinceLastSave) {
-      const text =
-        "Bạn vừa sửa hóa đơn nhưng chưa lưu. Vui lòng bấm 'Lưu hóa đơn' trước khi 'Lưu tồn'.";
-      alert(text);
-      setStockMessage({
-        type: "error",
-        text,
-      });
-      return;
-    }
+      let paidAmount = prev.paidAmount ?? 0;
+      if (status === "UNPAID") paidAmount = 0;
+      else if (status === "PAID") paidAmount = total;
+      else if (status === "PARTIAL") paidAmount = Math.max(0, manualPaid ?? paidAmount);
 
-    if (
-      !window.confirm(
-        "Post tồn cho hóa đơn này? Sau khi post, số lượng tồn sẽ được cập nhật."
-      )
-    ) {
-      return;
-    }
-
-    try {
-      setStockMessage(null);
-      await api.post(`/invoices/${invoice.id}/post`);
-      updateInvoice({ posted: true });
-      setStockMessage({
-        type: "success",
-        text: "Đã lưu tồn cho hóa đơn.",
-      });
-    } catch (err: any) {
-      console.error("post stock error", err);
-      const msg =
-        err?.response?.data?.message ||
-        "Post tồn thất bại, kiểm tra log console.";
-      setStockMessage({
-        type: "error",
-        text: msg,
-      });
-    }
+      return { ...prev, paymentStatus: status, paidAmount };
+    });
   }
 
-  async function handleUnpostStock() {
-    if (!invoice) return;
-    if (!invoice.id) {
-      alert("Cần lưu hóa đơn trước khi hủy post tồn.");
-      return;
-    }
-    if (!invoice.posted) {
-      alert("Hóa đơn này chưa post tồn.");
-      return;
-    }
-
-    if (
-      !window.confirm(
-        "Hủy post tồn cho hóa đơn này? Tồn kho sẽ được trả lại như trước khi post."
-      )
-    ) {
-      return;
-    }
-
-    try {
-      setStockMessage(null);
-      await api.post(`/invoices/${invoice.id}/unpost`);
-      updateInvoice({ posted: false });
-      setStockMessage({
-        type: "success",
-        text: "Đã hủy lưu tồn cho hóa đơn.",
-      });
-    } catch (err: any) {
-      console.error("unpost stock error", err);
-      const msg =
-        err?.response?.data?.message ||
-        "Hủy post tồn thất bại, kiểm tra log console.";
-      setStockMessage({
-        type: "error",
-        text: msg,
-      });
-    }
-  }
-
-  // -------- save invoice --------
   async function handleSave() {
     if (!invoice) return;
 
     if (!invoice.code.trim()) {
-      alert("Mã hóa đơn là bắt buộc.");
+      toastError("Mã hóa đơn là bắt buộc.", "Thiếu thông tin");
       return;
     }
 
+    const status = invoice.status ?? "DRAFT";
+    const lockedForStaff = !isAdmin && (status === "SUBMITTED" || status === "APPROVED" || status === "REJECTED");
+
+    if (lockedForStaff) {
+      toastError("Hóa đơn đã gửi duyệt/đã duyệt/bị từ chối nên không thể chỉnh sửa.", "Không thể lưu");
+      return;
+    }
+
+    const total = invoice.totalAmount ?? 0;
+    let paidAmount = Number(invoice.paidAmount ?? 0) || 0;
+    const paymentStatus = (invoice.paymentStatus ?? "UNPAID") as PaymentStatus;
+
+    if (paymentStatus === "UNPAID") paidAmount = 0;
+    if (paymentStatus === "PAID") paidAmount = total;
+    if (paymentStatus === "PARTIAL") {
+      if (paidAmount > total) paidAmount = total;
+      if (paidAmount < 0) paidAmount = 0;
+    }
+
+    // ✅ warranty payload
+    const hasWarrantyHold = !!invoice.hasWarrantyHold;
+    const warrantyHoldAmount = hasWarrantyHold ? Math.round(Number(invoice.totalAmount || 0) * 0.05) : 0;
+
     try {
       setSaving(true);
+
       const payload = {
         code: invoice.code,
         issueDate: invoice.date,
         type: invoice.type,
-        partnerId: invoice.partnerId,
+
+        partnerId: safeId(invoice.partnerId),
         partnerName: invoice.partnerName,
-        // *** GỬI LUÔN MÃ KHÁCH HÀNG LÊN BE ***
         partnerCode: invoice.partnerCode || undefined,
-        partnerAddress: invoice.partnerAddress,
+
         partnerPhone: invoice.partnerPhone,
         partnerTax: invoice.partnerTaxCode,
         partnerAddr: invoice.partnerAddress,
-        saleUserId: invoice.saleUserId,
-        techUserId: invoice.techUserId,
+
+        saleUserId: safeId(invoice.saleUserId),
+        techUserId: safeId(invoice.techUserId),
+
         taxPercent: invoice.taxPercent ?? 0,
-        paymentStatus: invoice.paymentStatus ?? "UNPAID",
-        paidAmount: invoice.paidAmount ?? 0,
+
+        // ✅ vẫn giữ 3 trạng thái thu/1 phần/chưa thu theo UI hiện tại
+        paymentStatus,
+        paidAmount,
+
+        receiveAccountId: safeId(invoice.receiveAccountId),
+
+        // ✅ warranty fields
+        hasWarrantyHold,
+        warrantyHoldAmount,
+
+        note: invoice.note ?? "",
+
         lines: invoice.lines.map((l) => ({
           id: l.id,
-          itemId: l.itemId,
+          itemId: safeId(l.itemId),
           qty: l.qty,
           price: l.price,
           unitPrice: l.price,
@@ -842,28 +1312,141 @@ const InvoiceDetailPage: React.FC = () => {
       };
 
       if (!invoice.id) {
-        await api.post("/invoices", payload);
+        const res = await api.post("/invoices", payload);
+        const created = unwrap<any>(res);
+        const newId = created?.id ?? created?.data?.id;
+        if (newId != null) setInvoice((prev) => (prev ? { ...prev, id: newId } : prev));
       } else {
         await api.put(`/invoices/${invoice.id}`, payload);
       }
 
       setDirtySinceLastSave(false);
-      setStockMessage(null);
-      alert("Đã lưu hóa đơn.");
-      navigate("/invoices");
+      setMessage(null);
+      toastSuccess("Đã lưu hóa đơn.");
+      gotoListSoon();
     } catch (err: any) {
       console.error("Save invoice error", err);
-
-      const message =
-        err?.response?.data?.message ??
-        (typeof err?.message === "string"
-          ? err.message
-          : "Lưu hoá đơn thất bại, vui lòng thử lại.");
-
-      alert(message);
+      toastError(err?.response?.data?.message || err?.response?.data?.error || err?.message || "Lưu hoá đơn thất bại.");
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleSubmit() {
+    if (!invoice?.id) {
+      toastError("Cần lưu hóa đơn trước khi gửi duyệt.");
+      return;
+    }
+    if (dirtySinceLastSave) {
+      const text = "Bạn vừa sửa hóa đơn nhưng chưa lưu. Vui lòng bấm 'Lưu hóa đơn' trước khi 'Gửi duyệt'.";
+      setMessage({ type: "error", text });
+      toastError(text, "Chưa lưu thay đổi");
+      return;
+    }
+    if ((invoice.status ?? "DRAFT") !== "DRAFT") {
+      toastError("Chỉ hóa đơn NHÁP mới được gửi duyệt.");
+      return;
+    }
+
+    openConfirm({
+      title: "Gửi duyệt hóa đơn",
+      message: "Gửi hóa đơn này để admin duyệt?",
+      confirmText: "Gửi duyệt",
+      cancelText: "Hủy",
+      onConfirm: async () => {
+        try {
+          setConfirmBusy(true);
+          await api.post(`/invoices/${invoice.id}/submit`);
+          updateInvoice({ status: "SUBMITTED" });
+          setMessage({ type: "success", text: "Đã gửi duyệt." });
+          toastSuccess("Đã gửi duyệt.");
+          closeConfirm();
+          gotoListSoon();
+        } catch (err: any) {
+          console.error("submit error", err);
+          const msg = err?.response?.data?.message || "Gửi duyệt thất bại.";
+          setMessage({ type: "error", text: msg });
+          toastError(msg);
+        } finally {
+          setConfirmBusy(false);
+        }
+      },
+    });
+  }
+
+  async function handleApprove() {
+    if (!invoice?.id) return;
+
+    if (dirtySinceLastSave) {
+      const text = "Bạn vừa sửa hóa đơn nhưng chưa lưu. Vui lòng bấm 'Lưu hóa đơn' trước khi 'Duyệt'.";
+      setMessage({ type: "error", text });
+      toastError(text, "Chưa lưu thay đổi");
+      return;
+    }
+    if ((invoice.status ?? "DRAFT") !== "SUBMITTED") {
+      toastError("Chỉ hóa đơn CHỜ DUYỆT mới được duyệt.");
+      return;
+    }
+
+    openConfirm({
+      title: "Duyệt hóa đơn",
+      message: "Duyệt hóa đơn? Tồn kho & giá vốn sẽ cập nhật.",
+      confirmText: "Duyệt",
+      cancelText: "Hủy",
+      tone: "danger",
+      onConfirm: async () => {
+        try {
+          setConfirmBusy(true);
+          await api.post(`/invoices/${invoice.id}/approve`);
+          updateInvoice({ status: "APPROVED" });
+          setMessage({ type: "success", text: "Đã duyệt hóa đơn." });
+          toastSuccess("Đã duyệt hóa đơn.");
+          closeConfirm();
+        } catch (err: any) {
+          console.error("approve error", err);
+          const msg = err?.response?.data?.message || "Duyệt thất bại.";
+          setMessage({ type: "error", text: msg });
+          toastError(msg);
+        } finally {
+          setConfirmBusy(false);
+        }
+      },
+    });
+  }
+
+  async function handleReject() {
+    if (!invoice?.id) return;
+
+    if ((invoice.status ?? "DRAFT") !== "SUBMITTED") {
+      toastError("Chỉ hóa đơn CHỜ DUYỆT mới được từ chối.");
+      return;
+    }
+
+    openPrompt({
+      title: "Từ chối hóa đơn",
+      message: "Nhập lý do từ chối (tuỳ chọn).",
+      placeholder: "VD: Sai thông tin khách / sai dòng hàng / sai giá...",
+      defaultValue: "",
+      confirmText: "Từ chối",
+      cancelText: "Hủy",
+      onConfirm: async (reason) => {
+        try {
+          setPromptBusy(true);
+          await api.post(`/invoices/${invoice.id}/reject`, { reason: (reason || "").trim() });
+          updateInvoice({ status: "REJECTED" });
+          setMessage({ type: "success", text: "Đã từ chối hóa đơn." });
+          toastSuccess("Đã từ chối hóa đơn.");
+          closePrompt();
+        } catch (err: any) {
+          console.error("reject error", err);
+          const msg = err?.response?.data?.message || "Từ chối thất bại.";
+          setMessage({ type: "error", text: msg });
+          toastError(msg);
+        } finally {
+          setPromptBusy(false);
+        }
+      },
+    });
   }
 
   if (loading || !invoice) {
@@ -875,36 +1458,58 @@ const InvoiceDetailPage: React.FC = () => {
         <div style={styles.body}>
           <div style={styles.content}>Đang tải...</div>
         </div>
+
+        {/* ✅ Toast */}
+        <ToastHost toasts={toasts} onClose={remove} />
       </div>
     );
   }
 
+  const status = invoice.status ?? "DRAFT";
+  const lockedForStaff = !isAdmin && (status === "SUBMITTED" || status === "APPROVED" || status === "REJECTED");
+
   const partnerSuggestions =
-    invoice && invoice.partnerName
-      ? partners
-          .filter((p) =>
-            p.name.toLowerCase().includes(invoice.partnerName.toLowerCase())
-          )
-          .slice(0, 20)
+    invoice.partnerName
+      ? partners.filter((p) => p.name.toLowerCase().includes(invoice.partnerName.toLowerCase())).slice(0, 20)
       : [];
+
+  const showPaidInput = (invoice.paymentStatus ?? "UNPAID") === "PARTIAL";
+
+  const statusText =
+    status === "APPROVED"
+      ? "Đã duyệt"
+      : status === "SUBMITTED"
+      ? "Chờ duyệt"
+      : status === "REJECTED"
+      ? "Bị từ chối"
+      : "Nháp";
+
+  // totals cho history
+  const paidByPayments = paymentHistoryRows.reduce((s, r) => s + (r.allocatedAmount || 0), 0);
+
+  // ✅ tính “còn phải thu” theo collectible (trừ hold nếu có)
+  const totalAll = Number(invoice.totalAmount || 0);
+  const hold = invoice.hasWarrantyHold ? Number(invoice.warrantyHoldAmount || 0) : 0;
+  const collectible = Math.max(0, totalAll - hold);
+  const debtNow = Math.max(0, collectible - Number(invoice.paidAmount || 0));
 
   return (
     <div style={styles.page}>
       <div style={styles.header}>
-        <h1 style={styles.headerTitle}>
-          {isCreate ? "Tạo hóa đơn mới" : "Sửa hóa đơn"}
-        </h1>
+        <h1 style={styles.headerTitle}>{isCreate ? "Tạo hóa đơn mới" : "Sửa hóa đơn"}</h1>
       </div>
 
       <div style={styles.body}>
         <div style={styles.content}>
-          <button
-            type="button"
-            style={styles.backBtn}
-            onClick={() => navigate("/invoices")}
-          >
+          <button type="button" style={styles.backBtn} onClick={() => navigate("/invoices")}>
             ← Quay lại danh sách hóa đơn
           </button>
+
+          {lockedForStaff && (
+            <div style={{ ...styles.notice, ...styles.noticeError }}>
+              Hóa đơn đang ở trạng thái <b>{statusText}</b> nên không thể chỉnh sửa.
+            </div>
+          )}
 
           <form
             style={styles.form}
@@ -922,6 +1527,7 @@ const InvoiceDetailPage: React.FC = () => {
                 <input
                   style={styles.input}
                   value={invoice.code}
+                  disabled={lockedForStaff}
                   onChange={(e) => {
                     markDirty();
                     updateInvoice({ code: e.target.value.toUpperCase() });
@@ -937,6 +1543,7 @@ const InvoiceDetailPage: React.FC = () => {
                     style={styles.input}
                     type="date"
                     value={invoice.date || ""}
+                    disabled={lockedForStaff}
                     onChange={(e) => {
                       markDirty();
                       updateInvoice({ date: e.target.value || undefined });
@@ -948,11 +1555,10 @@ const InvoiceDetailPage: React.FC = () => {
                   <select
                     style={styles.select}
                     value={invoice.type}
+                    disabled={lockedForStaff}
                     onChange={(e) => {
                       markDirty();
-                      updateInvoice({
-                        type: e.target.value as InvoiceType,
-                      });
+                      updateInvoice({ type: e.target.value as InvoiceType });
                     }}
                   >
                     <option value="SALES">Bán hàng</option>
@@ -968,19 +1574,18 @@ const InvoiceDetailPage: React.FC = () => {
 
               <div
                 style={{ ...styles.formRow, ...styles.autoWrapper }}
-                onBlur={() => {
-                  setTimeout(() => setShowPartnerSuggest(false), 150);
-                }}
+                onBlur={() => setTimeout(() => setShowPartnerSuggest(false), 150)}
               >
                 <label style={styles.label}>Tên khách hàng (gõ để tìm)</label>
                 <input
                   style={styles.input}
                   value={invoice.partnerName}
+                  disabled={lockedForStaff}
                   onChange={(e) => handlePartnerNameChange(e.target.value)}
                   onFocus={() => setShowPartnerSuggest(true)}
                   placeholder="Nhập tên khách hàng..."
                 />
-                {showPartnerSuggest && partnerSuggestions.length > 0 && (
+                {showPartnerSuggest && !lockedForStaff && partnerSuggestions.length > 0 && (
                   <div style={styles.suggestBox}>
                     {partnerSuggestions.map((p) => (
                       <div
@@ -992,25 +1597,10 @@ const InvoiceDetailPage: React.FC = () => {
                         }}
                       >
                         {p.name}
-                        {p.code && (
-                          <span style={{ color: "#6b7280", marginLeft: 4 }}>
-                            [{p.code}]
-                          </span>
-                        )}
-                        {p.taxCode && (
-                          <span style={{ color: "#9ca3af", marginLeft: 4 }}>
-                            ({p.taxCode})
-                          </span>
-                        )}
+                        {p.code && <span style={{ color: "#6b7280", marginLeft: 4 }}>[{p.code}]</span>}
+                        {p.taxCode && <span style={{ color: "#9ca3af", marginLeft: 4 }}>({p.taxCode})</span>}
                       </div>
                     ))}
-                  </div>
-                )}
-                {showPartnerSuggest && partnerSuggestions.length === 0 && (
-                  <div style={styles.suggestBox}>
-                    <div style={styles.suggestItemMuted}>
-                      Không tìm thấy khách hàng phù hợp
-                    </div>
                   </div>
                 )}
               </div>
@@ -1020,11 +1610,11 @@ const InvoiceDetailPage: React.FC = () => {
                 <input
                   style={styles.input}
                   value={invoice.partnerCode || ""}
+                  disabled={lockedForStaff}
                   onChange={(e) => {
                     markDirty();
                     updateInvoice({ partnerCode: e.target.value });
                   }}
-                  placeholder="Nhập mã khách (VD: MC001)"
                 />
               </div>
 
@@ -1033,6 +1623,7 @@ const InvoiceDetailPage: React.FC = () => {
                 <input
                   style={styles.input}
                   value={invoice.partnerAddress || ""}
+                  disabled={lockedForStaff}
                   onChange={(e) => {
                     markDirty();
                     updateInvoice({ partnerAddress: e.target.value });
@@ -1046,6 +1637,7 @@ const InvoiceDetailPage: React.FC = () => {
                   <input
                     style={styles.input}
                     value={invoice.partnerPhone || ""}
+                    disabled={lockedForStaff}
                     onChange={(e) => {
                       markDirty();
                       updateInvoice({ partnerPhone: e.target.value });
@@ -1057,6 +1649,7 @@ const InvoiceDetailPage: React.FC = () => {
                   <input
                     style={styles.input}
                     value={invoice.partnerTaxCode || ""}
+                    disabled={lockedForStaff}
                     onChange={(e) => {
                       markDirty();
                       updateInvoice({ partnerTaxCode: e.target.value });
@@ -1070,6 +1663,7 @@ const InvoiceDetailPage: React.FC = () => {
                 <input
                   style={styles.input}
                   value={invoice.partnerEmail || ""}
+                  disabled={lockedForStaff}
                   onChange={(e) => {
                     markDirty();
                     updateInvoice({ partnerEmail: e.target.value });
@@ -1081,6 +1675,7 @@ const InvoiceDetailPage: React.FC = () => {
                 <button
                   type="button"
                   style={styles.secondarySmallBtn}
+                  disabled={lockedForStaff}
                   onClick={handleSavePartner}
                 >
                   Lưu khách hàng vào danh sách đối tác
@@ -1098,11 +1693,10 @@ const InvoiceDetailPage: React.FC = () => {
                   <select
                     style={styles.select}
                     value={invoice.saleUserId || ""}
+                    disabled={lockedForStaff}
                     onChange={(e) => {
                       markDirty();
-                      updateInvoice({
-                        saleUserId: e.target.value || undefined,
-                      });
+                      updateInvoice({ saleUserId: safeId(e.target.value) });
                     }}
                   >
                     <option value="">-- Chọn NV sale --</option>
@@ -1119,11 +1713,10 @@ const InvoiceDetailPage: React.FC = () => {
                   <select
                     style={styles.select}
                     value={invoice.techUserId || ""}
+                    disabled={lockedForStaff}
                     onChange={(e) => {
                       markDirty();
-                      updateInvoice({
-                        techUserId: e.target.value || undefined,
-                      });
+                      updateInvoice({ techUserId: safeId(e.target.value) });
                     }}
                   >
                     <option value="">-- Chọn NV kỹ thuật --</option>
@@ -1150,15 +1743,13 @@ const InvoiceDetailPage: React.FC = () => {
               </div>
 
               {invoice.lines.length === 0 && (
-                <div
-                  style={{ fontSize: 13, color: "#6b7280", marginTop: 4 }}
-                >
+                <div style={{ fontSize: 13, color: "#6b7280", marginTop: 4 }}>
                   Chưa có dòng sản phẩm, bấm “Thêm dòng sản phẩm”.
                 </div>
               )}
 
               {invoice.lines.map((line, idx) => {
-                const q = line.itemName.toLowerCase();
+                const q = (line.itemName || "").toLowerCase();
                 const itemSuggestions =
                   q.length > 0
                     ? items
@@ -1171,90 +1762,67 @@ const InvoiceDetailPage: React.FC = () => {
                     : [];
 
                 return (
-                  <div key={idx} style={styles.gridRow}>
+                  <div key={line.id ?? `line-${idx}`} style={styles.gridRow}>
                     <div style={styles.autoWrapper}>
                       <input
                         style={styles.smallInput}
                         value={line.itemName}
-                        onChange={(e) =>
-                          handleLineChange(idx, "itemName", e.target.value)
-                        }
+                        disabled={lockedForStaff}
+                        onChange={(e) => handleLineChange(idx, "itemName", e.target.value)}
                         onFocus={() => setOpenItemSuggestIndex(idx)}
                         placeholder="Gõ mã hoặc tên sản phẩm..."
                       />
-                      {openItemSuggestIndex === idx &&
-                        line.itemName.length > 0 && (
-                          <div style={styles.suggestBox}>
-                            {itemSuggestions.length > 0 ? (
-                              itemSuggestions.map((it) => (
-                                <div
-                                  key={it.id}
-                                  style={styles.suggestItem}
-                                  onMouseDown={(e) => {
-                                    e.preventDefault();
-                                    selectItemForLine(idx, it);
-                                  }}
-                                >
-                                  {it.name}
-                                </div>
-                              ))
-                            ) : (
-                              <div style={styles.suggestItemMuted}>
-                                Không tìm thấy sản phẩm
+                      {openItemSuggestIndex === idx && !lockedForStaff && line.itemName.length > 0 && (
+                        <div style={styles.suggestBox}>
+                          {itemSuggestions.length > 0 ? (
+                            itemSuggestions.map((it) => (
+                              <div
+                                key={it.id}
+                                style={styles.suggestItem}
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  selectItemForLine(idx, it);
+                                }}
+                              >
+                                {it.name}
                               </div>
-                            )}
-                          </div>
-                        )}
+                            ))
+                          ) : (
+                            <div style={styles.suggestItemMuted}>Không tìm thấy sản phẩm</div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     <div>
                       <input
-                        style={{
-                          ...styles.smallInput,
-                          textAlign: "center",
-                        }}
+                        style={{ ...styles.smallInput, textAlign: "center" }}
                         type="number"
                         min={0}
                         value={line.qty}
-                        onChange={(e) =>
-                          handleLineChange(
-                            idx,
-                            "qty",
-                            Number(e.target.value) || 0
-                          )
-                        }
+                        disabled={lockedForStaff}
+                        onChange={(e) => handleLineChange(idx, "qty", Number(e.target.value) || 0)}
                       />
                     </div>
 
                     <div>
-                      <input
-                        style={{
-                          ...styles.smallInput,
-                          textAlign: "right",
-                        }}
-                        type="number"
-                        min={0}
-                        value={line.price}
-                        onChange={(e) =>
-                          handleLineChange(
-                            idx,
-                            "price",
-                            Number(e.target.value) || 0
-                          )
-                        }
+                      <LinePriceInput
+                        value={Number(line.price || 0)}
+                        disabled={lockedForStaff}
+                        styleInput={{ ...styles.smallInput, textAlign: "right" }}
+                        onChange={(raw) => handleLineChange(idx, "price", raw)}
                       />
                     </div>
 
                     <div>
-                      <div style={styles.totalBox}>
-                        {(line.qty * line.price).toLocaleString()}
-                      </div>
+                      <div style={styles.totalBox}>{fmtMoneyInput(line.qty * line.price)}</div>
                     </div>
 
                     <div style={{ textAlign: "center" }}>
                       <button
                         type="button"
                         style={styles.smallBtn}
+                        disabled={lockedForStaff}
                         onClick={() => removeLine(idx)}
                       >
                         Xóa
@@ -1264,127 +1832,84 @@ const InvoiceDetailPage: React.FC = () => {
                 );
               })}
 
-              <button
-                type="button"
-                style={styles.addLineBtn}
-                onClick={addLine}
-              >
+              <button type="button" style={styles.addLineBtn} disabled={lockedForStaff} onClick={addLine}>
                 + Thêm dòng sản phẩm
               </button>
 
-              {/* Tóm tắt tiền + thuế + thanh toán */}
+              {/* Summary + thanh toán */}
               <div style={{ marginTop: 8 }}>
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Tạm tính:</span>
-                  <span style={styles.summaryValue}>
-                    {(invoice.subtotal ?? 0).toLocaleString()} đ
-                  </span>
+                  <span style={styles.summaryValue}>{formatMoney(invoice.subtotal ?? 0)} đ</span>
                 </div>
 
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Thuế (%)</span>
-                  <div
-                    style={{ display: "flex", alignItems: "center", gap: 4 }}
-                  >
+                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <input
-                      style={{
-                        ...styles.smallInput,
-                        width: 70,
-                        textAlign: "right",
-                      }}
+                      style={{ ...styles.smallInput, width: 70, textAlign: "right" }}
                       type="number"
                       min={0}
                       value={invoice.taxPercent ?? 0}
+                      disabled={lockedForStaff}
                       onChange={(e) => {
                         markDirty();
-                        const raw = e.target.value;
-                        const num = raw === "" ? 0 : Number(raw);
-                        const val = isNaN(num) ? 0 : num;
+                        const num = Number(e.target.value || 0);
                         setInvoice((prev) => {
                           if (!prev) return prev;
-                          const { subtotal, tax, totalAmount } = recalcTotals(
-                            prev.lines,
-                            val
-                          );
-                          return {
-                            ...prev,
-                            taxPercent: val,
-                            subtotal,
-                            tax,
-                            totalAmount,
-                          };
+                          const pct = isNaN(num) ? 0 : num;
+                          const { subtotal, tax, totalAmount } = recalcTotals(prev.lines, pct);
+
+                          const hasWarrantyHold = !!prev.hasWarrantyHold;
+                          const warrantyHoldAmount = hasWarrantyHold ? Math.round(Number(totalAmount || 0) * 0.05) : 0;
+
+                          return { ...prev, taxPercent: pct, subtotal, tax, totalAmount, warrantyHoldAmount };
                         });
                       }}
                     />
                     <span>%</span>
-                    <span style={{ marginLeft: 12 }}>
-                      = {(invoice.tax ?? 0).toLocaleString()} đ
-                    </span>
+                    <span style={{ marginLeft: 12 }}>= {formatMoney(invoice.tax ?? 0)} đ</span>
                   </div>
                 </div>
 
+                {/* ✅ BẢO HÀNH (tick có/không) */}
                 <div style={styles.summaryRow}>
-                  <span style={styles.summaryLabel}>Đã thu:</span>
-                  <div
-                    style={{ display: "flex", alignItems: "center", gap: 4 }}
-                  >
+                  <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <input
-                      style={{
-                        ...styles.smallInput,
-                        width: 140,
-                        textAlign: "right",
-                      }}
-                      type="number"
-                      min={0}
-                      value={invoice.paidAmount ?? 0}
+                      type="checkbox"
+                      disabled={lockedForStaff}
+                      checked={!!invoice.hasWarrantyHold}
                       onChange={(e) => {
                         markDirty();
-                        const raw = e.target.value;
-                        const num = raw === "" ? 0 : Number(raw);
-                        const paid = isNaN(num) ? 0 : num;
+                        const checked = e.target.checked;
                         setInvoice((prev) => {
                           if (!prev) return prev;
-                          const total = prev.totalAmount ?? 0;
-                          let status: PaymentStatus = "UNPAID";
-                          if (paid <= 0) status = "UNPAID";
-                          else if (paid >= total) status = "PAID";
-                          else status = "PARTIAL";
-                          return {
-                            ...prev,
-                            paidAmount: paid,
-                            paymentStatus: status,
-                          };
+                          const total = Number(prev.totalAmount || 0);
+                          const hold2 = checked ? Math.round(total * 0.05) : 0;
+                          return { ...prev, hasWarrantyHold: checked, warrantyHoldAmount: hold2 };
                         });
                       }}
                     />
-                    <span>đ</span>
+                    <span>Có bảo hành (treo 5%)</span>
+                  </label>
+                </div>
+
+                {!!invoice.hasWarrantyHold && (
+                  <div style={styles.summaryRow}>
+                    <span style={styles.summaryLabel}>Treo bảo hành (5%):</span>
+                    <span style={styles.summaryValue}>{formatMoney(invoice.warrantyHoldAmount || 0)} đ</span>
                   </div>
-                </div>
+                )}
 
                 <div style={styles.summaryRow}>
-                  <span style={styles.summaryLabel}>Còn phải thu:</span>
-                  <span style={styles.summaryValue}>
-                    {Math.max(
-                      0,
-                      (invoice.totalAmount ?? 0) -
-                        (invoice.paidAmount ?? 0)
-                    ).toLocaleString()}{" "}
-                    đ
-                  </span>
-                </div>
-
-                <div style={styles.summaryRow}>
-                  <span style={styles.summaryLabel}>
-                    Trạng thái thanh toán:
-                  </span>
+                  <span style={styles.summaryLabel}>Trạng thái thanh toán:</span>
                   <select
                     style={{ ...styles.select, maxWidth: 220 }}
                     value={invoice.paymentStatus || "UNPAID"}
+                    disabled={lockedForStaff}
                     onChange={(e) => {
                       markDirty();
-                      updateInvoice({
-                        paymentStatus: e.target.value as PaymentStatus,
-                      });
+                      applyPaymentStatus(e.target.value as PaymentStatus);
                     }}
                   >
                     <option value="UNPAID">Chưa thanh toán</option>
@@ -1394,83 +1919,253 @@ const InvoiceDetailPage: React.FC = () => {
                 </div>
 
                 <div style={styles.summaryRow}>
+                  <span style={styles.summaryLabel}>Đã thu:</span>
+                  <PaidAmountInput
+                    value={invoice.paidAmount ?? 0}
+                    disabled={!showPaidInput || lockedForStaff}
+                    onChange={(raw) => {
+                      markDirty();
+                      applyPaymentStatus("PARTIAL", raw);
+                    }}
+                    styleInput={{
+                      ...styles.smallInput,
+                      width: 140,
+                      textAlign: "right",
+                      opacity: showPaidInput ? 1 : 0.7,
+                    }}
+                  />
+                </div>
+
+                <div style={styles.summaryRow}>
+                  <span style={styles.summaryLabel}>Tài khoản nhận tiền:</span>
+                  <select
+                    style={{ ...styles.select, maxWidth: 320 }}
+                    value={invoice.receiveAccountId || ""}
+                    disabled={lockedForStaff}
+                    onChange={(e) => {
+                      markDirty();
+                      updateInvoice({ receiveAccountId: safeId(e.target.value) });
+                    }}
+                  >
+                    <option value="">-- Chưa chọn --</option>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.code} - {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {accountLoadError && <div style={{ ...styles.notice, ...styles.noticeError }}>{accountLoadError}</div>}
+
+                <div style={styles.summaryRow}>
+                  <span style={styles.summaryLabel}>Còn phải thu:</span>
+                  <span style={styles.summaryValue}>{formatMoney(debtNow)} đ</span>
+                </div>
+
+                <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Tổng cộng:</span>
-                  <span style={styles.summaryValue}>
-                    {invoice.totalAmount.toLocaleString()} đ
-                  </span>
+                  <span style={styles.summaryValue}>{formatMoney(invoice.totalAmount)} đ</span>
+                </div>
+
+                <div style={{ ...styles.formRow, marginTop: 10 }}>
+                  <label style={styles.label}>Ghi chú</label>
+                  <textarea
+                    style={{ ...styles.input, minHeight: 80, resize: "vertical" }}
+                    value={invoice.note ?? ""}
+                    disabled={lockedForStaff}
+                    onChange={(e) => {
+                      markDirty();
+                      updateInvoice({ note: e.target.value });
+                    }}
+                  />
                 </div>
               </div>
 
-              {stockMessage && (
-                <div
-                  style={{
-                    ...styles.notice,
-                    ...(stockMessage.type === "success"
-                      ? styles.noticeSuccess
-                      : styles.noticeError),
-                  }}
-                >
-                  {stockMessage.text}
+              {message && (
+                <div style={{ ...styles.notice, ...(message.type === "success" ? styles.noticeSuccess : styles.noticeError) }}>
+                  {message.text}
                 </div>
               )}
 
+              {/* Trạng thái + nút submit/approve/reject */}
               <div style={styles.postStatusRow}>
                 <span
                   style={{
                     fontSize: 13,
-                    color: invoice.posted ? "#16a34a" : "#f97316",
+                    color: status === "APPROVED" ? "#16a34a" : status === "REJECTED" ? "#ef4444" : "#f97316",
                   }}
                 >
-                  Trạng thái tồn:{" "}
-                  {invoice.posted ? "Đã lưu tồn" : "Chưa lưu tồn"}
+                  Trạng thái: {statusText}
                 </span>
+
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button
-                    type="button"
-                    style={styles.secondarySmallBtn}
-                    disabled={
-                      !invoice.id || invoice.posted || dirtySinceLastSave
-                    }
-                    title={
-                      dirtySinceLastSave
-                        ? "Bạn đã sửa hoá đơn, hãy bấm 'Lưu hóa đơn' trước khi 'Lưu tồn'."
-                        : ""
-                    }
-                    onClick={handlePostStock}
-                  >
-                    Lưu tồn
-                  </button>
-                  <button
-                    type="button"
-                    style={styles.secondarySmallBtn}
-                    disabled={!invoice.id || !invoice.posted}
-                    onClick={handleUnpostStock}
-                  >
-                    Hủy lưu tồn
-                  </button>
+                  {!isAdmin && status === "DRAFT" && (
+                    <button
+                      type="button"
+                      style={styles.secondarySmallBtn}
+                      disabled={!invoice.id || dirtySinceLastSave}
+                      title={dirtySinceLastSave ? "Bạn đã sửa hoá đơn, hãy lưu trước khi gửi duyệt." : ""}
+                      onClick={handleSubmit}
+                    >
+                      Gửi duyệt
+                    </button>
+                  )}
+
+                  {isAdmin && status === "SUBMITTED" && (
+                    <>
+                      <button type="button" style={styles.secondarySmallBtn} onClick={handleApprove}>
+                        Duyệt
+                      </button>
+                      <button type="button" style={styles.secondarySmallBtn} onClick={handleReject}>
+                        Từ chối
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
 
+            {/* ✅ LỊCH SỬ THANH TOÁN (thêm dưới cuối trang) */}
+            {!isCreate && invoice.id && (
+              <div style={styles.sectionBox}>
+                <div style={styles.sectionTitle}>Lịch sử thanh toán</div>
+
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+                  <button
+                    type="button"
+                    style={styles.secondarySmallBtn}
+                    onClick={loadPaymentHistoryForInvoice}
+                    disabled={paymentHistoryLoading}
+                  >
+                    {paymentHistoryLoading ? "Đang tải..." : "Tải lại"}
+                  </button>
+
+                  <div style={{ fontSize: 13, color: "#6b7280" }}>
+                    Tổng đã thanh toán theo phiếu: <b>{formatMoney(paidByPayments)} đ</b>
+                  </div>
+                </div>
+
+                {paymentHistoryError && <div style={{ ...styles.notice, ...styles.noticeError }}>{paymentHistoryError}</div>}
+
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: "#f9fafb" }}>
+                        <th style={{ textAlign: "left", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>
+                          Ngày
+                        </th>
+                        <th style={{ textAlign: "left", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>
+                          Tài khoản
+                        </th>
+                        <th style={{ textAlign: "right", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>
+                          Số tiền áp vào HĐ
+                        </th>
+                        <th style={{ textAlign: "right", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>
+                          Tổng phiếu
+                        </th>
+                        <th style={{ textAlign: "left", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>
+                          Ghi chú
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paymentHistoryLoading && (
+                        <tr>
+                          <td colSpan={5} style={{ padding: "10px 8px", color: "#6b7280" }}>
+                            Đang tải lịch sử...
+                          </td>
+                        </tr>
+                      )}
+
+                      {!paymentHistoryLoading && paymentHistoryRows.length === 0 && (
+                        <tr>
+                          <td colSpan={5} style={{ padding: "10px 8px", color: "#6b7280" }}>
+                            Chưa có phiếu thanh toán nào được phân bổ cho hóa đơn này.
+                          </td>
+                        </tr>
+                      )}
+
+                      {!paymentHistoryLoading &&
+                        paymentHistoryRows.map((p) => {
+                          const accText = p.account
+                            ? `${p.account.code || ""}${p.account.name ? " - " + p.account.name : ""}`
+                            : "-";
+                          const note = p.note || "";
+                          const timeStr = formatDateTimeDisplay(p.createdAt || p.date);
+
+                          return (
+                            <tr key={p.id}>
+                              <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6", whiteSpace: "nowrap" }}>
+                                {timeStr}
+                              </td>
+
+                              <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6" }}>{accText || "-"}</td>
+
+                              <td
+                                style={{
+                                  padding: "8px 8px",
+                                  borderBottom: "1px solid #f3f4f6",
+                                  textAlign: "right",
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {formatMoney(p.allocatedAmount)} đ
+                              </td>
+
+                              <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6", textAlign: "right" }}>
+                                {formatMoney(Number(p.amount || 0))} đ
+                              </td>
+
+                              <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6" }}>{note}</td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             <div style={styles.formActions}>
-              <button
-                type="button"
-                style={styles.secondaryBtn}
-                onClick={() => navigate("/invoices")}
-              >
+              <button type="button" style={styles.secondaryBtn} onClick={() => navigate("/invoices")}>
                 Hủy
               </button>
-              <button
-                type="submit"
-                style={styles.primaryBtn}
-                disabled={saving}
-              >
+              <button type="submit" style={styles.primaryBtn} disabled={saving || lockedForStaff}>
                 {saving ? "Đang lưu..." : "Lưu hóa đơn"}
               </button>
             </div>
           </form>
         </div>
       </div>
+
+      {/* ✅ Toast */}
+      <ToastHost toasts={toasts} onClose={remove} />
+
+      {/* ✅ Confirm / Prompt Modals (thay confirm/prompt native) */}
+      <ConfirmModal
+        open={confirmOpen && !!confirmCfg}
+        title={confirmCfg?.title || ""}
+        message={confirmCfg?.message || ""}
+        confirmText={confirmCfg?.confirmText}
+        cancelText={confirmCfg?.cancelText}
+        tone={confirmCfg?.tone}
+        busy={confirmBusy}
+        onClose={closeConfirm}
+        onConfirm={() => confirmCfg?.onConfirm?.()}
+      />
+      <PromptModal
+        open={promptOpen && !!promptCfg}
+        title={promptCfg?.title || ""}
+        message={promptCfg?.message}
+        placeholder={promptCfg?.placeholder}
+        defaultValue={promptCfg?.defaultValue}
+        confirmText={promptCfg?.confirmText}
+        cancelText={promptCfg?.cancelText}
+        busy={promptBusy}
+        onClose={closePrompt}
+        onConfirm={(v) => promptCfg?.onConfirm?.(v)}
+      />
     </div>
   );
 };

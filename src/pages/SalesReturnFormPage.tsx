@@ -1,0 +1,875 @@
+// src/pages/SalesReturnFormPage.tsx
+import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import api from "../api/client";
+import { ToastHost, useToast } from "../components/Toast";
+
+type InvoiceStatus = "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
+type UserRole = "staff" | "accountant" | "admin";
+
+type ItemOption = { id: string; name: string; sku?: string };
+
+type InvoiceOption = {
+  id: string;
+  code: string;
+  issueDate?: string;
+  partnerId?: string | null;
+  partnerName?: string | null;
+  saleUserId?: string | null;
+  saleUserName?: string | null;
+  techUserId?: string | null;
+  techUserName?: string | null;
+  total?: number;
+};
+
+type LineDraft = {
+  itemId: string;
+  itemName: string; // input text for searching + display name
+  qty: number;
+  price: number;
+};
+
+function unwrap<T = any>(res: any): T {
+  const body = res?.data;
+  if (body && typeof body === "object" && "data" in body) return body.data as T;
+  return body as T;
+}
+
+async function fetchMeRole(): Promise<UserRole | null> {
+  try {
+    const r = await api.get("/auth/me");
+    return (r?.data?.role ?? r?.data?.user?.role ?? null) as any;
+  } catch {
+    return null;
+  }
+}
+
+function formatMoney(n: number) {
+  return Number(n || 0).toLocaleString("vi-VN");
+}
+
+function formatDate(raw?: string) {
+  if (!raw) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw.split("-").reverse().join("/");
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return String(raw);
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yy = d.getFullYear();
+  return `${dd}/${mm}/${yy}`;
+}
+
+function statusLabel(st: InvoiceStatus) {
+  if (st === "DRAFT") return "NHÁP";
+  if (st === "SUBMITTED") return "CHỜ DUYỆT";
+  if (st === "APPROVED") return "ĐÃ DUYỆT";
+  if (st === "REJECTED") return "TỪ CHỐI";
+  return st;
+}
+
+function statusPillStyle(st: InvoiceStatus): React.CSSProperties {
+  const base: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "7px 12px",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 900,
+    letterSpacing: 0.2,
+    border: "1px solid",
+  };
+  if (st === "DRAFT") return { ...base, background: "#FFF7ED", borderColor: "#FDBA74", color: "#9A3412" };
+  if (st === "SUBMITTED") return { ...base, background: "#EFF6FF", borderColor: "#93C5FD", color: "#1D4ED8" };
+  if (st === "APPROVED") return { ...base, background: "#ECFDF5", borderColor: "#6EE7B7", color: "#065F46" };
+  if (st === "REJECTED") return { ...base, background: "#FEF2F2", borderColor: "#FCA5A5", color: "#991B1B" };
+  return { ...base, background: "#F9FAFB", borderColor: "#E5E7EB", color: "#111827" };
+}
+
+function primaryBtnStyle(): React.CSSProperties {
+  return {
+    padding: "10px 14px",
+    borderRadius: 12,
+    border: "1px solid #111827",
+    background: "#111827",
+    color: "#fff",
+    fontWeight: 800,
+    cursor: "pointer",
+  };
+}
+
+function ghostBtnStyle(): React.CSSProperties {
+  return {
+    padding: "10px 14px",
+    borderRadius: 12,
+    border: "1px solid #E5E7EB",
+    background: "#fff",
+    color: "#111827",
+    fontWeight: 800,
+    cursor: "pointer",
+  };
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  autoWrapper: { position: "relative", zIndex: 20 },
+
+  suggestBox: {
+    position: "absolute",
+    top: "100%",
+    left: 0,
+    right: 0,
+    background: "#fff",
+    border: "1px solid #e5e7eb",
+    borderRadius: 12,
+    maxHeight: 240,
+    overflowY: "auto",
+    zIndex: 9999,
+    marginTop: 6,
+    boxShadow: "0 10px 18px rgba(0,0,0,0.08)",
+  },
+  suggestItem: { padding: "10px 12px", fontSize: 13, cursor: "pointer" },
+  suggestItemMuted: { padding: "10px 12px", fontSize: 12, color: "#9ca3af" },
+};
+
+const returnNoticeStyle: React.CSSProperties = {
+  marginTop: 10,
+  padding: "10px 12px",
+  borderRadius: 12,
+  border: "1px solid #fde68a",
+  background: "#fffbeb",
+  color: "#92400e",
+  fontSize: 13,
+  fontWeight: 700,
+  lineHeight: 1.4,
+};
+
+export default function SalesReturnFormPage() {
+  const nav = useNavigate();
+  const { id } = useParams();
+  const isNew = !id || id === "new";
+
+  const toast = useToast();
+
+  const [role, setRole] = useState<UserRole | null>(null);
+  const [loadingRole, setLoadingRole] = useState(true);
+
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState<InvoiceStatus>("DRAFT");
+
+  const [code, setCode] = useState("");
+  const [issueDate, setIssueDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+
+  // ✅ Hướng A: SALES_RETURN bắt buộc chọn HĐ gốc (SALES APPROVED)
+  const [refInvoiceId, setRefInvoiceId] = useState<string>("");
+  const [refInvoiceLabel, setRefInvoiceLabel] = useState<string>(""); // hiển thị ngắn (CODE - KHÁCH)
+  const [refInvoiceQuery, setRefInvoiceQuery] = useState<string>("");
+  const [refSuggestOpen, setRefSuggestOpen] = useState(false);
+  const [refLoading, setRefLoading] = useState(false);
+  const [refOptions, setRefOptions] = useState<InvoiceOption[]>([]);
+
+  // snapshot (để hiển thị)
+  const [partnerId, setPartnerId] = useState<string>("");
+  const [partnerName, setPartnerName] = useState<string>("");
+
+  // staff (hiển thị thôi; approve BE sẽ copy từ invoice gốc)
+  const [saleUserName, setSaleUserName] = useState<string>("");
+  const [techUserName, setTechUserName] = useState<string>("");
+
+  const [note, setNote] = useState("");
+
+  const [items, setItems] = useState<ItemOption[]>([]);
+  const [openItemSuggestIndex, setOpenItemSuggestIndex] = useState<number | null>(null);
+  const [lines, setLines] = useState<LineDraft[]>([]);
+
+  const subtotal = useMemo(
+    () => lines.reduce((s, l) => s + Number(l.qty || 0) * Number(l.price || 0), 0),
+    [lines]
+  );
+
+  useEffect(() => {
+    (async () => {
+      setLoadingRole(true);
+      const r = await fetchMeRole();
+      setRole(r);
+      setLoadingRole(false);
+
+      if (!r) return nav("/login", { replace: true });
+      if (r !== "admin") {
+        toast.push({ type: "error", title: "Không có quyền", message: "Chức năng này chỉ dành cho ADMIN." });
+        return nav("/", { replace: true });
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load items ONCE
+  useEffect(() => {
+    if (role !== "admin") return;
+
+    (async () => {
+      try {
+        const res = await api.get("/items", { params: { q: "", page: 1, pageSize: 1000 } });
+        const data = unwrap<any[]>(res);
+        const mapped: ItemOption[] = (Array.isArray(data) ? data : []).map((x: any) => ({
+          id: String(x.id),
+          name: String(x.name ?? x.sku ?? x.id),
+          sku: x.sku ? String(x.sku) : undefined,
+        }));
+        setItems(mapped);
+      } catch (e: any) {
+        console.error("loadItems error", e);
+        setItems([]);
+        toast.push({
+          type: "error",
+          title: "Lỗi",
+          message: e?.response?.data?.message || e?.message || "Không tải được danh sách sản phẩm (/items).",
+        });
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role]);
+
+  // ✅ Search invoice gốc (SALES đã duyệt) (debounced)
+  useEffect(() => {
+    if (role !== "admin") return;
+    if (!refSuggestOpen) return;
+
+    const q = (refInvoiceQuery || "").trim();
+    if (!q) {
+      setRefOptions([]);
+      return;
+    }
+
+    let alive = true;
+    const t = setTimeout(async () => {
+      setRefLoading(true);
+      try {
+        // ✅ kỳ vọng backend: GET /invoices hỗ trợ filter type/status + q
+        // Nếu BE của bạn đặt param khác, cứ sửa ở đây là xong.
+        const res = await api.get("/invoices", {
+          params: {
+            q,
+            page: 1,
+            pageSize: 30,
+            type: "SALES",
+            status: "APPROVED",
+          },
+        });
+
+        const body = (res as any)?.data;
+        const raw = body?.data?.items ?? body?.items ?? body?.data ?? body;
+        const rows = Array.isArray(raw) ? raw : [];
+
+        const mapped: InvoiceOption[] = rows
+          .map((x: any) => ({
+            id: String(x.id),
+            code: String(x.code ?? x.id),
+            issueDate: x.issueDate ? String(x.issueDate) : undefined,
+            partnerId: x.partnerId ? String(x.partnerId) : null,
+            partnerName: x.partnerName ? String(x.partnerName) : null,
+            saleUserId: x.saleUserId ? String(x.saleUserId) : null,
+            saleUserName: x.saleUserName ? String(x.saleUserName) : null,
+            techUserId: x.techUserId ? String(x.techUserId) : null,
+            techUserName: x.techUserName ? String(x.techUserName) : null,
+            total: x.total != null ? Number(x.total) : undefined,
+          }))
+          .filter((x: InvoiceOption) => x.id && x.code);
+
+        if (alive) setRefOptions(mapped);
+      } catch (e) {
+        console.error("searchRefInvoices error", e);
+        if (alive) setRefOptions([]);
+      } finally {
+        if (alive) setRefLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [refInvoiceQuery, refSuggestOpen, role]);
+
+  function clearRefInvoice() {
+    setRefInvoiceId("");
+    setRefInvoiceLabel("");
+    setRefInvoiceQuery("");
+    setRefOptions([]);
+
+    setPartnerId("");
+    setPartnerName("");
+    setSaleUserName("");
+    setTechUserName("");
+  }
+
+  function selectRefInvoice(opt: InvoiceOption) {
+    setRefInvoiceId(opt.id);
+
+    const label = `${opt.code}${opt.partnerName ? ` - ${opt.partnerName}` : ""}`;
+    setRefInvoiceLabel(label);
+    setRefInvoiceQuery(label);
+    setRefSuggestOpen(false);
+
+    setPartnerId(String(opt.partnerId || ""));
+    setPartnerName(String(opt.partnerName || ""));
+
+    setSaleUserName(String(opt.saleUserName || ""));
+    setTechUserName(String(opt.techUserName || ""));
+  }
+
+  // Load invoice if edit
+  useEffect(() => {
+    if (role !== "admin") return;
+
+    if (isNew) {
+      setLines([{ itemId: "", itemName: "", qty: 1, price: 0 }]);
+      clearRefInvoice();
+      return;
+    }
+
+    (async () => {
+      setLoading(true);
+      try {
+        const r = await api.get(`/invoices/${id}`);
+        const inv = r.data?.data ?? r.data;
+        if (!inv) return;
+
+        if (inv.type !== "SALES_RETURN") {
+          toast.push({ type: "error", title: "Sai loại phiếu", message: "Đây không phải phiếu Khách trả hàng." });
+          nav("/sales-returns", { replace: true });
+          return;
+        }
+
+        setStatus(inv.status as InvoiceStatus);
+        setCode(String(inv.code ?? ""));
+        setIssueDate(inv.issueDate ? String(inv.issueDate).slice(0, 10) : new Date().toISOString().slice(0, 10));
+
+        // ✅ ref invoice
+        const rid = String(inv.refInvoiceId ?? "");
+        setRefInvoiceId(rid);
+
+        // label ưu tiên: nếu có refInvoice object -> lấy code/partnerName
+        const refCode = String(inv.refInvoice?.code ?? "");
+        const refPartner = String(inv.refInvoice?.partnerName ?? inv.partnerName ?? "");
+        const label = refCode ? `${refCode}${refPartner ? ` - ${refPartner}` : ""}` : rid;
+        setRefInvoiceLabel(label);
+        setRefInvoiceQuery(label);
+
+        // snapshot partner + staff (để hiển thị)
+        setPartnerId(String(inv.partnerId ?? ""));
+        setPartnerName(String(inv.partnerName ?? ""));
+
+        setSaleUserName(String(inv.saleUserName ?? inv.saleUser?.username ?? inv.saleUser?.name ?? ""));
+        setTechUserName(String(inv.techUserName ?? inv.techUser?.username ?? inv.techUser?.name ?? ""));
+
+        setNote(String(inv.note ?? ""));
+
+        const ls: LineDraft[] =
+          (inv.lines ?? []).map((l: any) => ({
+            itemId: String(l.itemId ?? ""),
+            itemName: String(l.itemName ?? l.item?.name ?? ""),
+            qty: Number(l.qty ?? 0),
+            price: Number(l.price ?? 0),
+          })) || [];
+        setLines(ls.length ? ls : [{ itemId: "", itemName: "", qty: 1, price: 0 }]);
+      } catch (e: any) {
+        toast.push({
+          type: "error",
+          title: "Lỗi",
+          message: e?.response?.data?.message || e?.message || "Không tải được phiếu.",
+        });
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [role, isNew, id, nav]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const locked = status === "APPROVED" || status === "REJECTED";
+  const editable = status === "DRAFT";
+
+  function addLine() {
+    setLines((cur) => [...cur, { itemId: "", itemName: "", qty: 1, price: 0 }]);
+  }
+
+  function removeLine(idx: number) {
+    setLines((cur) => cur.filter((_, i) => i !== idx));
+  }
+
+  function updateLine(idx: number, patch: Partial<LineDraft>) {
+    setLines((cur) => cur.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
+  }
+
+  function selectItemForLine(idx: number, it: ItemOption) {
+    updateLine(idx, { itemId: it.id, itemName: it.sku ? `${it.sku} - ${it.name}` : it.name });
+    setOpenItemSuggestIndex(null);
+  }
+
+  async function save() {
+    const validLines = lines
+      .map((l) => ({
+        itemId: String(l.itemId || "").trim(),
+        itemName: String(l.itemName || "").trim(),
+        qty: Number(l.qty || 0),
+        price: Number(l.price || 0),
+      }))
+      .filter((l) => l.itemId && l.qty > 0);
+
+    // ✅ Hướng A: bắt buộc refInvoiceId
+    if (!refInvoiceId) {
+      toast.push({ type: "warning", title: "Thiếu thông tin", message: "Vui lòng chọn Hóa đơn gốc (SALES đã duyệt)." });
+      return;
+    }
+
+    // partnerId cũng nên có (BE của mình bắt buộc cho SALES_RETURN)
+    if (!partnerId) {
+      toast.push({ type: "warning", title: "Thiếu thông tin", message: "Thiếu khách hàng của hóa đơn gốc (partnerId)." });
+      return;
+    }
+
+    if (validLines.length === 0) {
+      toast.push({ type: "warning", title: "Thiếu dòng hàng", message: "Phải có ít nhất 1 dòng hàng." });
+      return;
+    }
+
+    const body: any = {
+      type: "SALES_RETURN",
+      code: code.trim() || undefined,
+      issueDate,
+
+      // ✅ NEW (A): link hóa đơn gốc để BE tự copy sale/tech
+      refInvoiceId,
+
+      // ✅ partner là để Payment/Allocation về sau có partnerId + snapshot hiển thị
+      partnerId,
+      partnerName: partnerName.trim() || undefined,
+
+      note: note || "",
+
+      // ✅ Hướng A: KHÔNG gửi saleUserId/techUserId nữa (BE sẽ copy theo refInvoiceId khi approve)
+      saleUserId: null,
+      techUserId: null,
+
+      lines: validLines.map((l) => ({
+        itemId: l.itemId,
+        qty: l.qty,
+        price: l.price,
+        itemName: l.itemName,
+      })),
+
+      // return: không tính VAT vào doanh thu
+      paymentStatus: "UNPAID",
+      paidAmount: 0,
+      tax: 0,
+      taxPercent: 0,
+    };
+
+    setLoading(true);
+    try {
+      if (isNew) {
+        const r = await api.post("/invoices", body);
+        const inv = r.data?.data ?? r.data;
+        toast.push({ type: "success", title: "Thành công", message: "Đã tạo phiếu." });
+        nav(`/sales-returns/${inv.id}`, { replace: true });
+      } else {
+        await api.put(`/invoices/${id}`, body);
+        toast.push({ type: "success", title: "Thành công", message: "Đã lưu phiếu." });
+      }
+    } catch (e: any) {
+      toast.push({ type: "error", title: "Lỗi", message: e?.response?.data?.message || e?.message || "Không lưu được." });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submit() {
+    if (!id) return;
+    setLoading(true);
+    try {
+      await api.post(`/invoices/${id}/submit`);
+      toast.push({ type: "success", title: "Đã gửi duyệt", message: "Phiếu đã chuyển sang CHỜ DUYỆT." });
+      nav("/sales-returns", { replace: true });
+    } catch (e: any) {
+      toast.push({ type: "error", title: "Lỗi", message: e?.response?.data?.message || e?.message || "Không gửi duyệt được." });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (loadingRole) return <div style={{ padding: 16 }}>Đang kiểm tra đăng nhập…</div>;
+  if (role !== "admin") return null;
+
+  return (
+    <div style={{ padding: 16 }}>
+      <ToastHost toasts={toast.toasts} onClose={toast.remove} />
+
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <h2 style={{ margin: 0 }}>{isNew ? "Tạo phiếu Khách trả hàng" : `Phiếu trả hàng: ${code || id}`}</h2>
+            {!isNew ? <span style={statusPillStyle(status)}>{statusLabel(status)}</span> : null}
+          </div>
+
+          <div style={{ color: "#6b7280" }}>{locked ? "Phiếu đã chốt, chỉ xem." : "Duyệt phiếu sẽ nhập kho."}</div>
+
+          <div style={returnNoticeStyle}>
+            ⚠️ <b>Phiếu trả hàng</b> chỉ ghi nhận <b>hàng khách trả</b> và <b>nhập kho khi DUYỆT</b>.<br />
+            Việc <b>hoàn tiền</b> (nếu có) sẽ làm <b>riêng</b> tại màn <b>Quản lý phiếu trả hàng</b> bằng phiếu chi/thu có lịch sử.
+          </div>
+        </div>
+
+        <button style={ghostBtnStyle()} onClick={() => nav("/sales-returns")}>
+          ← Danh sách
+        </button>
+      </div>
+
+      {/* Info Card */}
+      <div style={{ marginTop: 14, border: "1px solid #E5E7EB", borderRadius: 14, padding: 14, background: "#fff" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 12 }}>
+          <div>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>Mã phiếu</div>
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              disabled={!editable}
+              style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12 }}
+              placeholder="Để trống sẽ tự sinh"
+            />
+          </div>
+
+          <div>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>Ngày</div>
+            <input
+              type="date"
+              value={issueDate}
+              onChange={(e) => setIssueDate(e.target.value)}
+              disabled={!editable}
+              style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12 }}
+            />
+          </div>
+
+          {/* ✅ Hóa đơn gốc */}
+          <div style={{ gridColumn: "1 / -1" }}>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>Hóa đơn gốc (SALES đã duyệt) *</div>
+
+            {editable ? (
+              <div
+                style={{ ...styles.autoWrapper, zIndex: 50 }}
+                onBlur={() => setTimeout(() => setRefSuggestOpen(false), 120)}
+              >
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    value={refInvoiceQuery}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setRefInvoiceQuery(v);
+                      setRefSuggestOpen(true);
+
+                      // nếu user sửa text => bỏ refInvoiceId để tránh lưu sai
+                      if (!v.trim() || v.trim() !== refInvoiceLabel.trim()) {
+                        setRefInvoiceId("");
+                        setRefInvoiceLabel("");
+                        setPartnerId("");
+                        setPartnerName("");
+                        setSaleUserName("");
+                        setTechUserName("");
+                      }
+                    }}
+                    onFocus={() => setRefSuggestOpen(true)}
+                    style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12 }}
+                    placeholder="Gõ để tìm theo mã hóa đơn / khách hàng..."
+                  />
+
+                  {refInvoiceId ? (
+                    <button
+                      type="button"
+                      style={{ ...ghostBtnStyle(), padding: "10px 12px", whiteSpace: "nowrap" }}
+                      onClick={() => clearRefInvoice()}
+                    >
+                      Đổi
+                    </button>
+                  ) : null}
+                </div>
+
+                {refSuggestOpen && (refInvoiceQuery || "").trim().length > 0 ? (
+                  <div style={styles.suggestBox}>
+                    {refLoading ? (
+                      <div style={styles.suggestItemMuted}>Đang tìm…</div>
+                    ) : refOptions.length > 0 ? (
+                      refOptions.map((it) => (
+                        <div
+                          key={it.id}
+                          style={styles.suggestItem}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            selectRefInvoice(it);
+                          }}
+                        >
+                          <div style={{ fontWeight: 900 }}>
+                            {it.code}{" "}
+                            <span style={{ fontWeight: 700, color: "#6b7280" }}>
+                              {it.issueDate ? `• ${formatDate(it.issueDate)}` : ""}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 12, color: "#6b7280" }}>
+                            {it.partnerName ? `KH: ${it.partnerName}` : ""}
+                            {it.total != null ? ` • Tổng: ${formatMoney(it.total)}` : ""}
+                          </div>
+                          {(it.saleUserName || it.techUserName) && (
+                            <div style={{ fontSize: 12, color: "#6b7280" }}>
+                              {it.saleUserName ? `Sale: ${it.saleUserName}` : ""}
+                              {it.saleUserName && it.techUserName ? " • " : ""}
+                              {it.techUserName ? `Tech: ${it.techUserName}` : ""}
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    ) : (
+                      <div style={styles.suggestItemMuted}>Không tìm thấy hóa đơn phù hợp</div>
+                    )}
+                  </div>
+                ) : null}
+
+                <div style={{ marginTop: 6, fontSize: 12, color: refInvoiceId ? "#16a34a" : "#991B1B", fontWeight: 800 }}>
+                  {refInvoiceId ? "✓ Đã chọn hóa đơn gốc" : "Chưa chọn hóa đơn gốc (phải chọn từ danh sách)"}
+                </div>
+              </div>
+            ) : (
+              <input
+                value={refInvoiceLabel || refInvoiceId || ""}
+                readOnly
+                style={{
+                  width: "100%",
+                  padding: 12,
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 12,
+                  background: "#F9FAFB",
+                }}
+              />
+            )}
+          </div>
+
+          {/* ✅ Snapshot KH + NV (read-only) */}
+          <div>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>Khách hàng</div>
+            <input
+              value={partnerName || ""}
+              readOnly
+              style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12, background: "#F9FAFB" }}
+              placeholder="Tự lấy theo hóa đơn gốc"
+            />
+          </div>
+
+          <div>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>Trạng thái</div>
+            <input
+              value={statusLabel(status)}
+              readOnly
+              style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12, background: "#F9FAFB" }}
+            />
+          </div>
+
+          <div>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>NV Sale</div>
+            <input
+              value={saleUserName || ""}
+              readOnly
+              style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12, background: "#F9FAFB" }}
+              placeholder="Tự lấy theo hóa đơn gốc"
+            />
+          </div>
+
+          <div>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>NV Kỹ thuật</div>
+            <input
+              value={techUserName || ""}
+              readOnly
+              style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12, background: "#F9FAFB" }}
+              placeholder="Tự lấy theo hóa đơn gốc"
+            />
+          </div>
+
+          <div style={{ gridColumn: "1 / -1" }}>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>Ghi chú</div>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              disabled={!editable}
+              style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12, minHeight: 90 }}
+              placeholder="Lý do trả hàng..."
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Lines header */}
+      <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ margin: 0 }}>Dòng hàng</h3>
+        {editable ? (
+          <button style={ghostBtnStyle()} onClick={addLine}>
+            + Thêm dòng
+          </button>
+        ) : null}
+      </div>
+
+      {/* Lines table */}
+      <div
+        style={{
+          marginTop: 10,
+          border: "1px solid #E5E7EB",
+          borderRadius: 14,
+          background: "#fff",
+        }}
+      >
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead style={{ background: "#F9FAFB" }}>
+            <tr>
+              <th style={{ textAlign: "left", padding: 14, borderBottom: "1px solid #E5E7EB" }}>Sản phẩm</th>
+              <th style={{ textAlign: "right", padding: 14, borderBottom: "1px solid #E5E7EB", width: 120 }}>SL</th>
+              <th style={{ textAlign: "right", padding: 14, borderBottom: "1px solid #E5E7EB", width: 200 }}>Giá trả lại</th>
+              <th style={{ textAlign: "right", padding: 14, borderBottom: "1px solid #E5E7EB", width: 200 }}>Thành tiền</th>
+              {editable ? <th style={{ textAlign: "center", padding: 14, borderBottom: "1px solid #E5E7EB", width: 90 }}>Xoá</th> : null}
+            </tr>
+          </thead>
+
+          <tbody>
+            {lines.length === 0 ? (
+              <tr>
+                <td colSpan={editable ? 5 : 4} style={{ padding: 16, color: "#6b7280" }}>
+                  Chưa có dòng nào.
+                </td>
+              </tr>
+            ) : (
+              lines.map((l, idx) => {
+                const amount = Number(l.qty || 0) * Number(l.price || 0);
+
+                const q = (l.itemName || "").toLowerCase().trim();
+                const suggestions =
+                  q.length > 0
+                    ? items
+                        .filter((it) => {
+                          const name = (it.name || "").toLowerCase();
+                          const sku = (it.sku || "").toLowerCase();
+                          return name.includes(q) || sku.includes(q);
+                        })
+                        .slice(0, 50)
+                    : [];
+
+                return (
+                  <tr key={idx}>
+                    <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9" }}>
+                      {editable ? (
+                        <div style={styles.autoWrapper} onBlur={() => setTimeout(() => setOpenItemSuggestIndex(null), 120)}>
+                          <input
+                            value={l.itemName}
+                            onChange={(e) => updateLine(idx, { itemName: e.target.value, itemId: "" })}
+                            onFocus={() => setOpenItemSuggestIndex(idx)}
+                            style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12 }}
+                            placeholder="Tìm theo SKU / tên..."
+                          />
+
+                          {openItemSuggestIndex === idx && q.length > 0 ? (
+                            <div style={styles.suggestBox}>
+                              {suggestions.length > 0 ? (
+                                suggestions.map((it) => (
+                                  <div
+                                    key={it.id}
+                                    style={styles.suggestItem}
+                                    onMouseDown={(e) => {
+                                      e.preventDefault();
+                                      selectItemForLine(idx, it);
+                                    }}
+                                  >
+                                    <div style={{ fontWeight: 800 }}>{it.name}</div>
+                                    <div style={{ fontSize: 12, color: "#6b7280" }}>
+                                      {it.sku ? `SKU: ${it.sku}` : `ID: ${it.id}`}
+                                    </div>
+                                  </div>
+                                ))
+                              ) : (
+                                <div style={styles.suggestItemMuted}>Không tìm thấy sản phẩm</div>
+                              )}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div style={{ fontWeight: 700 }}>{l.itemName || l.itemId}</div>
+                      )}
+                    </td>
+
+                    <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", textAlign: "right" }}>
+                      {editable ? (
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={l.qty}
+                          onChange={(e) => updateLine(idx, { qty: Number(e.target.value || 0) })}
+                          style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12, textAlign: "right" }}
+                        />
+                      ) : (
+                        <div style={{ fontWeight: 800 }}>{formatMoney(l.qty)}</div>
+                      )}
+                    </td>
+
+                    <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", textAlign: "right" }}>
+                      {editable ? (
+                        <input
+                          type="number"
+                          min={0}
+                          step={100}
+                          value={l.price}
+                          onChange={(e) => updateLine(idx, { price: Number(e.target.value || 0) })}
+                          style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12, textAlign: "right" }}
+                        />
+                      ) : (
+                        <div style={{ fontWeight: 800 }}>{formatMoney(l.price)}</div>
+                      )}
+                    </td>
+
+                    <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", textAlign: "right", fontWeight: 900 }}>
+                      {formatMoney(amount)}
+                    </td>
+
+                    {editable ? (
+                      <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", textAlign: "center" }}>
+                        <button style={{ ...ghostBtnStyle(), padding: "8px 10px" }} onClick={() => removeLine(idx)}>
+                          X
+                        </button>
+                      </td>
+                    ) : null}
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Footer */}
+      <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ fontSize: 16 }}>
+          <b>Tổng:</b> {formatMoney(subtotal)}
+        </div>
+
+        {editable ? (
+          <div style={{ display: "flex", gap: 10 }}>
+            <button style={ghostBtnStyle()} onClick={save} disabled={loading}>
+              Lưu
+            </button>
+
+            {!isNew ? (
+              <button style={primaryBtnStyle()} onClick={submit} disabled={loading}>
+                Gửi duyệt
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <div style={{ color: "#6b7280", fontWeight: 700 }}>Chỉ xem</div>
+        )}
+      </div>
+
+      {loading ? <div style={{ marginTop: 10, color: "#6b7280" }}>Đang xử lý…</div> : null}
+    </div>
+  );
+}

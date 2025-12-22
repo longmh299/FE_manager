@@ -1,493 +1,669 @@
 // src/pages/RevenuePage.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import api from "../api/client";
-import { fetchRevenueSummary } from "../api/reports";
-import type {
-  RevenueSummary,
-  RevenueUserStat,
-  RevenueProductStat,
-} from "../types";
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  PieChart,
+  Pie,
+  Cell,
+  Legend,
+} from "recharts";
 
-type SelectedUser = {
-  id: string;
-  type: "sale" | "tech";
-  username: string;
+type StaffRole = "SALE" | "TECH";
+type GroupBy = "day" | "week" | "month";
+type StaffMoneyMode = "GROSS" | "NET";
+
+type Me = { id: string; username?: string; role?: string };
+
+// ✅ staff row: hỗ trợ cả NET/GROSS collected
+// ⚠️ IMPORTANT FIX:
+// - NET mode phải ưu tiên dùng `revenue` (BE đã map = personalRevenue = collected_net + bonus_hold_net)
+//   => mới ra đúng 75tr (không VAT) khi đã thu đủ cả phần BH treo.
+// - `collectedNormal` chỉ là NET của phần NORMAL (chưa gồm BH treo) nên không dùng làm “doanh thu (chưa VAT)”.
+type StaffRow = {
+  userId: string;
+  name: string;
+
+  // ✅ revenue theo API = personalRevenue (NET, đã gồm bonus BH treo khi đủ điều kiện)
+  revenue: number;
+
+  // ✅ nếu BE có trả (đối soát)
+  collectedNormal?: number; // NET collected NORMAL (chưa gồm BH treo)
+  collectedGross?: number; // GROSS collected NORMAL (có VAT nếu invoice có VAT)
+
+  cogs: number;
+  profit: number;
+  marginPct: number;
 };
 
-type InvoiceListItem = {
-  id: string | number;
-  code: string;
-  issueDate: string;
-  total: number;
-  partnerName?: string;
-  saleUserId?: string;
-  techUserId?: string;
-  paymentStatus?: "UNPAID" | "PARTIAL" | "PAID";
-  posted?: boolean;
-};
-
-type SimpleUser = {
-  id: string;
-  username: string;
-};
-
-// ===== Helpers dùng chung =====
-function getCurrentMonthRange() {
-  const now = new Date();
-  const from = new Date(now.getFullYear(), now.getMonth(), 1);
-  const to = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  const fromStr = from.toISOString().slice(0, 10);
-  const toStr = to.toISOString().slice(0, 10);
-  return { fromStr, toStr };
-}
-
-function formatCurrencyVND(value: number) {
-  return value.toLocaleString("vi-VN", {
-    style: "currency",
-    currency: "VND",
-  });
-}
-
-function formatDate(dateStr: string) {
-  if (!dateStr) return "";
-  const d = new Date(dateStr);
-  if (Number.isNaN(d.getTime())) return dateStr;
-  return d.toLocaleDateString("vi-VN");
-}
-
-const RevenuePage: React.FC = () => {
-  const { fromStr: defaultFrom, toStr: defaultTo } = useMemo(
-    () => getCurrentMonthRange(),
-    []
-  );
-
-  const [from, setFrom] = useState(defaultFrom);
-  const [to, setTo] = useState(defaultTo);
-
-  const [data, setData] = useState<RevenueSummary | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const [selectedUser, setSelectedUser] = useState<SelectedUser | null>(null);
-  const [userInvoices, setUserInvoices] = useState<InvoiceListItem[]>([]);
-  const [loadingUserInvoices, setLoadingUserInvoices] = useState(false);
-
-  const [users, setUsers] = useState<SimpleUser[]>([]);
-
-  const getUsernameById = (id?: string) => {
-    if (!id) return "-";
-    const u = users.find((x) => x.id === id);
-    return u?.username || "-";
+type RevenueResp = {
+  kpis: {
+    netRevenue: number; // doanh thu thuần (không VAT) theo API
+    grossProfit: number;
+    marginPct: number;
+    orderCount: number;
+    netVat?: number;
+    netTotal?: number;
+    netCollected?: number;
+    netCogs?: number;
   };
+  trend: Array<{ date: string; revenue: number; cogs: number; profit: number }>;
+  byProduct: Array<{
+    itemId: string;
+    name: string;
+    revenue: number;
+    cogs: number;
+    profit: number;
+    marginPct: number;
+  }>;
+  byStaff?: {
+    sale: StaffRow[];
+    tech: StaffRow[];
+  };
+};
 
-  // ===== Load summary =====
-  const loadSummary = async () => {
+type AccountOpt = { id: string; code: string; name: string };
+
+function fmtVnd(n: number) {
+  const x = Number.isFinite(n) ? n : 0;
+  // ✅ FIX: làm tròn để tránh số lẻ kiểu 27,777,777.777...
+  return Math.round(x).toLocaleString("vi-VN") + " đ";
+}
+function fmtPct(n: number) {
+  const x = Number.isFinite(n) ? n : 0;
+  return x.toFixed(1) + "%";
+}
+function toYmd(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function shortDateLabel(iso: string) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}/${mm}`;
+}
+
+const COLORS = ["#3b82f6", "#f59e0b", "#22c55e", "#8b5cf6", "#06b6d4", "#ef4444", "#64748b"];
+
+function pillStyle(active: boolean): React.CSSProperties {
+  return {
+    padding: "7px 12px",
+    borderRadius: 999,
+    border: active ? "1px solid #2563eb" : "1px solid #e2e8f0",
+    background: active ? "#2563eb" : "#fff",
+    color: active ? "#fff" : "#0f172a",
+    fontWeight: 700,
+    fontSize: 12,
+    cursor: "pointer",
+    userSelect: "none",
+    whiteSpace: "nowrap",
+  };
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  page: { padding: 16, background: "#f5f7fb", minHeight: "100vh" },
+  container: { maxWidth: 1200, margin: "0 auto" },
+
+  filterBar: {
+    display: "grid",
+    gridTemplateColumns: "1.2fr 1fr 1fr 150px",
+    gap: 12,
+    background: "#fff",
+    border: "1px solid #e6eaf2",
+    borderRadius: 10,
+    padding: 12,
+    alignItems: "center",
+  },
+  filterBlock: { display: "flex", gap: 8, alignItems: "center" },
+  label: { fontSize: 12, color: "#64748b", minWidth: 88 },
+  input: {
+    height: 36,
+    borderRadius: 8,
+    border: "1px solid #e2e8f0",
+    padding: "0 10px",
+    background: "#fff",
+    width: "100%",
+    outline: "none",
+  },
+  select: {
+    height: 36,
+    borderRadius: 8,
+    border: "1px solid #e2e8f0",
+    padding: "0 10px",
+    background: "#fff",
+    width: "100%",
+    outline: "none",
+  },
+  btn: {
+    height: 36,
+    borderRadius: 8,
+    border: "1px solid #2563eb",
+    background: "#2563eb",
+    color: "#fff",
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+
+  cards: {
+    display: "grid",
+    gridTemplateColumns: "repeat(5, 1fr)",
+    gap: 12,
+    marginTop: 12,
+  },
+  card: {
+    background: "#fff",
+    border: "1px solid #e6eaf2",
+    borderRadius: 10,
+    padding: 14,
+  },
+  cardTitle: { fontSize: 13, color: "#0f172a", fontWeight: 700 },
+  cardValue: { fontSize: 22, fontWeight: 800, marginTop: 6 },
+  cardSub: { fontSize: 12, color: "#64748b", marginTop: 6 },
+
+  panel: {
+    background: "#fff",
+    border: "1px solid #e6eaf2",
+    borderRadius: 10,
+    padding: 14,
+    marginTop: 12,
+  },
+  panelTitle: { fontSize: 14, fontWeight: 800, color: "#0f172a" },
+  toggleWrap: { display: "flex", gap: 10, marginTop: 10 },
+
+  grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 },
+
+  table: { width: "100%", borderCollapse: "collapse", marginTop: 10 },
+  th: {
+    textAlign: "left",
+    fontSize: 12,
+    color: "#64748b",
+    borderBottom: "1px solid #e6eaf2",
+    padding: "10px 8px",
+  },
+  td: { borderBottom: "1px solid #eef2f7", padding: "10px 8px", fontSize: 13, color: "#0f172a" },
+
+  right: { textAlign: "right" },
+  green: { color: "#16a34a", fontWeight: 800 },
+  red: { color: "#dc2626", fontWeight: 800 },
+  muted: { color: "#64748b" },
+  notice: {
+    marginTop: 10,
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: "1px solid #fde68a",
+    background: "#fffbeb",
+    color: "#92400e",
+    fontSize: 13,
+    fontWeight: 600,
+  },
+};
+
+export default function RevenuePage() {
+  const now = new Date();
+  const first = new Date(now.getFullYear(), now.getMonth(), 1);
+  const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+  const [me, setMe] = useState<Me | null>(null);
+
+  const [from, setFrom] = useState<string>(toYmd(first));
+  const [to, setTo] = useState<string>(toYmd(last));
+
+  const [staffRole, setStaffRole] = useState<StaffRole>("SALE");
+  const [staffUserId, setStaffUserId] = useState<string>("");
+
+  const [receiveAccountId, setReceiveAccountId] = useState<string>("");
+  const [groupBy, setGroupBy] = useState<GroupBy>("day");
+  const [metric, setMetric] = useState<"revenue" | "profit">("revenue");
+
+  // ✅ NET mặc định (doanh số không tính VAT)
+  const [staffMoneyMode, setStaffMoneyMode] = useState<StaffMoneyMode>("NET");
+
+  const [accounts, setAccounts] = useState<AccountOpt[]>([]);
+  const [data, setData] = useState<RevenueResp | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const roleNorm = String(me?.role || "").toLowerCase();
+  const isStaff = roleNorm === "staff";
+
+  async function loadMe() {
     try {
-      setLoading(true);
-      setError(null);
-      const summary = await fetchRevenueSummary({ from, to });
-      setData(summary);
-    } catch (err: any) {
-      console.error(err);
-      setError(err?.message || "Lỗi tải dữ liệu");
+      const res = await api.get("/auth/me", { params: { t: Date.now() } });
+      const u = (res as any)?.data;
+      const next: Me = {
+        id: String(u?.id || ""),
+        username: u?.username,
+        role: u?.role,
+      };
+      if (next.id) setMe(next);
+    } catch (e) {
+      console.error("loadMe error", e);
+      setMe(null);
+    }
+  }
+
+  async function loadAccounts() {
+    try {
+      const res = await api.get("/payment-accounts", { params: { active: 1 } });
+      const body = (res as any)?.data;
+      const raw = body?.data?.items ?? body?.items ?? body?.data ?? body;
+      const rows = Array.isArray(raw) ? raw : [];
+      setAccounts(
+        rows
+          .map((r: any) => ({ id: String(r.id), code: String(r.code || ""), name: String(r.name || "") }))
+          .filter((x: any) => x.id && x.code)
+      );
+    } catch (e) {
+      console.error("loadAccounts error", e);
+      setAccounts([]);
+    }
+  }
+
+  async function loadDashboard(override?: Partial<{ staffRole: StaffRole; staffUserId: string }>) {
+    setLoading(true);
+    try {
+      const forcedStaffUserId = override?.staffUserId ?? staffUserId;
+      const forcedStaffRole = override?.staffRole ?? staffRole;
+
+      const finalStaffUserId = isStaff ? (me?.id || "") : forcedStaffUserId;
+      const finalStaffRoleParam = finalStaffUserId ? forcedStaffRole : undefined;
+
+      const res = await api.get("/revenue/dashboard", {
+        params: {
+          from,
+          to,
+          groupBy,
+          staffRole: finalStaffRoleParam,
+          staffUserId: finalStaffUserId || undefined,
+          receiveAccountId: receiveAccountId || undefined,
+        },
+      });
+      setData((res as any).data);
     } finally {
       setLoading(false);
     }
-  };
-
-  // ===== Load users (để map id -> username) =====
-  const loadUsers = async () => {
-    try {
-      const res = await api.get("/users", {
-        params: { page: 1, pageSize: 200 },
-      });
-      const body = (res as any).data || {};
-      const items: any[] = body.items || body.data || [];
-      const mapped: SimpleUser[] = items.map((u) => ({
-        id: String(u.id),
-        username: u.username || (u as any).fullName || "",
-      }));
-      setUsers(mapped);
-    } catch (err) {
-      console.error("load users error", err);
-    }
-  };
+  }
 
   useEffect(() => {
-    loadSummary();
-    loadUsers();
+    (async () => {
+      await loadMe();
+      await loadAccounts();
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleApplyRange = () => {
-    loadSummary();
-    setSelectedUser(null);
-    setUserInvoices([]);
-  };
-
-  // ===== Load invoices theo nhân viên (sale/tech) =====
-  const loadUserInvoices = async (u: SelectedUser) => {
-    try {
-      setLoadingUserInvoices(true);
-      const params: any = {
-        page: 1,
-        pageSize: 100,
-        type: "SALES",
-        from,
-        to,
-        // ✅ Chỉ lấy hóa đơn đã thanh toán đủ
-        paymentStatus: "PAID",
-      };
-      if (u.type === "sale") {
-        params.saleUserId = u.id;
-      } else {
-        params.techUserId = u.id;
-      }
-
-      const res = await api.get("/invoices", { params });
-      const payload = res.data;
-
-      const rawList: InvoiceListItem[] = (payload.data || []).map(
-        (inv: any) => {
-          const total =
-            typeof inv.total === "number"
-              ? inv.total
-              : Number(inv.total || 0);
-
-          // posted: nếu BE trả về movements hoặc cờ posted thì map sang
-          const posted =
-            Array.isArray(inv.movements) && inv.movements.length > 0
-              ? true
-              : (inv as any).posted ?? undefined;
-
-          return {
-            id: inv.id,
-            code: inv.code,
-            issueDate: inv.issueDate,
-            total,
-            partnerName: inv.partner?.name ?? inv.partnerName,
-            saleUserId: inv.saleUserId ?? undefined,
-            techUserId: inv.techUserId ?? undefined,
-            paymentStatus: inv.paymentStatus,
-            posted,
-          };
-        }
-      );
-
-      // ✅ Nếu có thông tin posted thì chỉ giữ những hóa đơn đã lưu tồn
-      const hasPostedFlag = rawList.some(
-        (inv) => typeof inv.posted === "boolean"
-      );
-      const filtered = hasPostedFlag
-        ? rawList.filter((inv) => inv.posted)
-        : rawList;
-
-      setUserInvoices(filtered);
-    } catch (err) {
-      console.error(err);
-      setUserInvoices([]);
-    } finally {
-      setLoadingUserInvoices(false);
+  useEffect(() => {
+    if (isStaff && me?.id) {
+      setStaffUserId(me.id);
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?.id, isStaff]);
 
-  const handleSelectUser = (stat: RevenueUserStat, type: "sale" | "tech") => {
-    const u: SelectedUser = {
-      id: stat.userId,
-      type,
-      username: stat.username,
+  useEffect(() => {
+    if (isStaff && !me?.id) return;
+    loadDashboard({ staffRole, staffUserId: isStaff ? (me?.id || "") : staffUserId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?.id]);
+
+  const staffOptions = useMemo(() => {
+    const s = data?.byStaff?.sale ?? [];
+    const t = data?.byStaff?.tech ?? [];
+    return {
+      SALE: s.map((x) => ({ id: x.userId, name: x.name })),
+      TECH: t.map((x) => ({ id: x.userId, name: x.name })),
     };
-    setSelectedUser(u);
-    loadUserInvoices(u);
-  };
+  }, [data]);
 
-  // ===== Render helpers =====
-  const renderUserTable = (
-    title: string,
-    rows: RevenueUserStat[],
-    type: "sale" | "tech"
-  ) => {
-    return (
-      <section className="bg-white shadow-sm rounded-md p-4">
-        <h3 className="font-semibold mb-1">{title}</h3>
-        <p className="text-xs text-gray-500 mb-2">
-          Click vào dòng nhân viên để xem lịch sử hóa đơn trong khoảng thời
-          gian trên (chỉ tính hóa đơn đã thanh toán đủ và đã lưu tồn).
-        </p>
-        {rows.length === 0 ? (
-          <p className="text-sm text-gray-600">Không có dữ liệu.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm border border-gray-200">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="px-2 py-1 border border-gray-200 text-left text-xs font-semibold">
-                    STT
-                  </th>
-                  <th className="px-2 py-1 border border-gray-200 text-left text-xs font-semibold">
-                    Username
-                  </th>
-                  <th className="px-2 py-1 border border-gray-200 text-right text-xs font-semibold">
-                    Số hóa đơn
-                  </th>
-                  <th className="px-2 py-1 border border-gray-200 text-right text-xs font-semibold">
-                    Doanh thu
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((u, idx) => {
-                  const isActive =
-                    selectedUser &&
-                    selectedUser.id === u.userId &&
-                    selectedUser.type === type;
-                  return (
-                    <tr
-                      key={u.userId}
-                      className={
-                        "cursor-pointer hover:bg-blue-50" +
-                        (isActive ? " bg-blue-100" : "")
-                      }
-                      onClick={() => handleSelectUser(u, type)}
-                    >
-                      <td className="px-2 py-1 border border-gray-200">
-                        {idx + 1}
-                      </td>
-                      <td className="px-2 py-1 border border-gray-200">
-                        {u.username}
-                      </td>
-                      <td className="px-2 py-1 border border-gray-200 text-right">
-                        {u.invoiceCount}
-                      </td>
-                      <td className="px-2 py-1 border border-gray-200 text-right">
-                        {formatCurrencyVND(u.totalRevenue)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-    );
-  };
+  const lineData = useMemo(() => {
+    return (data?.trend ?? []).map((p) => ({ ...p, label: shortDateLabel(p.date) }));
+  }, [data]);
 
-  const renderTopProducts = (rows: RevenueProductStat[]) => {
-    return (
-      <section className="bg-white shadow-sm rounded-md p-4">
-        <h3 className="font-semibold mb-2">
-          Top 10 sản phẩm theo doanh thu (không VAT)
-        </h3>
-        {rows.length === 0 ? (
-          <p className="text-sm text-gray-600">Không có dữ liệu.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm border border-gray-200">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="px-2 py-1 border border-gray-200 text-left text-xs font-semibold">
-                    STT
-                  </th>
-                  <th className="px-2 py-1 border border-gray-200 text-left text-xs font-semibold">
-                    Mã SP
-                  </th>
-                  <th className="px-2 py-1 border border-gray-200 text-left text-xs font-semibold">
-                    Tên sản phẩm
-                  </th>
-                  <th className="px-2 py-1 border border-gray-200 text-right text-xs font-semibold">
-                    Số lượng
-                  </th>
-                  <th className="px-2 py-1 border border-gray-200 text-right text-xs font-semibold">
-                    Doanh thu
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((p, idx) => (
-                  <tr key={p.itemId}>
-                    <td className="px-2 py-1 border border-gray-200">
-                      {idx + 1}
-                    </td>
-                    <td className="px-2 py-1 border border-gray-200">
-                      {p.sku || "-"}
-                    </td>
-                    <td className="px-2 py-1 border border-gray-200">
-                      {p.name || "-"}
-                    </td>
-                    <td className="px-2 py-1 border border-gray-200 text-right">
-                      {p.qty}
-                    </td>
-                    <td className="px-2 py-1 border border-gray-200 text-right">
-                      {formatCurrencyVND(p.revenue)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-    );
-  };
+  const pieProduct = useMemo(() => {
+    const rows = (data?.byProduct ?? []).slice(0, 6);
+    const other = (data?.byProduct ?? []).slice(6);
+    const otherSum = other.reduce((s, r) => s + (r.revenue || 0), 0);
+    const out = rows.map((r) => ({ name: r.name, value: r.revenue }));
+    if (otherSum > 0) out.push({ name: "Khác", value: otherSum });
+    return out;
+  }, [data]);
 
-  // ======= RENDER =======
+  // ✅ FIX CHÍNH:
+  // - NET: dùng `revenue` (đã gồm bonus BH treo => ra đúng 75tr khi thu đủ)
+  // - GROSS: ưu tiên dùng `collectedGross` (đối soát), fallback `revenue` nếu thiếu
+  function staffValue(r: StaffRow) {
+    if (staffMoneyMode === "GROSS") return Number(r.collectedGross ?? r.revenue ?? 0);
+    return Number(r.revenue ?? 0);
+  }
+
+  const pieStaff = useMemo(() => {
+    const rows = staffRole === "SALE" ? data?.byStaff?.sale ?? [] : data?.byStaff?.tech ?? [];
+    const top = rows.slice(0, 6);
+    const other = rows.slice(6);
+    const otherSum = other.reduce((s, r) => s + staffValue(r), 0);
+
+    const out = top.map((r) => ({ name: r.name, value: staffValue(r) }));
+    if (otherSum > 0) out.push({ name: "Khác", value: otherSum });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, staffRole, staffMoneyMode]);
+
+  const staffName = me?.username || "Tôi";
+
+  // Tooltip label Việt hoá + đúng nghĩa:
+  const staffPieTooltipLabel = staffMoneyMode === "GROSS" ? "Đã thu (gồm VAT)" : "Doanh thu (chưa VAT)";
+
   return (
-    <div className="p-4 space-y-6">
-      <h2 className="text-lg font-semibold mb-2">Thống kê doanh thu</h2>
-
-      {/* Bộ lọc thời gian */}
-      <section className="bg-white shadow-sm rounded-md p-4 flex flex-wrap items-end gap-4">
-        <div>
-          <label className="block text-xs font-semibold mb-1">Từ ngày</label>
-          <input
-            type="date"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-            className="border rounded px-2 py-1 text-sm"
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-semibold mb-1">Đến ngày</label>
-          <input
-            type="date"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-            className="border rounded px-2 py-1 text-sm"
-          />
-        </div>
-        <button
-          onClick={handleApplyRange}
-          disabled={loading}
-          className="px-3 py-1 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
-        >
-          Áp dụng
-        </button>
-        {loading && (
-          <span className="text-xs text-gray-500">Đang tải dữ liệu...</span>
-        )}
-        {error && (
-          <span className="text-xs text-red-500 ml-auto">{error}</span>
-        )}
-      </section>
-
-      {data && !loading && (
-        <>
-          {/* Tổng quan */}
-          <section className="grid gap-4 md:grid-cols-3">
-            <div className="bg-white shadow-sm rounded-md p-4">
-              <div className="text-xs text-gray-500 mb-1">Khoảng thời gian</div>
-              <div className="font-semibold text-sm">
-                {formatDate(data.from)} - {formatDate(data.to)}
-              </div>
+    <div style={styles.page}>
+      <div style={styles.container}>
+        {/* FILTER BAR */}
+        <div style={styles.filterBar}>
+          <div style={styles.filterBlock}>
+            <div style={styles.label}>Khoảng ngày</div>
+            <div style={{ display: "flex", gap: 8, width: "100%" }}>
+              <input style={styles.input} type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+              <input style={styles.input} type="date" value={to} onChange={(e) => setTo(e.target.value)} />
             </div>
-            <div className="bg-white shadow-sm rounded-md p-4">
-              <div className="text-xs text-gray-500 mb-1">
-                Tổng doanh thu (chỉ hóa đơn đã thanh toán, không VAT)
+          </div>
+
+          <div style={styles.filterBlock}>
+            <div style={styles.label}>{staffRole === "SALE" ? "Sales" : "Kỹ thuật"}</div>
+
+            {isStaff ? (
+              <div style={{ display: "flex", gap: 8, width: "100%" }}>
+                <select
+                  style={styles.select}
+                  value={staffRole}
+                  onChange={(e) => {
+                    const nextRole = e.target.value as StaffRole;
+                    setStaffRole(nextRole);
+                    if (me?.id) setStaffUserId(me.id);
+                  }}
+                >
+                  <option value="SALE">Sales</option>
+                  <option value="TECH">Kỹ thuật</option>
+                </select>
+
+                <input style={{ ...styles.input }} value={staffName} readOnly />
               </div>
-              <div className="font-semibold text-green-700">
-                {(data as any).totalPaid != null
-                  ? formatCurrencyVND((data as any).totalPaid)
-                  : formatCurrencyVND(data.totalRevenue)}
-              </div>
-            </div>
-            <div className="bg-white shadow-sm rounded-md p-4">
-              <div className="text-xs text-gray-500 mb-1">Số hóa đơn</div>
-              <div className="font-semibold text-sm">{data.invoiceCount}</div>
-            </div>
-          </section>
-
-          {/* Bảng theo nhân viên */}
-          <section className="grid gap-4 lg:grid-cols-2">
-            {renderUserTable(
-              "Doanh thu theo nhân viên SALE",
-              data.bySaleUser,
-              "sale"
-            )}
-            {renderUserTable(
-              "Doanh thu theo nhân viên KỸ THUẬT",
-              data.byTechUser,
-              "tech"
-            )}
-          </section>
-
-          {/* Top sản phẩm */}
-          {renderTopProducts(data.topProducts)}
-
-          {/* Lịch sử hóa đơn của nhân viên được chọn */}
-          <section className="bg-white shadow-sm rounded-md p-4">
-            <h3 className="font-semibold mb-2">
-              Lịch sử hóa đơn của{" "}
-              {selectedUser
-                ? `${selectedUser.username} (${selectedUser.type.toUpperCase()})`
-                : "nhân viên (nhấn chọn ở bảng trên)"}
-            </h3>
-
-            {loadingUserInvoices ? (
-              <p className="text-sm text-gray-600">Đang tải hóa đơn...</p>
-            ) : !selectedUser ? (
-              <p className="text-sm text-gray-600">Chưa chọn nhân viên.</p>
-            ) : userInvoices.length === 0 ? (
-              <p className="text-sm text-gray-600">
-                Không có hóa đơn trong khoảng thời gian này.
-              </p>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm border border-gray-200">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="px-2 py-1 border border-gray-200 text-left text-xs font-semibold">
-                        Mã HĐ
-                      </th>
-                      <th className="px-2 py-1 border border-gray-200 text-left text-xs font-semibold">
-                        Ngày
-                      </th>
-                      <th className="px-2 py-1 border border-gray-200 text-left text-xs font-semibold">
-                        Khách hàng
-                      </th>
-                      <th className="px-2 py-1 border border-gray-200 text-left text-xs font-semibold">
-                        Nhân viên sale
-                      </th>
-                      <th className="px-2 py-1 border border-gray-200 text-left text-xs font-semibold">
-                        Nhân viên kỹ thuật
-                      </th>
-                      <th className="px-2 py-1 border border-gray-200 text-right text-xs font-semibold">
-                        Doanh thu (không VAT)
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {userInvoices.map((inv) => (
-                      <tr key={inv.id}>
-                        <td className="px-2 py-1 border border-gray-200">
-                          {inv.code}
-                        </td>
-                        <td className="px-2 py-1 border border-gray-200">
-                          {formatDate(inv.issueDate)}
-                        </td>
-                        <td className="px-2 py-1 border border-gray-200">
-                          {inv.partnerName || "-"}
-                        </td>
-                        <td className="px-2 py-1 border border-gray-200">
-                          {getUsernameById(inv.saleUserId)}
-                        </td>
-                        <td className="px-2 py-1 border border-gray-200">
-                          {getUsernameById(inv.techUserId)}
-                        </td>
-                        <td className="px-2 py-1 border border-gray-200 text-right">
-                          {formatCurrencyVND(inv.total)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div style={{ display: "flex", gap: 8, width: "100%" }}>
+                <select
+                  style={styles.select}
+                  value={staffRole}
+                  onChange={(e) => {
+                    setStaffRole(e.target.value as StaffRole);
+                    setStaffUserId("");
+                  }}
+                >
+                  <option value="SALE">Sales</option>
+                  <option value="TECH">Kỹ thuật</option>
+                </select>
+
+                <select style={styles.select} value={staffUserId} onChange={(e) => setStaffUserId(e.target.value)}>
+                  <option value="">Tất cả</option>
+                  {(staffRole === "SALE" ? staffOptions.SALE : staffOptions.TECH).map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.name}
+                    </option>
+                  ))}
+                </select>
               </div>
             )}
-          </section>
-        </>
-      )}
+          </div>
+
+          <div style={styles.filterBlock}>
+            <div style={styles.label}>Tài khoản</div>
+            <select style={styles.select} value={receiveAccountId} onChange={(e) => setReceiveAccountId(e.target.value)}>
+              <option value="">Tất cả</option>
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.code} - {a.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            style={styles.btn}
+            onClick={() => loadDashboard({ staffRole, staffUserId: isStaff ? (me?.id || "") : staffUserId })}
+            disabled={loading || (isStaff && !me?.id)}
+            title={isStaff && !me?.id ? "Chưa tải được thông tin user" : ""}
+          >
+            {loading ? "Đang tải..." : "Áp dụng"}
+          </button>
+        </div>
+
+        {isStaff && (
+          <div style={styles.notice}>
+            Bạn đang đăng nhập <b>STAFF</b> nên chỉ xem được doanh thu của <b>{staffName}</b>.
+          </div>
+        )}
+
+        {/* KPI CARDS */}
+        <div style={styles.cards}>
+          <div style={styles.card}>
+            <div style={styles.cardTitle}>Doanh thu thuần (chưa VAT)</div>
+            <div style={{ ...styles.cardValue, color: "#16a34a" }}>{fmtVnd(data?.kpis?.netRevenue ?? 0)}</div>
+            <div style={styles.cardSub}>SALES (+) • SALES_RETURN (-)</div>
+          </div>
+
+          <div style={styles.card}>
+            <div style={styles.cardTitle}>Lợi nhuận gộp</div>
+            <div style={{ ...styles.cardValue, color: "#dc2626" }}>{fmtVnd(data?.kpis?.grossProfit ?? 0)}</div>
+            <div style={styles.cardSub}>COGS theo MovementLine</div>
+          </div>
+
+          <div style={styles.card}>
+            <div style={styles.cardTitle}>Biên lợi nhuận</div>
+            <div style={{ ...styles.cardValue, color: "#16a34a" }}>{fmtPct(data?.kpis?.marginPct ?? 0)}</div>
+            <div style={styles.cardSub}>Gross Profit / Net Revenue</div>
+          </div>
+
+          <div style={styles.card}>
+            <div style={styles.cardTitle}>Số đơn hàng</div>
+            <div style={{ ...styles.cardValue, color: "#0f172a" }}>
+              {(data?.kpis?.orderCount ?? 0).toLocaleString("vi-VN")} đơn
+            </div>
+            <div style={styles.cardSub}>Đã duyệt (APPROVED)</div>
+          </div>
+
+          <div style={styles.card}>
+            <div style={styles.cardTitle}>Thuế (VAT)</div>
+            <div style={{ ...styles.cardValue, color: "#0f172a" }}>{fmtVnd(data?.kpis?.netVat ?? 0)}</div>
+            <div style={styles.cardSub}>Không cộng vào doanh thu</div>
+          </div>
+        </div>
+
+        {/* LINE CHART */}
+        <div style={styles.panel}>
+          <div style={styles.panelTitle}>Doanh thu &amp; Lợi nhuận</div>
+
+          <div style={styles.toggleWrap}>
+            <div style={pillStyle(metric === "revenue")} onClick={() => setMetric("revenue")}>
+              ✓ Doanh thu
+            </div>
+            <div style={pillStyle(metric === "profit")} onClick={() => setMetric("profit")}>
+              ✓ Lợi nhuận
+            </div>
+
+            <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+              <span style={styles.muted}>Nhóm</span>
+              <select
+                style={{ ...styles.select, width: 140 }}
+                value={groupBy}
+                onChange={(e) => setGroupBy(e.target.value as GroupBy)}
+              >
+                <option value="day">Ngày</option>
+                <option value="week">Tuần</option>
+                <option value="month">Tháng</option>
+              </select>
+              <button
+                style={{ ...styles.btn, width: 110 }}
+                onClick={() => loadDashboard({ staffRole, staffUserId: isStaff ? (me?.id || "") : staffUserId })}
+                disabled={loading || (isStaff && !me?.id)}
+              >
+                Làm mới
+              </button>
+            </div>
+          </div>
+
+          <div style={{ height: 320, marginTop: 8 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={lineData}>
+                <XAxis dataKey="label" />
+                <YAxis tickFormatter={(v) => `${Math.round(Number(v) / 1_000_000)}M`} />
+                <Tooltip formatter={(value: any, name: any) => [fmtVnd(Number(value)), name]} />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="revenue"
+                  name="Doanh thu"
+                  stroke={metric === "revenue" ? "#2563eb" : "#93c5fd"}
+                  strokeWidth={metric === "revenue" ? 3 : 2}
+                  dot={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="profit"
+                  name="Lợi nhuận"
+                  stroke={metric === "profit" ? "#f97316" : "#fdba74"}
+                  strokeWidth={metric === "profit" ? 3 : 2}
+                  dot={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* PIE CHARTS */}
+        <div style={styles.grid2}>
+          <div style={styles.panel}>
+            <div style={styles.panelTitle}>Doanh thu theo sản phẩm</div>
+            <div style={{ height: 260, marginTop: 8 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={pieProduct} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={2}>
+                    {pieProduct.map((_, i) => (
+                      <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(v: any) => fmtVnd(Number(v))} />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {!isStaff ? (
+            <div style={styles.panel}>
+              <div style={styles.panelTitle}>Doanh thu theo nhân viên</div>
+
+              <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <div
+                  style={pillStyle(staffRole === "SALE")}
+                  onClick={() => {
+                    setStaffRole("SALE");
+                    setStaffUserId("");
+                  }}
+                >
+                  Sales
+                </div>
+                <div
+                  style={pillStyle(staffRole === "TECH")}
+                  onClick={() => {
+                    setStaffRole("TECH");
+                    setStaffUserId("");
+                  }}
+                >
+                  Kỹ thuật
+                </div>
+
+                {/* ✅ Toggle NET/GROSS (Việt hoá + ưu tiên NET) */}
+                <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={styles.muted}>Hiển thị</span>
+
+                  <div style={pillStyle(staffMoneyMode === "NET")} onClick={() => setStaffMoneyMode("NET")}>
+                    Doanh thu (chưa VAT)
+                  </div>
+
+                  <div style={pillStyle(staffMoneyMode === "GROSS")} onClick={() => setStaffMoneyMode("GROSS")}>
+                    Đã thu (gồm VAT)
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ height: 260, marginTop: 8 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={pieStaff} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={2}>
+                      {pieStaff.map((_, i) => (
+                        <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(v: any) => fmtVnd(Number(v))} labelFormatter={() => staffPieTooltipLabel} />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          ) : (
+            <div style={styles.panel}>
+              <div style={styles.panelTitle}>Doanh thu của tôi</div>
+              <div style={{ marginTop: 8, color: "#64748b", fontSize: 13 }}>
+                Bạn chỉ xem được dữ liệu của <b>{staffName}</b>. (Admin/Accountant sẽ thấy biểu đồ theo nhiều nhân viên.)
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* TABLE */}
+        <div style={styles.panel}>
+          <div style={styles.panelTitle}>Top sản phẩm bán chạy</div>
+
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>Sản phẩm</th>
+                <th style={{ ...styles.th, ...styles.right }}>Doanh thu</th>
+                <th style={{ ...styles.th, ...styles.right }}>Giá vốn</th>
+                <th style={{ ...styles.th, ...styles.right }}>Lợi nhuận gộp</th>
+                <th style={{ ...styles.th, ...styles.right }}>% Lợi nhuận</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(data?.byProduct ?? []).slice(0, 10).map((r) => (
+                <tr key={r.itemId}>
+                  <td style={styles.td}>
+                    <div style={{ fontWeight: 700 }}>{r.name}</div>
+                  </td>
+                  <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.revenue)}</td>
+                  <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.cogs)}</td>
+                  <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.profit)}</td>
+                  <td style={{ ...styles.td, ...styles.right, ...(r.marginPct >= 0 ? styles.green : styles.red) }}>
+                    {fmtPct(r.marginPct)}
+                  </td>
+                </tr>
+              ))}
+
+              {!loading && (data?.byProduct?.length ?? 0) === 0 && (
+                <tr>
+                  <td style={styles.td} colSpan={5}>
+                    <span style={styles.muted}>Không có dữ liệu trong khoảng thời gian này.</span>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
-};
-
-export default RevenuePage;
+}

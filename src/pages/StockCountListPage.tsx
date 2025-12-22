@@ -1,5 +1,5 @@
 // src/pages/StockCountListPage.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api, { extractList } from "../api/client";
 
@@ -22,6 +22,19 @@ type StockCount = {
 
 const PAGE_SIZE = 20;
 
+function getApiErrorMessage(err: any, fallback: string) {
+  return err?.response?.data?.message || err?.message || fallback;
+}
+
+function isPeriodLockMessage(msg: string) {
+  const s = String(msg || "").toLowerCase();
+  return (
+    (s.includes("kỳ sổ") && s.includes("khoá")) ||
+    s.includes("kỳ đã khoá") ||
+    s.includes("thuộc kỳ đã khoá")
+  );
+}
+
 const StockCountListPage: React.FC = () => {
   const navigate = useNavigate();
 
@@ -40,6 +53,10 @@ const StockCountListPage: React.FC = () => {
   const [newRefNo, setNewRefNo] = useState<string>("");
   const [includeZero, setIncludeZero] = useState<boolean>(false);
   const [creating, setCreating] = useState<boolean>(false);
+
+  // ✅ period lock banner (session-level)
+  const [createLocked, setCreateLocked] = useState<boolean>(false);
+  const [createLockedMsg, setCreateLockedMsg] = useState<string>("");
 
   // ---- Load danh sách kho ----
   useEffect(() => {
@@ -88,7 +105,9 @@ const StockCountListPage: React.FC = () => {
     fetchStockCounts();
   }, [locationId, status, q, page]);
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const totalPages = useMemo(() => {
+    return Math.max(1, Math.ceil(total / PAGE_SIZE));
+  }, [total]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -101,6 +120,11 @@ const StockCountListPage: React.FC = () => {
       alert("Vui lòng chọn kho để tạo phiếu kiểm kê.");
       return;
     }
+    if (createLocked) {
+      alert(createLockedMsg || "Kỳ sổ đã khoá, không thể tạo phiếu kiểm kê.");
+      return;
+    }
+
     try {
       setCreating(true);
       const res = await api.post("/stock-counts", {
@@ -116,7 +140,12 @@ const StockCountListPage: React.FC = () => {
       }
     } catch (err: any) {
       console.error("Failed to create stock count", err);
-      alert(err?.response?.data?.message || "Tạo phiếu kiểm kê thất bại");
+      const msg = getApiErrorMessage(err, "Tạo phiếu kiểm kê thất bại");
+      if (isPeriodLockMessage(msg)) {
+        setCreateLocked(true);
+        setCreateLockedMsg(msg);
+      }
+      alert(msg);
     } finally {
       setCreating(false);
     }
@@ -160,7 +189,28 @@ const StockCountListPage: React.FC = () => {
 
   return (
     <div style={{ padding: 16, maxWidth: 1200, margin: "0 auto" }}>
-      <h2 style={{ marginBottom: 16 }}>Kiểm tồn kho (Stock Count)</h2>
+      <h2 style={{ marginBottom: 12 }}>Kiểm tồn kho (Stock Count)</h2>
+
+      {/* ✅ Period lock banner (create) */}
+      {createLocked && (
+        <div
+          style={{
+            border: "1px solid #fed7d7",
+            backgroundColor: "#fff5f5",
+            color: "#c53030",
+            borderRadius: 6,
+            padding: "10px 12px",
+            marginBottom: 16,
+            fontSize: 13,
+            lineHeight: 1.4,
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>
+            ⛔ Kỳ sổ đã khoá — không thể tạo phiếu kiểm kê mới
+          </div>
+          <div>{createLockedMsg || "Bạn chỉ có thể xem danh sách phiếu."}</div>
+        </div>
+      )}
 
       {/* Filter & Search */}
       <form
@@ -268,6 +318,7 @@ const StockCountListPage: React.FC = () => {
               onChange={(e) => setNewRefNo(e.target.value)}
               placeholder="VD: KK-11-2025"
               style={{ minWidth: 200, padding: 6 }}
+              disabled={createLocked}
             />
           </div>
 
@@ -277,6 +328,7 @@ const StockCountListPage: React.FC = () => {
               type="checkbox"
               checked={includeZero}
               onChange={(e) => setIncludeZero(e.target.checked)}
+              disabled={createLocked}
             />
             <label htmlFor="includeZero" style={{ fontSize: 13 }}>
               Bao gồm cả hàng tồn = 0
@@ -285,16 +337,22 @@ const StockCountListPage: React.FC = () => {
 
           <button
             type="submit"
-            disabled={creating || !locationId}
+            disabled={creating || !locationId || createLocked}
             style={{
               padding: "6px 12px",
               borderRadius: 4,
               border: "1px solid #2f855a",
-              backgroundColor: creating ? "#9ae6b4" : "#38a169",
+              backgroundColor:
+                creating || createLocked ? "#9ae6b4" : "#38a169",
               color: "#fff",
-              cursor: creating ? "default" : "pointer",
+              cursor: creating || createLocked ? "default" : "pointer",
               minWidth: 160,
             }}
+            title={
+              createLocked
+                ? (createLockedMsg || "Kỳ sổ đã khoá")
+                : ""
+            }
           >
             {creating ? "Đang tạo..." : "Tạo phiếu kiểm kê"}
           </button>
@@ -302,7 +360,13 @@ const StockCountListPage: React.FC = () => {
       </form>
 
       {/* Table */}
-      <div style={{ border: "1px solid #e2e8f0", borderRadius: 6, overflow: "hidden" }}>
+      <div
+        style={{
+          border: "1px solid #e2e8f0",
+          borderRadius: 6,
+          overflow: "hidden",
+        }}
+      >
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead style={{ backgroundColor: "#f7fafc" }}>
             <tr>
