@@ -54,7 +54,6 @@ const App: React.FC = () => {
         <Route path="invoices" element={<InvoicesPage />} />
         <Route path="invoices/new" element={<InvoiceDetailPage />} />
         <Route path="invoices/:id" element={<InvoiceDetailPage />} />
-        <Route path="invoices/:id/print" element={<InvoicePrintPage />} />
 
         {/* returns */}
         <Route path="sales-returns" element={<SalesReturnsPage />} />
@@ -84,7 +83,7 @@ const App: React.FC = () => {
         <Route path="/me/sales" element={<MySalesDashboardPage />} />
         <Route path="audit-logs" element={<AuditLogsPage />} />
       </Route>
-
+      <Route path="invoices/:id/print" element={<InvoicePrintPage />} />
       <Route path="*" element={<div className="p-4">404 Not Found</div>} />
     </Routes>
   );
