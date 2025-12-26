@@ -24,9 +24,33 @@ type InvoiceOption = {
 
 type LineDraft = {
   itemId: string;
-  itemName: string; // input text for searching + display name
+  itemName: string;
   qty: number;
   price: number;
+};
+
+type RefInvoiceDetail = {
+  id: string;
+  code?: string;
+  issueDate?: string;
+  partnerName?: string;
+
+  // tổng của HĐ gốc (thường là GROSS)
+  total?: number;
+
+  // VAT data (nếu API có trả)
+  taxPercent?: number;
+  tax?: number;
+
+  lines?: Array<{
+    id?: string;
+    itemId: string;
+    itemName?: string | null;
+    itemSku?: string | null;
+    qty: any;
+    price: any;
+    amount?: any;
+  }>;
 };
 
 function unwrap<T = any>(res: any): T {
@@ -102,10 +126,22 @@ function ghostBtnStyle(): React.CSSProperties {
   return {
     padding: "10px 14px",
     borderRadius: 12,
-    border: "1px solid #E5E7EB",
+    border: "1px solid #D1D5DB",
     background: "#fff",
     color: "#111827",
     fontWeight: 800,
+    cursor: "pointer",
+  };
+}
+
+function dangerGhostBtnStyle(): React.CSSProperties {
+  return {
+    padding: "10px 14px",
+    borderRadius: 12,
+    border: "1px solid #FCA5A5",
+    background: "#fff",
+    color: "#991B1B",
+    fontWeight: 900,
     cursor: "pointer",
   };
 }
@@ -131,6 +167,19 @@ const styles: Record<string, React.CSSProperties> = {
   suggestItemMuted: { padding: "10px 12px", fontSize: 12, color: "#9ca3af" },
 };
 
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  padding: 12,
+  border: "1px solid #D1D5DB",
+  borderRadius: 12,
+  outline: "none",
+};
+
+const readOnlyInputStyle: React.CSSProperties = {
+  ...inputStyle,
+  background: "#F9FAFB",
+};
+
 const returnNoticeStyle: React.CSSProperties = {
   marginTop: 10,
   padding: "10px 12px",
@@ -142,6 +191,29 @@ const returnNoticeStyle: React.CSSProperties = {
   fontWeight: 700,
   lineHeight: 1.4,
 };
+
+const refBoxStyle: React.CSSProperties = {
+  marginTop: 12,
+  border: "1px solid #E5E7EB",
+  borderRadius: 14,
+  background: "#fff",
+  padding: 14,
+};
+
+function toNum(x: any) {
+  const n = Number(x ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function clampPct(x: any) {
+  const n = toNum(x);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, n));
+}
+
+function roundMoney(n: number) {
+  return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+}
 
 export default function SalesReturnFormPage() {
   const nav = useNavigate();
@@ -161,11 +233,18 @@ export default function SalesReturnFormPage() {
 
   // ✅ Hướng A: SALES_RETURN bắt buộc chọn HĐ gốc (SALES APPROVED)
   const [refInvoiceId, setRefInvoiceId] = useState<string>("");
-  const [refInvoiceLabel, setRefInvoiceLabel] = useState<string>(""); // hiển thị ngắn (CODE - KHÁCH)
+  const [refInvoiceLabel, setRefInvoiceLabel] = useState<string>("");
   const [refInvoiceQuery, setRefInvoiceQuery] = useState<string>("");
   const [refSuggestOpen, setRefSuggestOpen] = useState(false);
   const [refLoading, setRefLoading] = useState(false);
   const [refOptions, setRefOptions] = useState<InvoiceOption[]>([]);
+
+  // ✅ chi tiết hóa đơn gốc (để “Trả full”)
+  const [refDetail, setRefDetail] = useState<RefInvoiceDetail | null>(null);
+  const [loadingRefDetail, setLoadingRefDetail] = useState(false);
+
+  // ✅ VAT% của phiếu trả (mặc định lấy theo HĐ gốc)
+  const [taxPercent, setTaxPercent] = useState<number>(0);
 
   // snapshot (để hiển thị)
   const [partnerId, setPartnerId] = useState<string>("");
@@ -181,10 +260,46 @@ export default function SalesReturnFormPage() {
   const [openItemSuggestIndex, setOpenItemSuggestIndex] = useState<number | null>(null);
   const [lines, setLines] = useState<LineDraft[]>([]);
 
+  // subtotal = tổng dòng hàng (chưa VAT)
   const subtotal = useMemo(
     () => lines.reduce((s, l) => s + Number(l.qty || 0) * Number(l.price || 0), 0),
     [lines]
   );
+
+  const taxAmount = useMemo(() => {
+    const pct = clampPct(taxPercent);
+    return roundMoney((toNum(subtotal) * pct) / 100);
+  }, [subtotal, taxPercent]);
+
+  const grossTotal = useMemo(() => roundMoney(toNum(subtotal) + toNum(taxAmount)), [subtotal, taxAmount]);
+
+  const refSubtotal = useMemo(() => {
+    const ls = refDetail?.lines || [];
+    return ls.reduce((s, l) => s + toNum(l.qty) * toNum(l.price), 0);
+  }, [refDetail]);
+
+  const refTax = useMemo(() => {
+    // ưu tiên field tax nếu API có
+    if (refDetail?.tax != null) return Math.max(0, toNum(refDetail.tax));
+    // fallback: total - subtotal
+    const t = refDetail?.total != null ? toNum(refDetail.total) : 0;
+    const sub = toNum(refSubtotal);
+    return Math.max(0, roundMoney(t - sub));
+  }, [refDetail, refSubtotal]);
+
+  const refGross = useMemo(() => {
+    const t = refDetail?.total != null ? toNum(refDetail.total) : 0;
+    if (t > 0) return t;
+    return roundMoney(toNum(refSubtotal) + toNum(refTax));
+  }, [refDetail, refSubtotal, refTax]);
+
+  const refTaxPctDerived = useMemo(() => {
+    if (refDetail?.taxPercent != null) return clampPct(refDetail.taxPercent);
+    const sub = toNum(refSubtotal);
+    const tx = toNum(refTax);
+    if (sub <= 0 || tx <= 0) return 0;
+    return clampPct(roundMoney((tx / sub) * 100));
+  }, [refDetail, refSubtotal, refTax]);
 
   useEffect(() => {
     (async () => {
@@ -244,8 +359,6 @@ export default function SalesReturnFormPage() {
     const t = setTimeout(async () => {
       setRefLoading(true);
       try {
-        // ✅ kỳ vọng backend: GET /invoices hỗ trợ filter type/status + q
-        // Nếu BE của bạn đặt param khác, cứ sửa ở đây là xong.
         const res = await api.get("/invoices", {
           params: {
             q,
@@ -290,6 +403,75 @@ export default function SalesReturnFormPage() {
     };
   }, [refInvoiceQuery, refSuggestOpen, role]);
 
+  async function loadRefInvoiceDetail(invoiceId: string) {
+    if (!invoiceId) {
+      setRefDetail(null);
+      return;
+    }
+    setLoadingRefDetail(true);
+    try {
+      const r = await api.get(`/invoices/${invoiceId}`);
+      const inv = r.data?.data ?? r.data;
+
+      const detail: RefInvoiceDetail = {
+        id: String(inv?.id ?? invoiceId),
+        code: inv?.code ? String(inv.code) : undefined,
+        issueDate: inv?.issueDate ? String(inv.issueDate) : undefined,
+        partnerName: inv?.partnerName ? String(inv.partnerName) : undefined,
+        total: inv?.total != null ? Number(inv.total) : undefined,
+
+        // VAT fields (nếu BE trả)
+        taxPercent: inv?.taxPercent != null ? Number(inv.taxPercent) : undefined,
+        tax: inv?.tax != null ? Number(inv.tax) : undefined,
+
+        lines: Array.isArray(inv?.lines)
+          ? inv.lines.map((l: any) => ({
+              id: l.id ? String(l.id) : undefined,
+              itemId: String(l.itemId ?? ""),
+              itemName: l.itemName != null ? String(l.itemName) : null,
+              itemSku: l.itemSku != null ? String(l.itemSku) : null,
+              qty: l.qty,
+              price: l.price,
+              amount: l.amount,
+            }))
+          : [],
+      };
+
+      setRefDetail(detail);
+
+      // ✅ auto set VAT% theo hóa đơn gốc (nếu đang tạo phiếu mới hoặc đang chưa set)
+      const pctFromRef =
+        detail.taxPercent != null
+          ? clampPct(detail.taxPercent)
+          : (() => {
+              const sub = (detail.lines || []).reduce((s, l) => s + toNum(l.qty) * toNum(l.price), 0);
+              const tx =
+                detail.tax != null
+                  ? Math.max(0, toNum(detail.tax))
+                  : Math.max(0, roundMoney(toNum(detail.total) - toNum(sub)));
+              if (sub <= 0 || tx <= 0) return 0;
+              return clampPct(roundMoney((tx / sub) * 100));
+            })();
+
+      // chỉ tự động set nếu đang NEW hoặc taxPercent đang =0 (tránh overwrite khi user đang chỉnh)
+      setTaxPercent((cur) => {
+        const curN = clampPct(cur);
+        if (isNew || curN <= 0.0001) return pctFromRef;
+        return curN;
+      });
+    } catch (e: any) {
+      console.error("loadRefInvoiceDetail error", e);
+      setRefDetail(null);
+      toast.push({
+        type: "error",
+        title: "Lỗi",
+        message: e?.response?.data?.message || e?.message || "Không tải được chi tiết hóa đơn gốc (/invoices/:id).",
+      });
+    } finally {
+      setLoadingRefDetail(false);
+    }
+  }
+
   function clearRefInvoice() {
     setRefInvoiceId("");
     setRefInvoiceLabel("");
@@ -300,9 +482,14 @@ export default function SalesReturnFormPage() {
     setPartnerName("");
     setSaleUserName("");
     setTechUserName("");
+
+    setRefDetail(null);
+
+    // reset VAT% về 0 khi đổi HĐ gốc
+    setTaxPercent(0);
   }
 
-  function selectRefInvoice(opt: InvoiceOption) {
+  async function selectRefInvoice(opt: InvoiceOption) {
     setRefInvoiceId(opt.id);
 
     const label = `${opt.code}${opt.partnerName ? ` - ${opt.partnerName}` : ""}`;
@@ -315,6 +502,61 @@ export default function SalesReturnFormPage() {
 
     setSaleUserName(String(opt.saleUserName || ""));
     setTechUserName(String(opt.techUserName || ""));
+
+    await loadRefInvoiceDetail(opt.id);
+  }
+
+  // ✅ “Trả full”: copy toàn bộ lines từ hóa đơn gốc
+  function applyReturnFullFromRef() {
+    if (!refInvoiceId || !refDetail) {
+      toast.push({
+        type: "warning",
+        title: "Chưa chọn hóa đơn gốc",
+        message: "Hãy chọn Hóa đơn gốc (SALES đã duyệt) trước khi bấm “Trả full”.",
+      });
+      return;
+    }
+
+    const refLines = Array.isArray(refDetail.lines) ? refDetail.lines : [];
+    if (refLines.length === 0) {
+      toast.push({
+        type: "warning",
+        title: "Hóa đơn gốc không có hàng",
+        message: "Hóa đơn gốc không có dòng hàng để trả.",
+      });
+      return;
+    }
+
+    const newLines: LineDraft[] = refLines
+      .filter((l) => String(l.itemId || "").trim())
+      .map((l) => {
+        const displayName =
+          l.itemSku && l.itemName ? `${l.itemSku} - ${l.itemName}` : l.itemName || l.itemSku || l.itemId;
+
+        return {
+          itemId: String(l.itemId),
+          itemName: String(displayName || ""),
+          qty: Math.max(0, toNum(l.qty)),
+          price: Math.max(0, toNum(l.price)),
+        };
+      });
+
+    setLines(newLines.length ? newLines : [{ itemId: "", itemName: "", qty: 1, price: 0 }]);
+
+    // ✅ đảm bảo VAT% đang theo hóa đơn gốc
+    if (refTaxPctDerived > 0.0001) {
+      setTaxPercent((cur) => {
+        const curN = clampPct(cur);
+        if (curN <= 0.0001) return refTaxPctDerived;
+        return curN;
+      });
+    }
+
+    toast.push({
+      type: "success",
+      title: "Đã nạp hàng từ hóa đơn gốc",
+      message: "Bạn có thể chỉnh lại số lượng/giá trước khi Lưu/Gửi duyệt.",
+    });
   }
 
   // Load invoice if edit
@@ -344,18 +586,15 @@ export default function SalesReturnFormPage() {
         setCode(String(inv.code ?? ""));
         setIssueDate(inv.issueDate ? String(inv.issueDate).slice(0, 10) : new Date().toISOString().slice(0, 10));
 
-        // ✅ ref invoice
         const rid = String(inv.refInvoiceId ?? "");
         setRefInvoiceId(rid);
 
-        // label ưu tiên: nếu có refInvoice object -> lấy code/partnerName
         const refCode = String(inv.refInvoice?.code ?? "");
         const refPartner = String(inv.refInvoice?.partnerName ?? inv.partnerName ?? "");
         const label = refCode ? `${refCode}${refPartner ? ` - ${refPartner}` : ""}` : rid;
         setRefInvoiceLabel(label);
         setRefInvoiceQuery(label);
 
-        // snapshot partner + staff (để hiển thị)
         setPartnerId(String(inv.partnerId ?? ""));
         setPartnerName(String(inv.partnerName ?? ""));
 
@@ -363,6 +602,9 @@ export default function SalesReturnFormPage() {
         setTechUserName(String(inv.techUserName ?? inv.techUser?.username ?? inv.techUser?.name ?? ""));
 
         setNote(String(inv.note ?? ""));
+
+        // ✅ load VAT% của phiếu trả (nếu có)
+        setTaxPercent(inv.taxPercent != null ? clampPct(inv.taxPercent) : 0);
 
         const ls: LineDraft[] =
           (inv.lines ?? []).map((l: any) => ({
@@ -372,6 +614,13 @@ export default function SalesReturnFormPage() {
             price: Number(l.price ?? 0),
           })) || [];
         setLines(ls.length ? ls : [{ itemId: "", itemName: "", qty: 1, price: 0 }]);
+
+        // ✅ load ref detail để có nút “Trả full” và preview
+        if (rid) {
+          await loadRefInvoiceDetail(rid);
+        } else {
+          setRefDetail(null);
+        }
       } catch (e: any) {
         toast.push({
           type: "error",
@@ -414,13 +663,11 @@ export default function SalesReturnFormPage() {
       }))
       .filter((l) => l.itemId && l.qty > 0);
 
-    // ✅ Hướng A: bắt buộc refInvoiceId
     if (!refInvoiceId) {
       toast.push({ type: "warning", title: "Thiếu thông tin", message: "Vui lòng chọn Hóa đơn gốc (SALES đã duyệt)." });
       return;
     }
 
-    // partnerId cũng nên có (BE của mình bắt buộc cho SALES_RETURN)
     if (!partnerId) {
       toast.push({ type: "warning", title: "Thiếu thông tin", message: "Thiếu khách hàng của hóa đơn gốc (partnerId)." });
       return;
@@ -431,21 +678,21 @@ export default function SalesReturnFormPage() {
       return;
     }
 
+    const pct = clampPct(taxPercent);
+    const computedTax = roundMoney((toNum(subtotal) * pct) / 100);
+
     const body: any = {
       type: "SALES_RETURN",
       code: code.trim() || undefined,
       issueDate,
 
-      // ✅ NEW (A): link hóa đơn gốc để BE tự copy sale/tech
       refInvoiceId,
 
-      // ✅ partner là để Payment/Allocation về sau có partnerId + snapshot hiển thị
       partnerId,
       partnerName: partnerName.trim() || undefined,
 
       note: note || "",
 
-      // ✅ Hướng A: KHÔNG gửi saleUserId/techUserId nữa (BE sẽ copy theo refInvoiceId khi approve)
       saleUserId: null,
       techUserId: null,
 
@@ -456,11 +703,12 @@ export default function SalesReturnFormPage() {
         itemName: l.itemName,
       })),
 
-      // return: không tính VAT vào doanh thu
       paymentStatus: "UNPAID",
       paidAmount: 0,
-      tax: 0,
-      taxPercent: 0,
+
+      // ✅ FIX: trả hàng phải mang theo VAT% và VAT amount
+      taxPercent: pct,
+      tax: computedTax,
     };
 
     setLoading(true);
@@ -514,7 +762,7 @@ export default function SalesReturnFormPage() {
 
           <div style={returnNoticeStyle}>
             ⚠️ <b>Phiếu trả hàng</b> chỉ ghi nhận <b>hàng khách trả</b> và <b>nhập kho khi DUYỆT</b>.<br />
-            Việc <b>hoàn tiền</b> (nếu có) sẽ làm <b>riêng</b> tại màn <b>Quản lý phiếu trả hàng</b> bằng phiếu chi/thu có lịch sử.
+            Việc <b>hoàn tiền</b> (nếu có) sẽ làm <b>riêng</b> tại màn <b>Quản lý hóa đơn bán</b> bằng phiếu chi (alloc NORMAL âm) để có lịch sử.
           </div>
         </div>
 
@@ -532,7 +780,7 @@ export default function SalesReturnFormPage() {
               value={code}
               onChange={(e) => setCode(e.target.value)}
               disabled={!editable}
-              style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12 }}
+              style={inputStyle}
               placeholder="Để trống sẽ tự sinh"
             />
           </div>
@@ -544,19 +792,43 @@ export default function SalesReturnFormPage() {
               value={issueDate}
               onChange={(e) => setIssueDate(e.target.value)}
               disabled={!editable}
-              style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12 }}
+              style={inputStyle}
             />
           </div>
 
           {/* ✅ Hóa đơn gốc */}
           <div style={{ gridColumn: "1 / -1" }}>
-            <div style={{ fontWeight: 800, marginBottom: 6 }}>Hóa đơn gốc (SALES đã duyệt) *</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 10 }}>
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>Hóa đơn gốc (SALES đã duyệt) *</div>
+
+              {editable ? (
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <button
+                    type="button"
+                    style={primaryBtnStyle()}
+                    onClick={applyReturnFullFromRef}
+                    disabled={loadingRefDetail || !refInvoiceId}
+                    title={!refInvoiceId ? "Chọn hóa đơn gốc trước" : "Copy toàn bộ dòng hàng từ hóa đơn gốc"}
+                  >
+                    Trả full
+                  </button>
+
+                  <button
+                    type="button"
+                    style={dangerGhostBtnStyle()}
+                    onClick={() => {
+                      setLines([{ itemId: "", itemName: "", qty: 1, price: 0 }]);
+                      toast.push({ type: "info", title: "Đã reset", message: "Đã reset danh sách dòng hàng." });
+                    }}
+                  >
+                    Reset dòng
+                  </button>
+                </div>
+              ) : null}
+            </div>
 
             {editable ? (
-              <div
-                style={{ ...styles.autoWrapper, zIndex: 50 }}
-                onBlur={() => setTimeout(() => setRefSuggestOpen(false), 120)}
-              >
+              <div style={{ ...styles.autoWrapper, zIndex: 50 }} onBlur={() => setTimeout(() => setRefSuggestOpen(false), 120)}>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   <input
                     value={refInvoiceQuery}
@@ -565,7 +837,6 @@ export default function SalesReturnFormPage() {
                       setRefInvoiceQuery(v);
                       setRefSuggestOpen(true);
 
-                      // nếu user sửa text => bỏ refInvoiceId để tránh lưu sai
                       if (!v.trim() || v.trim() !== refInvoiceLabel.trim()) {
                         setRefInvoiceId("");
                         setRefInvoiceLabel("");
@@ -573,10 +844,12 @@ export default function SalesReturnFormPage() {
                         setPartnerName("");
                         setSaleUserName("");
                         setTechUserName("");
+                        setRefDetail(null);
+                        setTaxPercent(0);
                       }
                     }}
                     onFocus={() => setRefSuggestOpen(true)}
-                    style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12 }}
+                    style={inputStyle}
                     placeholder="Gõ để tìm theo mã hóa đơn / khách hàng..."
                   />
 
@@ -607,9 +880,7 @@ export default function SalesReturnFormPage() {
                         >
                           <div style={{ fontWeight: 900 }}>
                             {it.code}{" "}
-                            <span style={{ fontWeight: 700, color: "#6b7280" }}>
-                              {it.issueDate ? `• ${formatDate(it.issueDate)}` : ""}
-                            </span>
+                            <span style={{ fontWeight: 700, color: "#6b7280" }}>{it.issueDate ? `• ${formatDate(it.issueDate)}` : ""}</span>
                           </div>
                           <div style={{ fontSize: 12, color: "#6b7280" }}>
                             {it.partnerName ? `KH: ${it.partnerName}` : ""}
@@ -635,58 +906,140 @@ export default function SalesReturnFormPage() {
                 </div>
               </div>
             ) : (
-              <input
-                value={refInvoiceLabel || refInvoiceId || ""}
-                readOnly
-                style={{
-                  width: "100%",
-                  padding: 12,
-                  border: "1px solid #E5E7EB",
-                  borderRadius: 12,
-                  background: "#F9FAFB",
-                }}
-              />
+              <input value={refInvoiceLabel || refInvoiceId || ""} readOnly style={readOnlyInputStyle} />
             )}
+
+            {/* Preview hóa đơn gốc */}
+            {refInvoiceId ? (
+              <div style={refBoxStyle}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ fontWeight: 900 }}>
+                    Hóa đơn gốc: <span style={{ color: "#111827" }}>{refDetail?.code || refInvoiceLabel || refInvoiceId}</span>
+                    {refDetail?.issueDate ? <span style={{ color: "#6b7280", fontWeight: 800 }}> • {formatDate(refDetail.issueDate)}</span> : null}
+                  </div>
+
+                  <div style={{ color: "#111827", fontWeight: 900 }}>
+                    Tổng HĐ gốc: {formatMoney(refGross)}
+                  </div>
+                </div>
+
+                {/* breakdown VAT */}
+                <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                  <div style={{ padding: 10, border: "1px solid #E5E7EB", borderRadius: 12, background: "#F9FAFB" }}>
+                    <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 800 }}>Tạm tính (HĐ gốc)</div>
+                    <div style={{ fontWeight: 900 }}>{formatMoney(refSubtotal)}</div>
+                  </div>
+                  <div style={{ padding: 10, border: "1px solid #E5E7EB", borderRadius: 12, background: "#F9FAFB" }}>
+                    <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 800 }}>VAT (HĐ gốc)</div>
+                    <div style={{ fontWeight: 900 }}>
+                      {formatMoney(refTax)} {refTaxPctDerived > 0 ? <span style={{ color: "#6b7280", fontWeight: 800 }}>({refTaxPctDerived}%)</span> : null}
+                    </div>
+                  </div>
+                  <div style={{ padding: 10, border: "1px solid #E5E7EB", borderRadius: 12, background: "#F9FAFB" }}>
+                    <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 800 }}>Tổng (HĐ gốc)</div>
+                    <div style={{ fontWeight: 900 }}>{formatMoney(refGross)}</div>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 8, color: "#6b7280", fontSize: 12, fontWeight: 800 }}>
+                  {loadingRefDetail
+                    ? "Đang tải chi tiết hóa đơn gốc…"
+                    : "Dòng hàng dưới đây lấy từ hóa đơn gốc (dùng cho nút “Trả full”)."}
+                </div>
+
+                {!loadingRefDetail ? (
+                  <div style={{ marginTop: 10, border: "1px solid #E5E7EB", borderRadius: 12, overflow: "hidden" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead style={{ background: "#F9FAFB" }}>
+                        <tr>
+                          <th style={{ textAlign: "left", padding: 12, borderBottom: "1px solid #E5E7EB" }}>Sản phẩm (HĐ gốc)</th>
+                          <th style={{ textAlign: "right", padding: 12, borderBottom: "1px solid #E5E7EB", width: 120 }}>SL</th>
+                          <th style={{ textAlign: "right", padding: 12, borderBottom: "1px solid #E5E7EB", width: 180 }}>Đơn giá</th>
+                          <th style={{ textAlign: "right", padding: 12, borderBottom: "1px solid #E5E7EB", width: 180 }}>Thành tiền</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(refDetail?.lines || []).length === 0 ? (
+                          <tr>
+                            <td colSpan={4} style={{ padding: 12, color: "#6b7280" }}>
+                              Không có dòng hàng.
+                            </td>
+                          </tr>
+                        ) : (
+                          (refDetail?.lines || []).map((l, i) => {
+                            const name = l.itemSku && l.itemName ? `${l.itemSku} - ${l.itemName}` : l.itemName || l.itemSku || l.itemId;
+                            const qty = toNum(l.qty);
+                            const price = toNum(l.price);
+                            const amt = qty * price;
+                            return (
+                              <tr key={`${l.itemId}-${i}`}>
+                                <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", fontWeight: 800 }}>{name}</td>
+                                <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", textAlign: "right", fontWeight: 900 }}>
+                                  {formatMoney(qty)}
+                                </td>
+                                <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", textAlign: "right", fontWeight: 900 }}>
+                                  {formatMoney(price)}
+                                </td>
+                                <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", textAlign: "right", fontWeight: 900 }}>
+                                  {formatMoney(amt)}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+
+                <div style={{ marginTop: 8, fontSize: 12, color: "#92400e", fontWeight: 800 }}>
+                  * Chưa hiển thị “đã trả trước đó / còn lại” vì backend listInvoices chưa lọc theo refInvoiceId. Khi bạn thêm filter đó, mình nối tiếp ngay.
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          {/* ✅ VAT% cho phiếu trả */}
+          <div>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>VAT (%)</div>
+            {editable ? (
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={0.1}
+                value={taxPercent}
+                onChange={(e) => setTaxPercent(clampPct(e.target.value))}
+                style={{ ...inputStyle, textAlign: "right" }}
+                placeholder="0"
+              />
+            ) : (
+              <input value={String(clampPct(taxPercent))} readOnly style={{ ...readOnlyInputStyle, textAlign: "right" }} />
+            )}
+            <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280", fontWeight: 700 }}>
+              * Mặc định lấy theo HĐ gốc. Trả full mà thiếu VAT sẽ lệch số ở danh sách.
+            </div>
+          </div>
+
+          <div>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>Trạng thái</div>
+            <input value={statusLabel(status)} readOnly style={readOnlyInputStyle} />
           </div>
 
           {/* ✅ Snapshot KH + NV (read-only) */}
           <div>
             <div style={{ fontWeight: 800, marginBottom: 6 }}>Khách hàng</div>
-            <input
-              value={partnerName || ""}
-              readOnly
-              style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12, background: "#F9FAFB" }}
-              placeholder="Tự lấy theo hóa đơn gốc"
-            />
-          </div>
-
-          <div>
-            <div style={{ fontWeight: 800, marginBottom: 6 }}>Trạng thái</div>
-            <input
-              value={statusLabel(status)}
-              readOnly
-              style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12, background: "#F9FAFB" }}
-            />
+            <input value={partnerName || ""} readOnly style={readOnlyInputStyle} placeholder="Tự lấy theo hóa đơn gốc" />
           </div>
 
           <div>
             <div style={{ fontWeight: 800, marginBottom: 6 }}>NV Sale</div>
-            <input
-              value={saleUserName || ""}
-              readOnly
-              style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12, background: "#F9FAFB" }}
-              placeholder="Tự lấy theo hóa đơn gốc"
-            />
+            <input value={saleUserName || ""} readOnly style={readOnlyInputStyle} placeholder="Tự lấy theo hóa đơn gốc" />
           </div>
 
           <div>
             <div style={{ fontWeight: 800, marginBottom: 6 }}>NV Kỹ thuật</div>
-            <input
-              value={techUserName || ""}
-              readOnly
-              style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12, background: "#F9FAFB" }}
-              placeholder="Tự lấy theo hóa đơn gốc"
-            />
+            <input value={techUserName || ""} readOnly style={readOnlyInputStyle} placeholder="Tự lấy theo hóa đơn gốc" />
           </div>
 
           <div style={{ gridColumn: "1 / -1" }}>
@@ -695,7 +1048,7 @@ export default function SalesReturnFormPage() {
               value={note}
               onChange={(e) => setNote(e.target.value)}
               disabled={!editable}
-              style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12, minHeight: 90 }}
+              style={{ ...inputStyle, minHeight: 90 }}
               placeholder="Lý do trả hàng..."
             />
           </div>
@@ -703,24 +1056,23 @@ export default function SalesReturnFormPage() {
       </div>
 
       {/* Lines header */}
-      <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h3 style={{ margin: 0 }}>Dòng hàng</h3>
+      <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <h3 style={{ margin: 0 }}>Dòng hàng trả</h3>
+
         {editable ? (
-          <button style={ghostBtnStyle()} onClick={addLine}>
-            + Thêm dòng
-          </button>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button style={ghostBtnStyle()} onClick={addLine}>
+              + Thêm dòng
+            </button>
+            <button style={primaryBtnStyle()} onClick={applyReturnFullFromRef} disabled={loadingRefDetail || !refInvoiceId}>
+              Trả full (copy từ HĐ gốc)
+            </button>
+          </div>
         ) : null}
       </div>
 
       {/* Lines table */}
-      <div
-        style={{
-          marginTop: 10,
-          border: "1px solid #E5E7EB",
-          borderRadius: 14,
-          background: "#fff",
-        }}
-      >
+      <div style={{ marginTop: 10, border: "1px solid #E5E7EB", borderRadius: 14, background: "#fff" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead style={{ background: "#F9FAFB" }}>
             <tr>
@@ -764,7 +1116,7 @@ export default function SalesReturnFormPage() {
                             value={l.itemName}
                             onChange={(e) => updateLine(idx, { itemName: e.target.value, itemId: "" })}
                             onFocus={() => setOpenItemSuggestIndex(idx)}
-                            style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12 }}
+                            style={inputStyle}
                             placeholder="Tìm theo SKU / tên..."
                           />
 
@@ -781,9 +1133,7 @@ export default function SalesReturnFormPage() {
                                     }}
                                   >
                                     <div style={{ fontWeight: 800 }}>{it.name}</div>
-                                    <div style={{ fontSize: 12, color: "#6b7280" }}>
-                                      {it.sku ? `SKU: ${it.sku}` : `ID: ${it.id}`}
-                                    </div>
+                                    <div style={{ fontSize: 12, color: "#6b7280" }}>{it.sku ? `SKU: ${it.sku}` : `ID: ${it.id}`}</div>
                                   </div>
                                 ))
                               ) : (
@@ -805,7 +1155,7 @@ export default function SalesReturnFormPage() {
                           step={1}
                           value={l.qty}
                           onChange={(e) => updateLine(idx, { qty: Number(e.target.value || 0) })}
-                          style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12, textAlign: "right" }}
+                          style={{ ...inputStyle, textAlign: "right" }}
                         />
                       ) : (
                         <div style={{ fontWeight: 800 }}>{formatMoney(l.qty)}</div>
@@ -820,7 +1170,7 @@ export default function SalesReturnFormPage() {
                           step={100}
                           value={l.price}
                           onChange={(e) => updateLine(idx, { price: Number(e.target.value || 0) })}
-                          style={{ width: "100%", padding: 12, border: "1px solid #E5E7EB", borderRadius: 12, textAlign: "right" }}
+                          style={{ ...inputStyle, textAlign: "right" }}
                         />
                       ) : (
                         <div style={{ fontWeight: 800 }}>{formatMoney(l.price)}</div>
@@ -847,13 +1197,21 @@ export default function SalesReturnFormPage() {
       </div>
 
       {/* Footer */}
-      <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ fontSize: 16 }}>
-          <b>Tổng:</b> {formatMoney(subtotal)}
+      <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 16, lineHeight: 1.4 }}>
+          <div>
+            <b>Tạm tính:</b> {formatMoney(subtotal)}
+          </div>
+          <div>
+            <b>VAT ({clampPct(taxPercent)}%):</b> {formatMoney(taxAmount)}
+          </div>
+          <div>
+            <b>Tổng trả (Gross):</b> {formatMoney(grossTotal)}
+          </div>
         </div>
 
         {editable ? (
-          <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <button style={ghostBtnStyle()} onClick={save} disabled={loading}>
               Lưu
             </button>

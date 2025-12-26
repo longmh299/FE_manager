@@ -20,22 +20,13 @@ type StaffMoneyMode = "GROSS" | "NET";
 
 type Me = { id: string; username?: string; role?: string };
 
-// ✅ staff row: hỗ trợ cả NET/GROSS collected
-// ⚠️ IMPORTANT FIX:
-// - NET mode phải ưu tiên dùng `revenue` (BE đã map = personalRevenue = collected_net + bonus_hold_net)
-//   => mới ra đúng 75tr (không VAT) khi đã thu đủ cả phần BH treo.
-// - `collectedNormal` chỉ là NET của phần NORMAL (chưa gồm BH treo) nên không dùng làm “doanh thu (chưa VAT)”.
 type StaffRow = {
   userId: string;
   name: string;
-
-  // ✅ revenue theo API = personalRevenue (NET, đã gồm bonus BH treo khi đủ điều kiện)
   revenue: number;
-
-  // ✅ nếu BE có trả (đối soát)
-  collectedNormal?: number; // NET collected NORMAL (chưa gồm BH treo)
-  collectedGross?: number; // GROSS collected NORMAL (có VAT nếu invoice có VAT)
-
+  collectedNormal?: number;
+  collectedGross?: number;
+  bonusWarranty?: number;
   cogs: number;
   profit: number;
   marginPct: number;
@@ -43,7 +34,7 @@ type StaffRow = {
 
 type RevenueResp = {
   kpis: {
-    netRevenue: number; // doanh thu thuần (không VAT) theo API
+    netRevenue: number;
     grossProfit: number;
     marginPct: number;
     orderCount: number;
@@ -56,6 +47,7 @@ type RevenueResp = {
   byProduct: Array<{
     itemId: string;
     name: string;
+    qty: number; // ✅ NEW
     revenue: number;
     cogs: number;
     profit: number;
@@ -71,12 +63,17 @@ type AccountOpt = { id: string; code: string; name: string };
 
 function fmtVnd(n: number) {
   const x = Number.isFinite(n) ? n : 0;
-  // ✅ FIX: làm tròn để tránh số lẻ kiểu 27,777,777.777...
   return Math.round(x).toLocaleString("vi-VN") + " đ";
 }
 function fmtPct(n: number) {
   const x = Number.isFinite(n) ? n : 0;
   return x.toFixed(1) + "%";
+}
+function fmtQty(n: number) {
+  const x = Number.isFinite(n) ? n : 0;
+  // hiển thị gọn: nếu gần như integer -> int, còn lại 3 số lẻ
+  const isInt = Math.abs(x - Math.round(x)) < 1e-9;
+  return (isInt ? Math.round(x) : Math.round(x * 1000) / 1000).toLocaleString("vi-VN");
 }
 function toYmd(d: Date) {
   const y = d.getFullYear();
@@ -224,7 +221,6 @@ export default function RevenuePage() {
   const [groupBy, setGroupBy] = useState<GroupBy>("day");
   const [metric, setMetric] = useState<"revenue" | "profit">("revenue");
 
-  // ✅ NET mặc định (doanh số không tính VAT)
   const [staffMoneyMode, setStaffMoneyMode] = useState<StaffMoneyMode>("NET");
 
   const [accounts, setAccounts] = useState<AccountOpt[]>([]);
@@ -335,12 +331,15 @@ export default function RevenuePage() {
     return out;
   }, [data]);
 
-  // ✅ FIX CHÍNH:
-  // - NET: dùng `revenue` (đã gồm bonus BH treo => ra đúng 75tr khi thu đủ)
-  // - GROSS: ưu tiên dùng `collectedGross` (đối soát), fallback `revenue` nếu thiếu
+  function staffValueNet(r: StaffRow) {
+    const v = r.revenue ?? r.collectedNormal ?? 0;
+    return Number(v) || 0;
+  }
+  function staffValueGross(r: StaffRow) {
+    return Number(r.collectedGross ?? 0) || 0;
+  }
   function staffValue(r: StaffRow) {
-    if (staffMoneyMode === "GROSS") return Number(r.collectedGross ?? r.revenue ?? 0);
-    return Number(r.revenue ?? 0);
+    return staffMoneyMode === "GROSS" ? staffValueGross(r) : staffValueNet(r);
   }
 
   const pieStaff = useMemo(() => {
@@ -356,8 +355,6 @@ export default function RevenuePage() {
   }, [data, staffRole, staffMoneyMode]);
 
   const staffName = me?.username || "Tôi";
-
-  // Tooltip label Việt hoá + đúng nghĩa:
   const staffPieTooltipLabel = staffMoneyMode === "GROSS" ? "Đã thu (gồm VAT)" : "Doanh thu (chưa VAT)";
 
   return (
@@ -374,7 +371,7 @@ export default function RevenuePage() {
           </div>
 
           <div style={styles.filterBlock}>
-            <div style={styles.label}>{staffRole === "SALE" ? "Sales" : "Kỹ thuật"}</div>
+            <div style={styles.label}>{staffRole === "SALE" ? "Bán hàng" : "Kỹ thuật"}</div>
 
             {isStaff ? (
               <div style={{ display: "flex", gap: 8, width: "100%" }}>
@@ -387,7 +384,7 @@ export default function RevenuePage() {
                     if (me?.id) setStaffUserId(me.id);
                   }}
                 >
-                  <option value="SALE">Sales</option>
+                  <option value="SALE">Bán hàng</option>
                   <option value="TECH">Kỹ thuật</option>
                 </select>
 
@@ -403,7 +400,7 @@ export default function RevenuePage() {
                     setStaffUserId("");
                   }}
                 >
-                  <option value="SALE">Sales</option>
+                  <option value="SALE">Bán hàng</option>
                   <option value="TECH">Kỹ thuật</option>
                 </select>
 
@@ -458,13 +455,13 @@ export default function RevenuePage() {
           <div style={styles.card}>
             <div style={styles.cardTitle}>Lợi nhuận gộp</div>
             <div style={{ ...styles.cardValue, color: "#dc2626" }}>{fmtVnd(data?.kpis?.grossProfit ?? 0)}</div>
-            <div style={styles.cardSub}>COGS theo MovementLine</div>
+            <div style={styles.cardSub}>Giá vốn theo xuất kho</div>
           </div>
 
           <div style={styles.card}>
             <div style={styles.cardTitle}>Biên lợi nhuận</div>
             <div style={{ ...styles.cardValue, color: "#16a34a" }}>{fmtPct(data?.kpis?.marginPct ?? 0)}</div>
-            <div style={styles.cardSub}>Gross Profit / Net Revenue</div>
+            <div style={styles.cardSub}>Lợi nhuận gộp / Doanh thu thuần</div>
           </div>
 
           <div style={styles.card}>
@@ -478,7 +475,7 @@ export default function RevenuePage() {
           <div style={styles.card}>
             <div style={styles.cardTitle}>Thuế (VAT)</div>
             <div style={{ ...styles.cardValue, color: "#0f172a" }}>{fmtVnd(data?.kpis?.netVat ?? 0)}</div>
-            <div style={styles.cardSub}>Không cộng vào doanh thu</div>
+            <div style={styles.cardSub}>Không cộng vào doanh thu thuần</div>
           </div>
         </div>
 
@@ -574,7 +571,7 @@ export default function RevenuePage() {
                     setStaffUserId("");
                   }}
                 >
-                  Sales
+                  Bán hàng
                 </div>
                 <div
                   style={pillStyle(staffRole === "TECH")}
@@ -586,7 +583,6 @@ export default function RevenuePage() {
                   Kỹ thuật
                 </div>
 
-                {/* ✅ Toggle NET/GROSS (Việt hoá + ưu tiên NET) */}
                 <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
                   <span style={styles.muted}>Hiển thị</span>
 
@@ -598,6 +594,12 @@ export default function RevenuePage() {
                     Đã thu (gồm VAT)
                   </div>
                 </div>
+              </div>
+
+              <div style={{ marginTop: 6, fontSize: 12, color: "#64748b" }}>
+                {staffMoneyMode === "NET"
+                  ? "NET = tiền thu quy đổi về chưa VAT (vd VAT 8%: gross/1.08)."
+                  : "GROSS = tiền thực thu (có VAT)."}
               </div>
 
               <div style={{ height: 260, marginTop: 8 }}>
@@ -618,7 +620,7 @@ export default function RevenuePage() {
             <div style={styles.panel}>
               <div style={styles.panelTitle}>Doanh thu của tôi</div>
               <div style={{ marginTop: 8, color: "#64748b", fontSize: 13 }}>
-                Bạn chỉ xem được dữ liệu của <b>{staffName}</b>. (Admin/Accountant sẽ thấy biểu đồ theo nhiều nhân viên.)
+                Bạn chỉ xem được dữ liệu của <b>{staffName}</b>. (Admin/Accountant sẽ thấy theo nhiều nhân viên.)
               </div>
             </div>
           )}
@@ -632,6 +634,7 @@ export default function RevenuePage() {
             <thead>
               <tr>
                 <th style={styles.th}>Sản phẩm</th>
+                <th style={{ ...styles.th, ...styles.right }}>Số lượng</th>
                 <th style={{ ...styles.th, ...styles.right }}>Doanh thu</th>
                 <th style={{ ...styles.th, ...styles.right }}>Giá vốn</th>
                 <th style={{ ...styles.th, ...styles.right }}>Lợi nhuận gộp</th>
@@ -644,6 +647,7 @@ export default function RevenuePage() {
                   <td style={styles.td}>
                     <div style={{ fontWeight: 700 }}>{r.name}</div>
                   </td>
+                  <td style={{ ...styles.td, ...styles.right }}>{fmtQty(r.qty ?? 0)}</td>
                   <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.revenue)}</td>
                   <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.cogs)}</td>
                   <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.profit)}</td>
@@ -655,7 +659,7 @@ export default function RevenuePage() {
 
               {!loading && (data?.byProduct?.length ?? 0) === 0 && (
                 <tr>
-                  <td style={styles.td} colSpan={5}>
+                  <td style={styles.td} colSpan={6}>
                     <span style={styles.muted}>Không có dữ liệu trong khoảng thời gian này.</span>
                   </td>
                 </tr>

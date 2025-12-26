@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
+import { CurrencyInput } from "../components/CurrencyInput";
 
 type InvoiceStatus = "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
 type UserRole = "staff" | "accountant" | "admin";
@@ -24,12 +25,18 @@ type InvoiceListItem = {
 
 type PartnerOpt = { id: string; name: string; code?: string };
 type PaymentAccountOpt = { id: string; code: string; name: string };
-type SalesInvoiceOpt = { id: string; code: string; issueDate?: string; total: number; partnerName?: string | null };
+type SalesInvoiceOpt = {
+  id: string;
+  code: string;
+  issueDate?: string;
+  total: number;
+  partnerName?: string | null;
+};
 
 type AllocationRow = {
   id: string;
   amount: number;
-  kind: "NORMAL" | string;
+  kind: "NORMAL" | "WARRANTY_HOLD" | string;
   createdAt?: string;
   payment?: {
     id: string;
@@ -49,6 +56,13 @@ type SalesInvoiceDetail = {
   issueDate?: string;
   total: number;
   paidAmount: number;
+
+  // ✅ hold fields (để hiển thị/giới hạn)
+  hasWarrantyHold?: boolean;
+  warrantyHoldAmount?: number;
+  warrantyHoldPct?: number;
+  warrantyDueDate?: string | null;
+
   partnerName?: string | null;
   allocations?: AllocationRow[];
 };
@@ -146,7 +160,6 @@ function dangerBtnStyle(): React.CSSProperties {
 
 /** ===== Refund Modal styles ===== **/
 function modalOverlayStyle(): React.CSSProperties {
-  // ✅ FIX: overlay cho phép scroll khi màn thấp / nội dung dài
   return {
     position: "fixed",
     inset: 0,
@@ -161,7 +174,6 @@ function modalOverlayStyle(): React.CSSProperties {
 }
 
 function modalCardStyle(): React.CSSProperties {
-  // ✅ FIX: card giới hạn chiều cao + layout flex để body scroll, footer cố định
   return {
     width: 620,
     maxWidth: "100%",
@@ -190,7 +202,6 @@ function modalHeaderStyle(): React.CSSProperties {
 }
 
 function modalBodyStyle(): React.CSSProperties {
-  // ✅ FIX: body cuộn
   return {
     padding: 14,
     overflowY: "auto",
@@ -199,7 +210,6 @@ function modalBodyStyle(): React.CSSProperties {
 }
 
 function modalFooterStyle(): React.CSSProperties {
-  // ✅ FIX: footer luôn hiện
   return {
     padding: 14,
     borderTop: "1px solid #E5E7EB",
@@ -259,6 +269,10 @@ function toNum(v: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function nearlyEqual(a: number, b: number, eps = 0.0001) {
+  return Math.abs((a || 0) - (b || 0)) <= eps;
+}
+
 /** ===== Center Alert (overlay) ===== */
 type CenterAlert = { type: "error" | "warning" | "success"; title: string; message: string } | null;
 
@@ -296,6 +310,25 @@ function applyLeaveStyle(el: HTMLInputElement | HTMLSelectElement | HTMLTextArea
   if (!el) return;
   if (document.activeElement === el) return;
   el.style.borderColor = inputBaseBorder;
+}
+
+/**
+ * FE display-only fallback cho invoice cũ:
+ * - nếu hasWarrantyHold=true mà warrantyHoldAmount=0 và warrantyHoldPct>0 => derive hold = total * pct / 100
+ */
+function computeEffectiveHoldAmount(inv?: SalesInvoiceDetail | null) {
+  if (!inv) return 0;
+  if (!inv.hasWarrantyHold) return 0;
+
+  const amt = Math.max(0, toNum(inv.warrantyHoldAmount));
+  if (amt > 0) return amt;
+
+  const pct = Math.max(0, toNum(inv.warrantyHoldPct));
+  if (pct > 0) {
+    return Math.round(((toNum(inv.total) * pct) / 100 + Number.EPSILON) * 100) / 100;
+  }
+
+  return 0;
 }
 
 export default function SalesReturnsPage() {
@@ -352,6 +385,9 @@ export default function SalesReturnsPage() {
   // center alert overlay
   const [centerAlert, setCenterAlert] = useState<CenterAlert>(null);
 
+  // track user edits refund amount to avoid auto overriding
+  const userEditedRefundAmountRef = useRef(false);
+
   function showCenterAlert(type: "error" | "warning" | "success", title: string, message: string) {
     setCenterAlert({ type, title, message });
   }
@@ -393,7 +429,11 @@ export default function SalesReturnsPage() {
           partnerId: x.partnerId ?? null,
           refInvoiceId: x.refInvoiceId != null ? String(x.refInvoiceId) : null,
           refInvoiceCode:
-            x.refInvoice?.code != null ? String(x.refInvoice.code) : x.refInvoiceCode != null ? String(x.refInvoiceCode) : null,
+            x.refInvoice?.code != null
+              ? String(x.refInvoice.code)
+              : x.refInvoiceCode != null
+              ? String(x.refInvoiceCode)
+              : null,
           total: Number(x.total ?? 0),
           status: x.status as InvoiceStatus,
         }))
@@ -498,11 +538,15 @@ export default function SalesReturnsPage() {
       return;
     }
 
+    userEditedRefundAmountRef.current = false;
+
     setRefundInv(inv);
+
+    // default: hoàn đúng bằng tổng phiếu trả (sau khi load HĐ gốc sẽ tự clamp nếu vượt khả dụng)
     setRefundAmount(Number(inv.total || 0));
     setRefundMethod("");
     setRefundRefNo("");
-    setRefundNote(`Hoàn tiền phiếu trả hàng ${inv.code} (SALES_RETURN).`);
+    setRefundNote(`Hoàn tiền phiếu trả hàng ${inv.code} (cấn vào HĐ SALES gốc).`);
 
     setRefundPartnerId(inv.partnerId ? String(inv.partnerId) : "");
     setPartnerQuery(inv.partnerName ? String(inv.partnerName) : "");
@@ -511,6 +555,7 @@ export default function SalesReturnsPage() {
 
     setRefundAccountId("");
 
+    // auto select SALES gốc theo refInvoiceId nếu có
     const rid = inv.refInvoiceId ? String(inv.refInvoiceId) : "";
     const rcode = inv.refInvoiceCode ? String(inv.refInvoiceCode) : "";
     if (rid) {
@@ -659,6 +704,12 @@ export default function SalesReturnsPage() {
           issueDate: inv.issueDate,
           total: toNum(inv.total),
           paidAmount: toNum(inv.paidAmount),
+
+          hasWarrantyHold: inv.hasWarrantyHold === true,
+          warrantyHoldAmount: toNum(inv.warrantyHoldAmount),
+          warrantyHoldPct: toNum(inv.warrantyHoldPct),
+          warrantyDueDate: inv.warrantyDueDate ?? null,
+
           partnerName: inv.partnerName ?? null,
           allocations: Array.isArray(inv.allocations)
             ? inv.allocations.map((a: any) => ({
@@ -688,7 +739,11 @@ export default function SalesReturnsPage() {
         console.error("loadSalesInvoiceDetail error", e);
         if (!alive) return;
         setSalesInvDetail(null);
-        showCenterAlert("error", "Không tải được hoá đơn SALES gốc", e?.response?.data?.message || e?.message || "Vui lòng thử lại.");
+        showCenterAlert(
+          "error",
+          "Không tải được hoá đơn SALES gốc",
+          e?.response?.data?.message || e?.message || "Vui lòng thử lại."
+        );
       } finally {
         if (alive) setSalesInvDetailLoading(false);
       }
@@ -700,25 +755,77 @@ export default function SalesReturnsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refundOpen, salesInvId]);
 
-  const refundedBefore = useMemo(() => {
+  /** =========================
+   * ✅ Option A (đã đồng bộ với BE mới):
+   * - Refund = PAYMENT + allocations âm (NORMAL và/hoặc WARRANTY_HOLD)
+   * - Hoàn "tất cả tiền" nhưng chỉ hoàn được phần nào khách đã trả thật (NORMAL/HOLD net >= 0)
+   * - Nếu khách chưa trả HOLD thì HOLD net = 0 => không hoàn HOLD
+   ========================= **/
+
+  const normalNet = useMemo(() => {
+    const allocs = salesInvDetail?.allocations || [];
+    let sum = 0;
+    for (const a of allocs) if (String(a.kind) === "NORMAL") sum += toNum(a.amount);
+    return sum; // NET (đã trừ hoàn trước đó)
+  }, [salesInvDetail]);
+
+  const holdNet = useMemo(() => {
+    const allocs = salesInvDetail?.allocations || [];
+    let sum = 0;
+    for (const a of allocs) if (String(a.kind) === "WARRANTY_HOLD") sum += toNum(a.amount);
+    return sum; // NET (đã trừ hoàn trước đó)
+  }, [salesInvDetail]);
+
+  const refundedNormalBefore = useMemo(() => {
     const allocs = salesInvDetail?.allocations || [];
     let sum = 0;
     for (const a of allocs) {
       if (String(a.kind) !== "NORMAL") continue;
-      if (a.amount < 0) sum += Math.abs(a.amount);
+      if (toNum(a.amount) < 0) sum += Math.abs(toNum(a.amount));
     }
     return sum;
   }, [salesInvDetail]);
 
-  const refundableNow = useMemo(() => Math.max(0, toNum(salesInvDetail?.paidAmount)), [salesInvDetail]);
+  const refundedHoldBefore = useMemo(() => {
+    const allocs = salesInvDetail?.allocations || [];
+    let sum = 0;
+    for (const a of allocs) {
+      if (String(a.kind) !== "WARRANTY_HOLD") continue;
+      if (toNum(a.amount) < 0) sum += Math.abs(toNum(a.amount));
+    }
+    return sum;
+  }, [salesInvDetail]);
+
+  const refundableNormalNow = useMemo(() => Math.max(0, normalNet), [normalNet]);
+  const refundableHoldNow = useMemo(() => Math.max(0, holdNet), [holdNet]);
+  const refundableTotalNow = useMemo(
+    () => Math.max(0, refundableNormalNow + refundableHoldNow),
+    [refundableNormalNow, refundableHoldNow]
+  );
+
+  // auto clamp initial refund amount to refundableTotalNow when invoice detail arrives
+  useEffect(() => {
+    if (!refundOpen) return;
+    if (!salesInvDetail) return;
+    if (userEditedRefundAmountRef.current) return;
+
+    const cur = toNum(refundAmount);
+    if (cur <= 0) return;
+    if (refundableTotalNow <= 0) return;
+
+    if (cur > refundableTotalNow + 0.0001) {
+      setRefundAmount(refundableTotalNow);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refundOpen, salesInvDetail, refundableTotalNow]);
 
   const overRefund = useMemo(() => {
     const amt = toNum(refundAmount);
     if (!salesInvId) return false;
     if (!salesInvDetail) return false;
     if (amt <= 0) return false;
-    return amt > refundableNow + 0.0001;
-  }, [refundAmount, salesInvId, salesInvDetail, refundableNow]);
+    return amt > refundableTotalNow + 0.0001;
+  }, [refundAmount, salesInvId, salesInvDetail, refundableTotalNow]);
 
   const confirmDisabled = useMemo(() => {
     if (!refundInv) return true;
@@ -731,6 +838,49 @@ export default function SalesReturnsPage() {
     if (overRefund) return true;
     return false;
   }, [refundInv, refundAmount, refundPartnerId, salesInvId, salesInvDetailLoading, salesInvDetail, overRefund]);
+
+  function buildRefundAllocations(totalRefund: number) {
+    // totalRefund: số dương user muốn hoàn
+    const amt = Math.max(0, toNum(totalRefund));
+
+    const normalAvail = Math.max(0, refundableNormalNow);
+    const holdAvail = Math.max(0, refundableHoldNow);
+    const totalAvail = Math.max(0, normalAvail + holdAvail);
+
+    if (amt <= 0) {
+      return { ok: false as const, message: "Số tiền hoàn phải > 0.", allocations: [] as any[] };
+    }
+
+    if (amt > totalAvail + 0.0001) {
+      return {
+        ok: false as const,
+        message: `Số tiền hoàn vượt quá số khách đã thanh toán thực tế. Hiện chỉ còn có thể hoàn tối đa ${formatMoney(
+          totalAvail
+        )} (NORMAL: ${formatMoney(normalAvail)}, HOLD: ${formatMoney(holdAvail)}).`,
+        allocations: [] as any[],
+      };
+    }
+
+    // ✅ ưu tiên hoàn NORMAL trước, thiếu thì hoàn HOLD
+    const normalPart = Math.min(amt, normalAvail);
+    const holdPart = Math.max(0, amt - normalPart);
+
+    const allocations: any[] = [];
+    if (normalPart > 0) allocations.push({ invoiceId: salesInvId, amount: -normalPart, kind: "NORMAL" });
+    if (holdPart > 0) allocations.push({ invoiceId: salesInvId, amount: -holdPart, kind: "WARRANTY_HOLD" });
+
+    // ✅ sanity: abs sum must equal amt (match BE validation)
+    const expected = allocations.reduce((s, a) => s + Math.abs(toNum(a.amount)), 0);
+    if (!nearlyEqual(expected, amt)) {
+      return {
+        ok: false as const,
+        message: "Lỗi tính phân bổ hoàn tiền (không khớp tổng). Vui lòng thử lại.",
+        allocations: [] as any[],
+      };
+    }
+
+    return { ok: true as const, message: "", allocations, split: { normalPart, holdPart } };
+  }
 
   async function confirmRefund() {
     const inv = refundInv;
@@ -758,14 +908,29 @@ export default function SalesReturnsPage() {
       return;
     }
 
-    if (amt > refundableNow + 0.0001) {
+    if (amt > refundableTotalNow + 0.0001) {
       showCenterAlert(
         "warning",
         "Số tiền hoàn vượt quá mức cho phép",
-        `Hoá đơn SALES gốc hiện chỉ còn có thể hoàn tối đa ${formatMoney(refundableNow)} (NORMAL còn lại).`
+        `Hoá đơn SALES gốc hiện chỉ còn có thể hoàn tối đa ${formatMoney(refundableTotalNow)} (NORMAL: ${formatMoney(
+          refundableNormalNow
+        )}, HOLD: ${formatMoney(refundableHoldNow)}).`
       );
       return;
     }
+
+    const built = buildRefundAllocations(amt);
+    if (!built.ok) {
+      showCenterAlert("warning", "Không thể hoàn", built.message);
+      return;
+    }
+
+    const splitText =
+      built?.split && (built.split.normalPart > 0 || built.split.holdPart > 0)
+        ? ` (tách: NORMAL ${formatMoney(built.split.normalPart)}${
+            built.split.holdPart > 0 ? ` + HOLD ${formatMoney(built.split.holdPart)}` : ""
+          })`
+        : "";
 
     try {
       await api.post("/payments", {
@@ -776,14 +941,8 @@ export default function SalesReturnsPage() {
         accountId: refundAccountId || undefined,
         method: refundMethod || undefined,
         refNo: refundRefNo || undefined,
-        note: refundNote || `Hoàn tiền phiếu trả hàng ${inv.code}`,
-        allocations: [
-          {
-            invoiceId: salesInvId,
-            amount: -amt,
-            kind: "NORMAL",
-          },
-        ],
+        note: refundNote || `Hoàn tiền phiếu trả hàng ${inv.code} (cấn vào HĐ SALES gốc, Option A)${splitText}.`,
+        allocations: built.allocations,
       });
 
       toast.push({ type: "success", title: "Thành công", message: "Đã tạo phiếu chi hoàn tiền." });
@@ -797,6 +956,8 @@ export default function SalesReturnsPage() {
 
   if (loadingRole) return <div style={{ padding: 16 }}>Đang kiểm tra đăng nhập…</div>;
   if (role !== "admin") return null;
+
+  const effectiveHoldAmount = computeEffectiveHoldAmount(salesInvDetail);
 
   return (
     <div style={{ padding: 16 }}>
@@ -866,7 +1027,7 @@ export default function SalesReturnsPage() {
         <div>
           <h2 style={{ margin: 0 }}>Khách trả hàng</h2>
           <div style={{ color: "#6b7280", marginTop: 6 }}>
-            Phiếu hoàn trả từ khách → duyệt để nhập kho → hoàn tiền bằng phiếu chi (Option A)
+            Phiếu hoàn trả từ khách → duyệt để nhập kho → hoàn tiền bằng phiếu chi (Option A, cấn vào HĐ SALES gốc)
           </div>
         </div>
 
@@ -972,9 +1133,7 @@ export default function SalesReturnsPage() {
                     <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", color: refText ? "#111827" : "#94a3b8", fontWeight: 800 }}>
                       {refText || "—"}
                     </td>
-                    <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", textAlign: "right", fontWeight: 800 }}>
-                      {formatMoney(r.total)}
-                    </td>
+                    <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", textAlign: "right", fontWeight: 800 }}>{formatMoney(r.total)}</td>
                     <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", textAlign: "center" }}>
                       <span style={statusPillStyle(r.status)}>{statusLabel(r.status)}</span>
                     </td>
@@ -1063,12 +1222,14 @@ export default function SalesReturnsPage() {
               </button>
             </div>
 
-            {/* ✅ FIX: body scroll */}
             <div style={modalBodyStyle()}>
               <div style={{ marginBottom: 10, fontSize: 13, color: "#64748b", fontWeight: 700 }}>
-                <b>Option A:</b> Hoàn tiền sẽ tạo allocation <b>NORMAL âm</b> và <b>cấn vào hoá đơn SALES gốc</b>.
+                <b>Option A:</b> Hoàn tiền tạo phiếu <b>PAYMENT</b> và phân bổ âm vào <b>HĐ SALES gốc</b>.
+                <div style={{ marginTop: 6, color: "#0f172a", fontWeight: 900 }}>
+                  ✅ Hạn mức hoàn = <b>số khách đã trả thật</b> trên HĐ gốc (NORMAL net + HOLD net).
+                </div>
                 <div style={{ marginTop: 6, color: "#b45309", fontWeight: 900 }}>
-                  ⚠️ Nếu hoá đơn SALES gốc đã hoàn trước đó, bạn chỉ được hoàn tối đa phần <b>NORMAL còn lại</b>.
+                  ⚠️ Nếu khách <b>chưa trả HOLD</b> thì HOLD net = 0 → <b>không hoàn HOLD</b>. Nếu khách đã trả HOLD trước đó → hoàn được cả HOLD.
                 </div>
               </div>
 
@@ -1086,28 +1247,48 @@ export default function SalesReturnsPage() {
                 {salesInvDetailLoading ? (
                   <div style={{ color: "#64748b", fontWeight: 800 }}>Đang tải thông tin hoá đơn gốc…</div>
                 ) : salesInvId && salesInvDetail ? (
-                  <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr", gap: 10 }}>
-                    <div>
-                      <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>HĐ gốc</div>
-                      <div style={{ fontWeight: 900 }}>
-                        {salesInvDetail.code}{" "}
-                        <span style={{ color: "#64748b", fontWeight: 800 }}>• {formatDateDisplay(salesInvDetail.issueDate)}</span>
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr", gap: 10 }}>
+                      <div>
+                        <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>HĐ gốc</div>
+                        <div style={{ fontWeight: 900 }}>
+                          {salesInvDetail.code}{" "}
+                          <span style={{ color: "#64748b", fontWeight: 800 }}>• {formatDateDisplay(salesInvDetail.issueDate)}</span>
+                        </div>
+                        <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>Tổng HĐ: {formatMoney(salesInvDetail.total)}</div>
+                        {salesInvDetail?.hasWarrantyHold ? (
+                          <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>
+                            HOLD: {formatMoney(effectiveHoldAmount)}
+                            {salesInvDetail.warrantyDueDate ? ` • Hạn: ${formatDateDisplay(salesInvDetail.warrantyDueDate)}` : ""}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 12, color: "#94a3b8", fontWeight: 800 }}>Không có HOLD</div>
+                        )}
                       </div>
-                      <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>Tổng HĐ: {formatMoney(salesInvDetail.total)}</div>
+
+                      <div>
+                        <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>Đã hoàn trước đó</div>
+                        <div style={{ fontWeight: 900 }}>{formatMoney(refundedNormalBefore + refundedHoldBefore)}</div>
+                        <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>
+                          (NORMAL: {formatMoney(refundedNormalBefore)} • HOLD: {formatMoney(refundedHoldBefore)})
+                        </div>
+                      </div>
+
+                      <div>
+                        <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>Còn có thể hoàn</div>
+                        <div style={{ fontWeight: 900, color: refundableTotalNow > 0 ? "#065F46" : "#991B1B" }}>
+                          {formatMoney(refundableTotalNow)}
+                        </div>
+                        <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>
+                          (NORMAL: {formatMoney(refundableNormalNow)} • HOLD: {formatMoney(refundableHoldNow)})
+                        </div>
+                      </div>
                     </div>
 
-                    <div>
-                      <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>Đã hoàn trước đó</div>
-                      <div style={{ fontWeight: 900 }}>{formatMoney(refundedBefore)}</div>
-                      <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>(tổng NORMAL âm)</div>
+                    <div style={{ marginTop: 10, fontSize: 12, color: "#334155", fontWeight: 800 }}>
+                      Gợi ý: muốn “hoàn hết” thì nhập đúng số tiền cần hoàn. Hệ thống sẽ tự tách: <b>hoàn NORMAL trước</b>, thiếu thì <b>hoàn HOLD</b>.
                     </div>
-
-                    <div>
-                      <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>Còn có thể hoàn</div>
-                      <div style={{ fontWeight: 900, color: refundableNow > 0 ? "#065F46" : "#991B1B" }}>{formatMoney(refundableNow)}</div>
-                      <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>(= NORMAL net)</div>
-                    </div>
-                  </div>
+                  </>
                 ) : salesInvId ? (
                   <div style={{ color: "#991B1B", fontWeight: 900 }}>Không tải được hoá đơn SALES gốc.</div>
                 ) : (
@@ -1116,31 +1297,63 @@ export default function SalesReturnsPage() {
 
                 {salesInvDetail && (salesInvDetail.allocations || []).length > 0 ? (
                   <div style={{ marginTop: 10 }}>
-                    <div style={{ fontSize: 12, color: "#64748b", fontWeight: 900, marginBottom: 6 }}>Lịch sử thu/hoàn gần đây (NORMAL)</div>
+                    <div style={{ fontSize: 12, color: "#64748b", fontWeight: 900, marginBottom: 6 }}>Lịch sử thu/hoàn gần đây (NORMAL/HOLD)</div>
 
-                    {/* ✅ FIX: giới hạn chiều cao lịch sử để không “nuốt” hết modal */}
-                    <div style={{ maxHeight: 140, overflowY: "auto", borderRadius: 12, border: `1px solid ${inputBaseBorder}`, background: "#fff" }}>
+                    <div
+                      style={{
+                        maxHeight: 160,
+                        overflowY: "auto",
+                        borderRadius: 12,
+                        border: `1px solid ${inputBaseBorder}`,
+                        background: "#fff",
+                      }}
+                    >
                       {(salesInvDetail.allocations || [])
-                        .filter((a) => String(a.kind) === "NORMAL")
-                        .slice(0, 12)
+                        .filter((a) => String(a.kind) === "NORMAL" || String(a.kind) === "WARRANTY_HOLD")
+                        .slice(0, 14)
                         .map((a) => {
+                          const isHold = String(a.kind) === "WARRANTY_HOLD";
                           const signLabel = a.amount >= 0 ? "THU" : "HOÀN";
                           const signColor = a.amount >= 0 ? "#065F46" : "#991B1B";
+                          const kindBadge = isHold ? "HOLD" : "NORMAL";
+                          const kindBg = isHold ? "#EEF2FF" : "#ECFDF5";
+                          const kindBd = isHold ? "#C7D2FE" : "#6EE7B7";
+                          const kindTx = isHold ? "#3730A3" : "#065F46";
                           const dt = a.payment?.date || a.createdAt || "";
+
                           return (
                             <div key={a.id} style={{ padding: "10px 12px", borderBottom: "1px solid #F1F5F9" }}>
                               <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                                <div style={{ fontWeight: 900, color: signColor }}>
-                                  {signLabel} • {formatMoney(Math.abs(a.amount))}
+                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                  <span
+                                    style={{
+                                      fontSize: 11,
+                                      fontWeight: 900,
+                                      padding: "3px 8px",
+                                      borderRadius: 999,
+                                      background: kindBg,
+                                      border: `1px solid ${kindBd}`,
+                                      color: kindTx,
+                                    }}
+                                  >
+                                    {kindBadge}
+                                  </span>
+
+                                  <div style={{ fontWeight: 900, color: signColor }}>
+                                    {signLabel} • {formatMoney(Math.abs(a.amount))}
+                                  </div>
                                 </div>
+
                                 <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>{formatDateDisplay(dt)}</div>
                               </div>
+
                               <div style={{ fontSize: 12, color: "#64748b", fontWeight: 700, marginTop: 4 }}>
                                 {a.payment?.type ? `Phiếu: ${a.payment.type}` : ""}
                                 {a.payment?.account?.code ? ` • TK: ${a.payment.account.code}` : ""}
                                 {a.payment?.method ? ` • ${a.payment.method}` : ""}
                                 {a.payment?.refNo ? ` • Ref: ${a.payment.refNo}` : ""}
                               </div>
+
                               {a.payment?.note ? (
                                 <div style={{ fontSize: 12, color: "#334155", fontWeight: 700, marginTop: 4 }}>{a.payment.note}</div>
                               ) : null}
@@ -1155,25 +1368,26 @@ export default function SalesReturnsPage() {
               <div style={rowStyle()}>
                 <div>
                   <div style={labelStyle()}>Số tiền hoàn</div>
-                  <input
-                    style={{
-                      ...inputStyle(),
-                      borderColor: overRefund ? "#FCA5A5" : inputBaseBorder,
-                      background: overRefund ? "#FEF2F2" : "#fff",
-                    }}
-                    type="number"
-                    min={0}
-                    step={1000}
+
+                  <CurrencyInput
                     value={refundAmount}
-                    onChange={(e) => setRefundAmount(Number(e.target.value || 0))}
-                    onFocus={(e) => applyFocusStyle(e.currentTarget)}
-                    onBlur={(e) => applyBlurStyle(e.currentTarget)}
-                    onMouseEnter={(e) => applyHoverStyle(e.currentTarget)}
-                    onMouseLeave={(e) => applyLeaveStyle(e.currentTarget)}
+                    onValueChange={(val) => {
+                      userEditedRefundAmountRef.current = true;
+                      setRefundAmount(val);
+                    }}
+                    min={0}
+                    allowNegative={false}
+                    className={undefined}
+                    inputClassName={undefined}
+                    placeholder="Nhập số tiền hoàn..."
                   />
+
+                  <div style={{ marginTop: 6 }} />
+
                   {overRefund ? (
                     <div style={{ marginTop: 6, color: "#991B1B", fontWeight: 900, fontSize: 12 }}>
-                      Số tiền hoàn đang vượt mức cho phép. Tối đa bạn chỉ được hoàn: {formatMoney(refundableNow)}.
+                      Số tiền hoàn đang vượt mức cho phép. Tối đa bạn chỉ được hoàn: {formatMoney(refundableTotalNow)} (NORMAL:{" "}
+                      {formatMoney(refundableNormalNow)} • HOLD: {formatMoney(refundableHoldNow)}).
                     </div>
                   ) : null}
                 </div>
@@ -1258,9 +1472,7 @@ export default function SalesReturnsPage() {
                         {partnerLoading ? (
                           <div style={{ padding: 12, color: "#64748b", fontWeight: 700 }}>Đang tìm…</div>
                         ) : partnerOptions.length === 0 ? (
-                          <div style={{ padding: 12, color: "#b45309", fontWeight: 800 }}>
-                            Không có kết quả. Hãy gõ rõ hơn (tên/sđt/mã nếu có).
-                          </div>
+                          <div style={{ padding: 12, color: "#b45309", fontWeight: 800 }}>Không có kết quả. Hãy gõ rõ hơn (tên/sđt/mã nếu có).</div>
                         ) : (
                           partnerOptions.map((p) => (
                             <div
@@ -1339,9 +1551,7 @@ export default function SalesReturnsPage() {
                         ) : salesInvLoading ? (
                           <div style={{ padding: 12, color: "#64748b", fontWeight: 700 }}>Đang tìm…</div>
                         ) : salesInvOptions.length === 0 ? (
-                          <div style={{ padding: 12, color: "#b45309", fontWeight: 800 }}>
-                            Không có hoá đơn SALES phù hợp. Thử gõ mã hoặc bỏ trống để xem gần đây.
-                          </div>
+                          <div style={{ padding: 12, color: "#b45309", fontWeight: 800 }}>Không có hoá đơn SALES phù hợp. Thử gõ mã hoặc bỏ trống để xem gần đây.</div>
                         ) : (
                           salesInvOptions.map((x) => {
                             const label = `${x.code} • ${formatDateDisplay(x.issueDate)} • ${formatMoney(x.total)}`;
@@ -1370,7 +1580,7 @@ export default function SalesReturnsPage() {
                 )}
 
                 <div style={{ marginTop: 6, fontSize: 12, color: "#64748b", fontWeight: 800 }}>
-                  Gợi ý: chọn đúng HĐ gốc để hệ thống tự kiểm tra “đã hoàn bao nhiêu” và “còn được hoàn bao nhiêu”.
+                  Gợi ý: chọn đúng HĐ gốc để hệ thống tự kiểm tra “khách đã trả NORMAL/HOLD bao nhiêu” và “còn được hoàn bao nhiêu”.
                 </div>
               </div>
 
@@ -1418,7 +1628,6 @@ export default function SalesReturnsPage() {
               </div>
             </div>
 
-            {/* ✅ FIX: footer luôn thấy, không bị đẩy xuống */}
             <div style={modalFooterStyle()}>
               <button style={ghostBtnStyle()} onClick={closeRefund}>
                 Huỷ

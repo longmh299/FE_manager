@@ -1,5 +1,5 @@
 // src/pages/InvoicesPage.tsx
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
@@ -8,6 +8,8 @@ type InvoiceType = "SALES" | "PURCHASE";
 type AnyInvoiceType = "SALES" | "PURCHASE" | "SALES_RETURN" | "PURCHASE_RETURN";
 
 type PaymentStatus = "UNPAID" | "PARTIAL" | "PAID";
+
+// ✅ đồng bộ với BE hiện tại (không có CANCELLED)
 type InvoiceStatus = "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
 
 type PaymentAccount = {
@@ -16,28 +18,47 @@ type PaymentAccount = {
   name: string;
 };
 
+type ReturnMetaLite = {
+  state?: "NONE" | "PARTIAL" | "FULL";
+  debtIgnore?: boolean;
+  returnedTotal?: number;
+  netTotal?: number; // after return, before hold
+  holdAmount?: number;
+  collectible?: number; // after return & hold
+};
+
 type InvoiceListItem = {
   id: string | number;
   code: string;
   date?: string;
   type: InvoiceType;
 
-  partnerId?: string; // ✅ NEW (để tạo payment)
+  partnerId?: string;
   partnerName: string;
 
-  totalAmount: number;
+  totalAmount: number; // ✅ Gross total (subtotal + tax)
+
+  // ✅ (tuỳ BE) nếu có trả hàng
+  netTotal?: number; // gross after return
+  returnedTotal?: number; // gross returned
+
+  // ✅ nếu BE trả returnMeta thì ưu tiên dùng
+  returnMeta?: ReturnMetaLite;
 
   paymentStatus?: PaymentStatus;
-  paidAmount?: number; // ✅ paid NORMAL (collectible)
+  paidAmount?: number; // ✅ NORMAL collected net (đã sync từ allocations NORMAL)
 
-  // ✅ warranty hold (để tính "còn lại được thu")
   hasWarrantyHold?: boolean;
   warrantyHoldAmount?: number;
 
   status?: InvoiceStatus;
 };
 
-// ------ helpers ------
+type InvoiceTypeFilter = "" | "SALES" | "PURCHASE";
+const LS_LAST_PAY_ACCOUNT = "lastPayAccountId";
+
+/* ========================= helpers ========================= */
+
 function formatDateDisplay(raw?: string) {
   if (!raw) return "";
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
@@ -55,7 +76,7 @@ function formatDateDisplay(raw?: string) {
 function unwrapList(res: any): any[] {
   const body = res?.data ?? {};
   if (body && typeof body === "object" && "data" in body) return body.data || [];
-  return body || [];
+  return Array.isArray(body) ? body : [];
 }
 
 function unwrapUser(res: any): any {
@@ -63,7 +84,6 @@ function unwrapUser(res: any): any {
   return body?.data ?? body;
 }
 
-// ✅ hiển thị tiền theo VN: 1.000.000
 function formatMoney(n: number) {
   return Number(n || 0).toLocaleString("vi-VN");
 }
@@ -72,25 +92,14 @@ function normalizeRole(me: any) {
   return String(me?.role ?? me?.user?.role ?? me?.data?.role ?? "");
 }
 
-/**
- * ✅ remaining NORMAL (collectible) when warranty hold is enabled:
- *   collectibleTotal = total - hold
- *   remaining = collectibleTotal - paidNormal
- */
-function calcCollectibleRemaining(params: {
-  total: number;
-  paidNormal: number;
-  hasHold?: boolean;
-  holdAmount?: number;
-}) {
-  const total = Number(params.total || 0);
-  const paidNormal = Number(params.paidNormal || 0);
-  const hold = params.hasHold ? Number(params.holdAmount || 0) : 0;
+function toNum(v: any) {
+  if (v == null) return 0;
+  const n = typeof v === "number" ? v : Number(String(v));
+  return Number.isFinite(n) ? n : 0;
+}
 
-  const collectibleTotal = Math.max(0, total - hold);
-  const remainingNormal = Math.max(0, collectibleTotal - paidNormal);
-
-  return { hold, collectibleTotal, remainingNormal };
+function clamp0(n: any) {
+  return Math.max(0, toNum(n));
 }
 
 // ✅ parse input tiền: nhận cả "." "," " " -> số
@@ -101,7 +110,134 @@ function parseMoneyInputToNumber(raw: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** ========================= UI: Modal (confirm / input) ========================= **/
+function getReturnState(inv: InvoiceListItem): "NONE" | "PARTIAL" | "FULL" {
+  if (inv.type !== "SALES") return "NONE";
+  const st = inv.returnMeta?.state;
+  if (st === "FULL" || st === "PARTIAL" || st === "NONE") return st;
+  return "NONE";
+}
+
+function getReturnedTotal(inv: InvoiceListItem) {
+  if (inv.type !== "SALES") return 0;
+  if (inv.returnMeta?.returnedTotal != null) return clamp0(inv.returnMeta.returnedTotal);
+  if (inv.returnedTotal != null) return clamp0(inv.returnedTotal);
+  return 0;
+}
+
+/**
+ * ✅ Tính "tổng còn tính thu/chi" sau trả hàng (Gross sau trả, chưa trừ hold):
+ * ƯU TIÊN:
+ * - returnMeta.netTotal
+ * - netTotal
+ * - total - returnedTotal
+ * - total
+ */
+function calcSalesNetTotal(inv: InvoiceListItem) {
+  const total = clamp0(inv.totalAmount);
+
+  if (inv.type !== "SALES") return total;
+
+  if (inv.returnMeta?.netTotal != null) return clamp0(inv.returnMeta.netTotal);
+  if (inv.netTotal != null) return clamp0(inv.netTotal);
+
+  const returned = getReturnedTotal(inv);
+  if (returned > 0) return clamp0(total - returned);
+
+  return total;
+}
+
+/**
+ * ✅ Hold amount:
+ * ƯU TIÊN:
+ * - returnMeta.holdAmount (nếu BE đã tính riêng cho sales)
+ * - warrantyHoldAmount (khi hasWarrantyHold)
+ */
+function getHoldAmount(inv: InvoiceListItem) {
+  if (inv.type === "SALES" && inv.returnMeta?.holdAmount != null) return clamp0(inv.returnMeta.holdAmount);
+  if (inv.hasWarrantyHold === true) return clamp0(inv.warrantyHoldAmount);
+  return 0;
+}
+
+/**
+ * ✅ Collectible total (NORMAL) = (Gross sau trả) - hold
+ * ƯU TIÊN:
+ * - returnMeta.collectible (BE đã tính chuẩn)
+ * - tự tính: baseNet - hold
+ */
+function getCollectibleTotal(inv: InvoiceListItem) {
+  if (inv.type === "SALES" && inv.returnMeta?.collectible != null) return clamp0(inv.returnMeta.collectible);
+
+  const baseNet = inv.type === "SALES" ? calcSalesNetTotal(inv) : clamp0(inv.totalAmount);
+  const hold = getHoldAmount(inv);
+  return Math.max(0, baseNet - hold);
+}
+
+/**
+ * ✅ Full return (tất toán về mặt công nợ):
+ * ƯU TIÊN:
+ * - returnMeta.state === FULL
+ * - collectible <= 0 và returnedTotal > 0
+ * - returnedTotal >= total (fallback)
+ */
+function isFullyReturned(inv: InvoiceListItem) {
+  if (inv.type !== "SALES") return false;
+
+  const st = getReturnState(inv);
+  if (st === "FULL") return true;
+
+  const returned = getReturnedTotal(inv);
+  const collectible = getCollectibleTotal(inv);
+  if (returned > 0 && collectible <= 0.0001) return true;
+
+  const total = clamp0(inv.totalAmount);
+  if (returned > 0 && total > 0) return returned + 0.0001 >= total;
+
+  return false;
+}
+
+function isPartialReturned(inv: InvoiceListItem) {
+  if (inv.type !== "SALES") return false;
+  const st = getReturnState(inv);
+  if (st === "PARTIAL") return true;
+
+  const returned = getReturnedTotal(inv);
+  return returned > 0.0001 && !isFullyReturned(inv);
+}
+
+/**
+ * ✅ remaining NORMAL (collectible) based on:
+ * - collectibleTotal (from BE if possible)
+ * - paidNormal (from BE)
+ */
+function calcCollectibleRemaining(params: { collectibleTotal: number; paidNormal: number }) {
+  const collectibleTotal = clamp0(params.collectibleTotal);
+  const paidNormal = clamp0(params.paidNormal);
+  const remainingNormal = Math.max(0, collectibleTotal - paidNormal);
+  return { collectibleTotal, remainingNormal };
+}
+
+function derivePaymentStatus(inv: InvoiceListItem): PaymentStatus {
+  if (isFullyReturned(inv)) return "PAID"; // sẽ bị override badge ở UI (đã trả hàng full)
+
+  const collectibleTotal = getCollectibleTotal(inv);
+  const paid = clamp0(inv.paidAmount);
+
+  if (paid <= 0.0001) return "UNPAID";
+  if (paid + 0.0001 >= collectibleTotal && collectibleTotal > 0) return "PAID";
+  // collectibleTotal = 0 (hiếm) => coi như PAID
+  if (collectibleTotal <= 0.0001) return "PAID";
+  return "PARTIAL";
+}
+
+function hasAnyReturnData(inv: InvoiceListItem) {
+  if (inv.type !== "SALES") return false;
+  if (inv.returnMeta != null) return true;
+  if (inv.netTotal != null) return true;
+  if (inv.returnedTotal != null && clamp0(inv.returnedTotal) > 0) return true;
+  return false;
+}
+
+/** ========================= UI: Modal ========================= **/
 
 function Modal(props: {
   open: boolean;
@@ -135,10 +271,6 @@ function Modal(props: {
 
 /** ========================= Page ========================= **/
 
-type InvoiceTypeFilter = "" | "SALES" | "PURCHASE"; // "" = tất cả (nhưng vẫn chỉ trong SALES/PURCHASE)
-
-const LS_LAST_PAY_ACCOUNT = "lastPayAccountId";
-
 const InvoicesPage: React.FC = () => {
   const navigate = useNavigate();
   const toast = useToast();
@@ -150,42 +282,35 @@ const InvoicesPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [invoices, setInvoices] = useState<InvoiceListItem[]>([]);
 
-  // role from backend
-  const [role, setRole] = useState<string>(""); // admin | accountant | staff
+  const [role, setRole] = useState<string>("");
   const isStaff = role === "staff";
   const isAdmin = role === "admin";
   const canApprove = role === "admin" || role === "accountant";
 
-  // modal confirm
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmTitle, setConfirmTitle] = useState("Xác nhận");
   const [confirmMessage, setConfirmMessage] = useState<React.ReactNode>(null);
   const [confirmAction, setConfirmAction] = useState<null | (() => Promise<void>)>(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
 
-  // reject modal
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [rejectTarget, setRejectTarget] = useState<InvoiceListItem | null>(null);
   const [rejectLoading, setRejectLoading] = useState(false);
 
-  // ✅ payment accounts
   const [accounts, setAccounts] = useState<PaymentAccount[]>([]);
   const [accountsLoading, setAccountsLoading] = useState(false);
 
-  // ✅ payment modal
   const [payOpen, setPayOpen] = useState(false);
   const [payTarget, setPayTarget] = useState<InvoiceListItem | null>(null);
   const [payAccountId, setPayAccountId] = useState<string>("");
-  const [payAmount, setPayAmount] = useState<number>(0); // số thực dùng submit
-  const [payAmountText, setPayAmountText] = useState<string>("0"); // ✅ hiển thị có dấu . theo VN
+  const [payAmount, setPayAmount] = useState<number>(0);
+  const [payAmountText, setPayAmountText] = useState<string>("0");
   const [payDate, setPayDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [paySubmitting, setPaySubmitting] = useState(false);
 
-  // ✅ auto focus/select input tiền khi mở modal
   const payAmountInputRef = useRef<HTMLInputElement | null>(null);
 
-  // ✅ highlight dòng vừa thanh toán + scroll vào dòng
   const [highlightInvoiceId, setHighlightInvoiceId] = useState<string>("");
 
   useEffect(() => {
@@ -208,14 +333,10 @@ const InvoicesPage: React.FC = () => {
     setConfirmOpen(true);
   };
 
-  /**
-   * ✅ Load payment accounts (active)
-   * ✅ nhớ lần chọn tài khoản
-   */
   const loadAccounts = async () => {
     try {
       setAccountsLoading(true);
-      const res = await api.get("/payment-accounts", { params: { active: 1 } });
+      const res = await api.get("/payment-accounts", { params: { active: 1, _ts: Date.now() } });
       const arr: any[] = Array.isArray(res?.data) ? res.data : Array.isArray(res?.data?.data) ? res.data.data : [];
       const mapped: PaymentAccount[] = arr
         .map((a: any) => ({
@@ -227,7 +348,6 @@ const InvoicesPage: React.FC = () => {
 
       setAccounts(mapped);
 
-      // restore last selected account
       let last = "";
       try {
         last = String(localStorage.getItem(LS_LAST_PAY_ACCOUNT) || "");
@@ -247,9 +367,6 @@ const InvoicesPage: React.FC = () => {
     }
   };
 
-  /**
-   * ✅ FIX 304 cache: luôn thêm _ts
-   */
   const fetchInvoices = async (q: string, fromVal: string, toVal: string, typeVal: InvoiceTypeFilter) => {
     try {
       setLoading(true);
@@ -258,10 +375,8 @@ const InvoicesPage: React.FC = () => {
         params: {
           q,
           page: 1,
-          pageSize: 200,
+          pageSize: 300,
           type: typeVal || "",
-          saleUserId: "",
-          techUserId: "",
           from: fromVal || undefined,
           to: toVal || undefined,
           _ts: Date.now(),
@@ -270,7 +385,6 @@ const InvoicesPage: React.FC = () => {
 
       const data: any[] = unwrapList(res);
 
-      // ✅ lọc bỏ return types
       const filtered = (Array.isArray(data) ? data : []).filter((x: any) => {
         const t = String(x.type || "") as AnyInvoiceType;
         if (!(t === "SALES" || t === "PURCHASE")) return false;
@@ -279,8 +393,19 @@ const InvoicesPage: React.FC = () => {
       });
 
       const mapped: InvoiceListItem[] = filtered.map((x: any) => {
-        const total = typeof x.total === "number" ? x.total : Number(x.total ?? x.totalAmount ?? x.subtotal ?? 0);
+        const total = toNum(x.total ?? x.totalAmount ?? x.grandTotal ?? x.subtotal ?? 0);
         const rawDate = x.issueDate ?? x.date ?? x.createdAt ?? "";
+
+        const rm: ReturnMetaLite | undefined = x.returnMeta
+          ? {
+              state: x.returnMeta.state,
+              debtIgnore: !!x.returnMeta.debtIgnore,
+              returnedTotal: x.returnMeta.returnedTotal != null ? toNum(x.returnMeta.returnedTotal) : undefined,
+              netTotal: x.returnMeta.netTotal != null ? toNum(x.returnMeta.netTotal) : undefined,
+              holdAmount: x.returnMeta.holdAmount != null ? toNum(x.returnMeta.holdAmount) : undefined,
+              collectible: x.returnMeta.collectible != null ? toNum(x.returnMeta.collectible) : undefined,
+            }
+          : undefined;
 
         return {
           id: x.id,
@@ -293,10 +418,17 @@ const InvoicesPage: React.FC = () => {
 
           totalAmount: total,
 
-          paidAmount: x.paidAmount != null ? Number(x.paidAmount) : 0,
+          // legacy fields
+          netTotal: x.netTotal != null ? toNum(x.netTotal) : undefined,
+          returnedTotal: x.returnedTotal != null ? toNum(x.returnedTotal) : undefined,
+
+          // ✅ ưu tiên returnMeta nếu có
+          returnMeta: rm,
+
+          paidAmount: x.paidAmount != null ? toNum(x.paidAmount) : 0,
 
           hasWarrantyHold: x.hasWarrantyHold === true,
-          warrantyHoldAmount: x.warrantyHoldAmount != null ? Number(x.warrantyHoldAmount) : 0,
+          warrantyHoldAmount: x.warrantyHoldAmount != null ? toNum(x.warrantyHoldAmount) : 0,
 
           paymentStatus: (x.paymentStatus as PaymentStatus) ?? "UNPAID",
           status: (x.status as InvoiceStatus) ?? "DRAFT",
@@ -323,7 +455,6 @@ const InvoicesPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ khi mở modal thì focus + select ô tiền
   useEffect(() => {
     if (!payOpen) return;
     const t = setTimeout(() => {
@@ -336,7 +467,6 @@ const InvoicesPage: React.FC = () => {
     return () => clearTimeout(t);
   }, [payOpen]);
 
-  // ✅ sau khi refresh list, scroll tới dòng vừa thanh toán + highlight
   useEffect(() => {
     if (!highlightInvoiceId) return;
     const t = setTimeout(() => {
@@ -363,7 +493,6 @@ const InvoicesPage: React.FC = () => {
     fetchInvoices(search.trim(), emptyFrom, emptyTo, "");
   };
 
-  // ===== actions =====
   const handleDelete = async (inv: InvoiceListItem) => {
     if (!inv.id) return;
 
@@ -468,21 +597,21 @@ const InvoicesPage: React.FC = () => {
     setRejectOpen(true);
   };
 
-  // ✅ mở popup thanh toán (admin-only)
   const openPayModal = (inv: InvoiceListItem) => {
     if (!isAdmin) {
       toast.push({ type: "warning", title: "Không có quyền", message: "Chỉ ADMIN mới được thao tác thanh toán." });
       return;
     }
 
-    const total = Number(inv.totalAmount || 0);
-    const paidNormal = Number(inv.paidAmount || 0);
-    const { remainingNormal } = calcCollectibleRemaining({
-      total,
-      paidNormal,
-      hasHold: inv.hasWarrantyHold === true,
-      holdAmount: inv.warrantyHoldAmount,
-    });
+    if (inv.status !== "APPROVED") {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Chỉ hóa đơn ĐÃ DUYỆT mới được thanh toán." });
+      return;
+    }
+
+    if (isFullyReturned(inv)) {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Hóa đơn đã trả hàng toàn bộ (không còn thu)." });
+      return;
+    }
 
     if (!inv.partnerId) {
       toast.push({
@@ -493,14 +622,23 @@ const InvoicesPage: React.FC = () => {
       return;
     }
 
+    const collectibleTotal = getCollectibleTotal(inv);
+    const paidNormal = clamp0(inv.paidAmount);
+
+    const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal, paidNormal });
+
+    if (remainingNormal <= 0) {
+      toast.push({ type: "info", title: "Không còn nợ", message: "Hóa đơn này không còn số tiền cần thu/chi." });
+      return;
+    }
+
     setPayTarget(inv);
     setPayAmount(remainingNormal);
-    setPayAmountText(formatMoney(remainingNormal)); // ✅ có dấu .
+    setPayAmountText(formatMoney(remainingNormal));
     if (!payAccountId && accounts.length > 0) setPayAccountId(accounts[0].id);
     setPayOpen(true);
   };
 
-  // ✅ submit payment
   const submitPayment = async () => {
     if (paySubmitting) return;
     if (!payTarget) return;
@@ -510,16 +648,21 @@ const InvoicesPage: React.FC = () => {
       return;
     }
 
-    const total = Number(payTarget.totalAmount || 0);
-    const paidNormal = Number(payTarget.paidAmount || 0);
-    const { collectibleTotal, remainingNormal } = calcCollectibleRemaining({
-      total,
-      paidNormal,
-      hasHold: payTarget.hasWarrantyHold === true,
-      holdAmount: payTarget.warrantyHoldAmount,
-    });
+    if (payTarget.status !== "APPROVED") {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Chỉ hóa đơn ĐÃ DUYỆT mới được thanh toán." });
+      return;
+    }
 
-    const amount = Number(payAmount || 0);
+    if (isFullyReturned(payTarget)) {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Hóa đơn đã trả hàng toàn bộ (không còn thu)." });
+      return;
+    }
+
+    const collectibleTotal = getCollectibleTotal(payTarget);
+    const paidNormal = clamp0(payTarget.paidAmount);
+    const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal, paidNormal });
+
+    const amount = clamp0(payAmount);
     if (!Number.isFinite(amount) || amount <= 0) {
       toast.push({ type: "warning", title: "Không hợp lệ", message: "Số tiền thanh toán phải > 0." });
       return;
@@ -546,9 +689,9 @@ const InvoicesPage: React.FC = () => {
     try {
       setPaySubmitting(true);
 
-      // ✅ optimistic UI
       const nextPaid = Math.max(0, paidNormal + amount);
-      const nextStatus: PaymentStatus = nextPaid >= collectibleTotal ? "PAID" : "PARTIAL";
+      const nextStatus: PaymentStatus = nextPaid + 0.0001 >= collectibleTotal ? "PAID" : "PARTIAL";
+
       setInvoices((prev) =>
         prev.map((x) => {
           if (String(x.id) !== String(payTarget.id)) return x;
@@ -573,7 +716,6 @@ const InvoicesPage: React.FC = () => {
       const paidId = String(payTarget.id);
       setPayTarget(null);
 
-      // ✅ highlight + scroll
       setHighlightInvoiceId(paidId);
       setTimeout(() => setHighlightInvoiceId(""), 2800);
 
@@ -590,12 +732,19 @@ const InvoicesPage: React.FC = () => {
     }
   };
 
-  // ------ render helpers ------
-  const renderPaymentBadge = (status?: PaymentStatus) => {
-    const st = status || "UNPAID";
+  const renderPaymentBadge = (inv: InvoiceListItem) => {
+    if (isFullyReturned(inv)) {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border whitespace-nowrap bg-gray-100 text-gray-700 border-gray-200">
+          Đã trả hàng (Toàn bộ)
+        </span>
+      );
+    }
+
+    // ✅ UI hiển thị theo số liệu (paidAmount vs collectible) để tránh lệch status do BE/FE
+    const st = derivePaymentStatus(inv);
     let label = "";
-    let className =
-      "inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border whitespace-nowrap ";
+    let className = "inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border whitespace-nowrap ";
 
     if (st === "PAID") {
       label = "Đã thanh toán";
@@ -631,12 +780,34 @@ const InvoicesPage: React.FC = () => {
     return <span className={cls}>{label}</span>;
   };
 
-  const canDelete = (inv: InvoiceListItem) => (isStaff ? inv.status === "DRAFT" : inv.status !== "APPROVED");
+  const renderReturnBadge = (inv: InvoiceListItem) => {
+    if (inv.type !== "SALES") return null;
 
+    if (isFullyReturned(inv)) {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border whitespace-nowrap bg-purple-100 text-purple-700 border-purple-200">
+          Trả hàng toàn bộ
+        </span>
+      );
+    }
+
+    if (isPartialReturned(inv)) {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border whitespace-nowrap bg-purple-50 text-purple-700 border-purple-200">
+          Trả hàng 1 phần
+        </span>
+      );
+    }
+
+    return null;
+  };
+
+  const canDelete = (inv: InvoiceListItem) => (isStaff ? inv.status === "DRAFT" : inv.status !== "APPROVED");
   const showApprovalColumn = canApprove;
   const showStaffWorkflowColumns = isStaff;
 
   const colCount = 7 + (showApprovalColumn ? 1 : 0) + (showStaffWorkflowColumns ? 3 : 0);
+  const showRoleWarning = useMemo(() => !role, [role]);
 
   return (
     <div className="p-4 space-y-4">
@@ -772,23 +943,22 @@ const InvoicesPage: React.FC = () => {
                   const showApproveBtn = canApprove && inv.status === "SUBMITTED";
                   const showRejectBtn = canApprove && inv.status === "SUBMITTED";
 
-                  const total = Number(inv.totalAmount || 0);
-                  const paidNormal = Number(inv.paidAmount || 0);
-                  const { remainingNormal } = calcCollectibleRemaining({
-                    total,
-                    paidNormal,
-                    hasHold: inv.hasWarrantyHold === true,
-                    holdAmount: inv.warrantyHoldAmount,
-                  });
+                  const grossTotal = clamp0(inv.totalAmount);
+
+                  const collectibleTotal = getCollectibleTotal(inv);
+                  const paidNormal = clamp0(inv.paidAmount);
+                  const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal, paidNormal });
 
                   const canPayBase =
                     inv.status === "APPROVED" &&
-                    (inv.paymentStatus === "UNPAID" || inv.paymentStatus === "PARTIAL") &&
+                    !isFullyReturned(inv) &&
+                    (derivePaymentStatus(inv) === "UNPAID" || derivePaymentStatus(inv) === "PARTIAL") &&
                     remainingNormal > 0;
 
                   const canPay = isAdmin && canPayBase;
 
                   const isHighlighted = highlightInvoiceId && String(inv.id) === String(highlightInvoiceId);
+                  const returnedBadge = renderReturnBadge(inv);
 
                   return (
                     <tr
@@ -799,13 +969,29 @@ const InvoicesPage: React.FC = () => {
                         (isHighlighted ? "ring-2 ring-indigo-500 bg-indigo-50" : "")
                       }
                     >
-                      <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap truncate">{inv.code}</td>
-                      <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap">{formatDateDisplay(inv.date)}</td>
-                      <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap truncate">{inv.partnerName}</td>
-                      <td className="px-3 py-2 border-t border-gray-200 text-right whitespace-nowrap">
-                        {formatMoney(inv.totalAmount)} đ
+                      <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="truncate font-medium">{inv.code}</div>
+                          {returnedBadge}
+                        </div>
                       </td>
-                      <td className="px-3 py-2 border-t border-gray-200 text-center">{renderPaymentBadge(inv.paymentStatus)}</td>
+
+                      <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap">
+                        {formatDateDisplay(inv.date)}
+                      </td>
+
+                      <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap truncate">
+                        {inv.partnerName}
+                      </td>
+
+                      <td className="px-3 py-2 border-t border-gray-200 text-right whitespace-nowrap">
+                        <div className="flex flex-col items-end leading-tight gap-0.5">
+                          {/* ✅ luôn show Gross total để tránh hiểu nhầm "hóa đơn thành 6tr" */}
+                          <div className="font-medium">{formatMoney(grossTotal)} đ</div>
+                        </div>
+                      </td>
+
+                      <td className="px-3 py-2 border-t border-gray-200 text-center">{renderPaymentBadge(inv)}</td>
                       <td className="px-3 py-2 border-t border-gray-200 text-center">{renderStatusBadge(inv.status)}</td>
 
                       {showStaffWorkflowColumns && (
@@ -900,7 +1086,9 @@ const InvoicesPage: React.FC = () => {
                         <div className="flex flex-wrap items-center gap-3 text-xs">
                           <button
                             type="button"
-                            className={"hover:underline " + (inv.status === "DRAFT" ? "text-blue-600" : "text-gray-400 cursor-not-allowed")}
+                            className={
+                              "hover:underline " + (inv.status === "DRAFT" ? "text-blue-600" : "text-gray-400 cursor-not-allowed")
+                            }
                             disabled={inv.status !== "DRAFT"}
                             onClick={() => navigate(`/invoices/${inv.id}`)}
                           >
@@ -920,7 +1108,7 @@ const InvoicesPage: React.FC = () => {
                               type="button"
                               className="text-indigo-600 hover:underline"
                               onClick={() => openPayModal(inv)}
-                              title="Thanh toán hóa đơn"
+                              title={`Còn lại: ${formatMoney(remainingNormal)} đ`}
                             >
                               Thanh toán
                             </button>
@@ -943,7 +1131,7 @@ const InvoicesPage: React.FC = () => {
           </table>
         </div>
 
-        {!role && (
+        {showRoleWarning && (
           <div className="mt-3 text-xs text-orange-600">
             Không đọc được role từ /auth/me. Kiểm tra response /api/auth/me có field role ở đâu (data.role hay role).
           </div>
@@ -1031,7 +1219,11 @@ const InvoicesPage: React.FC = () => {
                   await api.post(`/invoices/${rejectTarget.id}/reject`, {
                     reason: rejectReason.trim() || undefined,
                   });
-                  toast.push({ type: "success", title: "Đã từ chối", message: `Hóa đơn ${rejectTarget.code} đã bị từ chối.` });
+                  toast.push({
+                    type: "success",
+                    title: "Đã từ chối",
+                    message: `Hóa đơn ${rejectTarget.code} đã bị từ chối.`,
+                  });
                   setRejectOpen(false);
                   await fetchInvoices(search.trim(), from, to, typeFilter);
                 } catch (e: any) {
@@ -1099,14 +1291,16 @@ const InvoicesPage: React.FC = () => {
       >
         {payTarget ? (
           (() => {
-            const total = Number(payTarget.totalAmount || 0);
-            const paidNormal = Number(payTarget.paidAmount || 0);
-            const { hold, collectibleTotal, remainingNormal } = calcCollectibleRemaining({
-              total,
-              paidNormal,
-              hasHold: payTarget.hasWarrantyHold === true,
-              holdAmount: payTarget.warrantyHoldAmount,
-            });
+            const grossTotal = clamp0(payTarget.totalAmount);
+
+            // gross after return
+            const netAfterReturn = payTarget.type === "SALES" ? calcSalesNetTotal(payTarget) : grossTotal;
+            const returnedGross = payTarget.type === "SALES" ? getReturnedTotal(payTarget) : 0;
+
+            const hold = getHoldAmount(payTarget);
+            const collectibleTotal = getCollectibleTotal(payTarget);
+            const paidNormal = clamp0(payTarget.paidAmount);
+            const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal, paidNormal });
 
             return (
               <div className="space-y-3 text-sm text-gray-700">
@@ -1129,28 +1323,63 @@ const InvoicesPage: React.FC = () => {
                   </div>
                   <div>
                     <div className="text-xs text-gray-500">Loại</div>
-                    <div className="font-semibold">{payTarget.type === "PURCHASE" ? "Nhập hàng (chi)" : "Bán hàng (thu)"}</div>
+                    <div className="font-semibold">
+                      {payTarget.type === "PURCHASE" ? "Nhập hàng (chi)" : "Bán hàng (thu)"}
+                    </div>
                   </div>
                 </div>
 
+                {payTarget.type === "SALES" && hasAnyReturnData(payTarget) ? (
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="p-2 rounded-md border bg-gray-50">
+                      <div className="text-xs text-gray-500">Tổng gốc (Gross)</div>
+                      <div className="font-semibold">{formatMoney(grossTotal)} đ</div>
+                    </div>
+                    <div className="p-2 rounded-md border bg-gray-50">
+                      <div className="text-xs text-gray-500">Đã trả (Gross)</div>
+                      <div className="font-semibold">{formatMoney(returnedGross)} đ</div>
+                    </div>
+                    <div className="p-2 rounded-md border bg-gray-50">
+                      <div className="text-xs text-gray-500">Còn tính thu (sau trả)</div>
+                      <div className="font-semibold">{formatMoney(netAfterReturn)} đ</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="p-2 rounded-md border bg-gray-50">
+                      <div className="text-xs text-gray-500">Tổng gốc (Gross)</div>
+                      <div className="font-semibold">{formatMoney(grossTotal)} đ</div>
+                    </div>
+                    <div className="p-2 rounded-md border bg-gray-50">
+                      <div className="text-xs text-gray-500">Đã thanh toán (NORMAL)</div>
+                      <div className="font-semibold">{formatMoney(paidNormal)} đ</div>
+                    </div>
+                    <div className="p-2 rounded-md border bg-gray-50">
+                      <div className="text-xs text-gray-500">Còn lại (NORMAL)</div>
+                      <div className="font-semibold text-indigo-700">{formatMoney(remainingNormal)} đ</div>
+                    </div>
+                  </div>
+                )}
+
+                {/* luôn show collectible summary */}
                 <div className="grid grid-cols-3 gap-2">
                   <div className="p-2 rounded-md border bg-gray-50">
-                    <div className="text-xs text-gray-500">Tổng tiền</div>
-                    <div className="font-semibold">{formatMoney(total)} đ</div>
+                    <div className="text-xs text-gray-500">Collectible (NORMAL)</div>
+                    <div className="font-semibold">{formatMoney(collectibleTotal)} đ</div>
                   </div>
                   <div className="p-2 rounded-md border bg-gray-50">
-                    <div className="text-xs text-gray-500">Đã thanh toán</div>
+                    <div className="text-xs text-gray-500">Đã thanh toán (NORMAL)</div>
                     <div className="font-semibold">{formatMoney(paidNormal)} đ</div>
                   </div>
                   <div className="p-2 rounded-md border bg-gray-50">
-                    <div className="text-xs text-gray-500">Còn lại</div>
+                    <div className="text-xs text-gray-500">Còn lại (NORMAL)</div>
                     <div className="font-semibold text-indigo-700">{formatMoney(remainingNormal)} đ</div>
                   </div>
                 </div>
 
-                {payTarget.hasWarrantyHold && hold > 0 ? (
+                {hold > 0 ? (
                   <div className="text-xs text-gray-600">
-                    * Giữ lại bảo hành: <b>{formatMoney(hold)} đ</b>. Số được thu tối đa (NORMAL):{" "}
+                    * Treo BH/hold: <b>{formatMoney(hold)} đ</b>. Số được thu tối đa (NORMAL):{" "}
                     <b>{formatMoney(collectibleTotal)} đ</b>.
                   </div>
                 ) : null}

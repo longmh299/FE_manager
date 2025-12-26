@@ -8,6 +8,15 @@ type InvoiceType = "SALES" | "PURCHASE";
 type PaymentStatus = "UNPAID" | "PARTIAL" | "PAID";
 type InvoiceStatus = "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
 
+type ReturnMeta = {
+  state: "NONE" | "PARTIAL" | "FULL";
+  debtIgnore: boolean;
+  returnedTotal: number;
+  netTotal: number;
+  holdAmount: number;
+  collectible: number;
+};
+
 type Partner = {
   id: string;
   name: string;
@@ -80,10 +89,13 @@ type Invoice = {
 
   status?: InvoiceStatus;
 
-  // ✅ BẢO HÀNH (treo 5%)
+  // ✅ BẢO HÀNH (treo theo số tiền nhập trực tiếp)
   hasWarrantyHold?: boolean;
   warrantyHoldAmount?: number;
   warrantyDueDate?: string | null;
+
+  // ✅ TRẢ HÀNG - meta tính từ BE (ưu tiên dùng)
+  returnMeta?: ReturnMeta;
 };
 
 /** ========================= Payment history types ========================= **/
@@ -95,13 +107,8 @@ type PaymentAllocation = {
 
 type PaymentRow = {
   id: string;
-
-  // ngày nghiệp vụ (YYYY-MM-DD) - có thể trùng nhau
   date?: string;
-
-  // ✅ timestamp tạo phiếu (phân biệt lần 1/lần 2)
   createdAt?: string;
-
   type?: string; // RECEIPT / PAYMENT
   amount?: number;
   refNo?: string | null;
@@ -181,6 +188,38 @@ const PaidAmountInput: React.FC<{
   );
 };
 
+/** ========================= Component: Warranty hold input (direct amount) ========================= **/
+const WarrantyHoldInput: React.FC<{
+  value: number;
+  disabled?: boolean;
+  onChange: (v: number) => void;
+  styleInput?: React.CSSProperties;
+}> = ({ value, disabled, onChange, styleInput }) => {
+  const [text, setText] = useState(fmtMoneyInput(value));
+
+  useEffect(() => {
+    setText(fmtMoneyInput(value));
+  }, [value]);
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      <input
+        style={styleInput}
+        disabled={disabled}
+        value={text}
+        onChange={(e) => {
+          const raw = Math.max(0, parseMoneyInput(e.target.value));
+          setText(fmtMoneyInput(raw));
+          onChange(raw);
+        }}
+        onBlur={() => setText(fmtMoneyInput(value))}
+        inputMode="numeric"
+      />
+      <span>đ</span>
+    </div>
+  );
+};
+
 function getAuthUser(): { id?: string; role?: string } {
   try {
     const raw = localStorage.getItem("user") || localStorage.getItem("authUser");
@@ -219,7 +258,6 @@ function normalizeDateForInput(raw?: string): string {
 function formatDateTimeDisplay(raw?: string) {
   if (!raw) return "";
 
-  // nếu backend trả "YYYY-MM-DD" thì coi là 00:00:00
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
     const [y, m, d] = raw.split("-");
     return `${d}/${m}/${y} 00:00:00`;
@@ -241,6 +279,44 @@ function formatDateTimeDisplay(raw?: string) {
 
 function formatMoney(n: number) {
   return Number(n || 0).toLocaleString("vi-VN");
+}
+
+function toNum(v: any) {
+  if (v == null) return 0;
+  const n = typeof v === "number" ? v : Number(String(v));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function safeId(v: any): string | null {
+  const s = String(v ?? "").trim();
+  if (!s || s === "undefined" || s === "null") return null;
+  return s;
+}
+
+function getReturnState(inv: Invoice | null) {
+  if (!inv || inv.type !== "SALES") return "NONE" as const;
+  return inv.returnMeta?.state ?? ("NONE" as const);
+}
+function isReturnedFull(inv: Invoice | null) {
+  return getReturnState(inv) === "FULL";
+}
+// function isReturnedPartial(inv: Invoice | null) {
+//   return getReturnState(inv) === "PARTIAL";
+// }
+
+function calcCollectible(inv: Invoice) {
+  // ✅ ưu tiên returnMeta của BE (đã trừ return + hold)
+  if (inv.type === "SALES" && inv.returnMeta) return Math.max(0, toNum(inv.returnMeta.collectible));
+  // fallback: total - hold
+  const total = Math.max(0, toNum(inv.totalAmount));
+  const hold = inv.hasWarrantyHold ? Math.max(0, toNum(inv.warrantyHoldAmount)) : 0;
+  return Math.max(0, total - hold);
+}
+
+function calcDisplayNetTotal(inv: Invoice) {
+  // ✅ tổng còn tính thu/chi sau trả hàng (NET) – ưu tiên returnMeta
+  if (inv.type === "SALES" && inv.returnMeta) return Math.max(0, toNum(inv.returnMeta.netTotal));
+  return Math.max(0, toNum(inv.totalAmount));
 }
 
 // -------- styles (GIỮ NGUYÊN styles của bạn) ----------
@@ -391,8 +467,8 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: 6,
     fontSize: 13,
   },
-  summaryLabel: { width: 160, textAlign: "left", fontWeight: 500 },
-  summaryValue: { width: 200, textAlign: "right", fontWeight: 600 },
+  summaryLabel: { width: 220, textAlign: "left", fontWeight: 500 }, // ✅ widen label
+  summaryValue: { width: 220, textAlign: "right", fontWeight: 600 },
 
   formActions: { display: "flex", justifyContent: "space-between", marginTop: 12, gap: 8 },
   primaryBtn: {
@@ -434,7 +510,7 @@ const styles: Record<string, React.CSSProperties> = {
   noticeError: { background: "#fef2f2", border: "1px solid #f87171", color: "#b91c1c" },
 };
 
-/** ========================= Modal styles (đẹp hơn confirm/prompt native) ========================= **/
+/** ========================= Modal styles ========================= **/
 const modalOverlay: React.CSSProperties = {
   position: "fixed",
   inset: 0,
@@ -526,14 +602,23 @@ const ConfirmModal: React.FC<{
   busy?: boolean;
   onConfirm: () => void | Promise<void>;
   onClose: () => void;
-}> = ({ open, title, message, confirmText = "Xác nhận", cancelText = "Hủy", tone = "default", busy, onConfirm, onClose }) => {
+}> = ({
+  open,
+  title,
+  message,
+  confirmText = "Xác nhận",
+  cancelText = "Hủy",
+  tone = "default",
+  busy,
+  onConfirm,
+  onClose,
+}) => {
   useEffect(() => {
     if (!open) return;
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
       if (e.key === "Enter") {
-        // Enter để xác nhận, nhưng tránh khi đang busy
         if (!busy) onConfirm();
       }
     };
@@ -610,7 +695,6 @@ const PromptModal: React.FC<{
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
       if (e.key === "Enter") {
-        // Enter: xác nhận (nếu không bận)
         if (!busy) onConfirm(val);
       }
     };
@@ -692,18 +776,15 @@ function createEmptyInvoice(): Invoice {
     note: "",
     status: "DRAFT",
 
-    // ✅ warranty default
     hasWarrantyHold: false,
     warrantyHoldAmount: 0,
     warrantyDueDate: null,
+
+    returnMeta: undefined,
   };
 }
 
-function safeId(v: any): string | null {
-  const s = String(v ?? "").trim();
-  if (!s || s === "undefined" || s === "null") return null;
-  return s;
-}
+const DEFAULT_HOLD_PCT = 0.05;
 
 const InvoiceDetailPage: React.FC = () => {
   const navigate = useNavigate();
@@ -713,12 +794,10 @@ const InvoiceDetailPage: React.FC = () => {
   const me = useMemo(() => getAuthUser(), []);
   const isAdmin = (me.role || "").toLowerCase() === "admin";
 
-  // ✅ Toast (đúng theo component của bạn)
   const { toasts, push, remove } = useToast();
   const toastSuccess = (message: string, title = "Thành công") => push({ type: "success", title, message });
   const toastError = (message: string, title = "Có lỗi") => push({ type: "error", title, message });
 
-  // show toast rồi điều hướng list cho user nhìn thấy
   const gotoListSoon = () => setTimeout(() => navigate("/invoices"), 350);
 
   const [invoice, setInvoice] = useState<Invoice | null>(null);
@@ -736,13 +815,15 @@ const InvoiceDetailPage: React.FC = () => {
   const [accountLoadError, setAccountLoadError] = useState<string | null>(null);
   const [dirtySinceLastSave, setDirtySinceLastSave] = useState(false);
 
+  const [warrantyHoldManual, setWarrantyHoldManual] = useState(false);
+
   /** ========================= Payment history state ========================= **/
   const [paymentHistoryLoading, setPaymentHistoryLoading] = useState(false);
   const [paymentHistoryError, setPaymentHistoryError] = useState<string | null>(null);
   const [paymentHistoryRows, setPaymentHistoryRows] = useState<
     Array<
       PaymentRow & {
-        allocatedAmount: number; // số tiền phân bổ cho invoice hiện tại
+        allocatedAmount: number;
       }
     >
   >([]);
@@ -813,6 +894,31 @@ const InvoiceDetailPage: React.FC = () => {
     setMessage(null);
   }
 
+  function defaultHoldAmountFromSubtotal(subtotal: number) {
+    return Math.round(Math.max(0, Number(subtotal || 0)) * DEFAULT_HOLD_PCT);
+  }
+
+  function recomputeInvoiceCore(prev: Invoice, nextPartial?: Partial<Invoice>) {
+    const next: Invoice = { ...prev, ...(nextPartial || {}) };
+
+    const { subtotal, tax, totalAmount } = recalcTotals(next.lines, next.taxPercent);
+    next.subtotal = subtotal;
+    next.tax = tax;
+    next.totalAmount = totalAmount;
+
+    if (next.hasWarrantyHold) {
+      if (!warrantyHoldManual) {
+        next.warrantyHoldAmount = defaultHoldAmountFromSubtotal(subtotal);
+      } else {
+        next.warrantyHoldAmount = Math.max(0, Number(next.warrantyHoldAmount || 0));
+      }
+    } else {
+      next.warrantyHoldAmount = 0;
+    }
+
+    return next;
+  }
+
   useEffect(() => {
     async function init() {
       try {
@@ -826,7 +932,6 @@ const InvoiceDetailPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // ✅ load payment history sau khi invoice có id
   useEffect(() => {
     if (!invoice?.id || isCreate) {
       setPaymentHistoryRows([]);
@@ -935,6 +1040,7 @@ const InvoiceDetailPage: React.FC = () => {
     if (isCreate) {
       setInvoice(createEmptyInvoice());
       setDirtySinceLastSave(false);
+      setWarrantyHoldManual(false);
       return;
     }
     if (!id) return;
@@ -964,6 +1070,17 @@ const InvoiceDetailPage: React.FC = () => {
       const normalizedDate = normalizeDateForInput(rawDate);
 
       const status: InvoiceStatus = (x.status as InvoiceStatus) ?? "DRAFT";
+
+      const rm: ReturnMeta | undefined = x.returnMeta
+        ? {
+            state: String(x.returnMeta.state || "NONE") as any,
+            debtIgnore: !!x.returnMeta.debtIgnore,
+            returnedTotal: toNum(x.returnMeta.returnedTotal),
+            netTotal: toNum(x.returnMeta.netTotal),
+            holdAmount: toNum(x.returnMeta.holdAmount),
+            collectible: toNum(x.returnMeta.collectible),
+          }
+        : undefined;
 
       const inv: Invoice = {
         id: x.id,
@@ -996,15 +1113,18 @@ const InvoiceDetailPage: React.FC = () => {
 
         status,
 
-        // ✅ warranty from API
         hasWarrantyHold: x.hasWarrantyHold ?? false,
         warrantyHoldAmount: x.warrantyHoldAmount != null ? Number(x.warrantyHoldAmount) : 0,
         warrantyDueDate: x.warrantyDueDate ?? null,
+
+        returnMeta: rm,
       };
 
       setInvoice(inv);
       setDirtySinceLastSave(false);
       setMessage(null);
+
+      setWarrantyHoldManual(!!inv.hasWarrantyHold && Number(inv.warrantyHoldAmount || 0) > 0);
     } catch (err) {
       console.error("loadInvoice error", err);
       toastError("Không tải được hóa đơn.");
@@ -1019,7 +1139,6 @@ const InvoiceDetailPage: React.FC = () => {
     setPaymentHistoryError(null);
 
     try {
-      // gọi list payments; nếu có partnerId thì lọc bớt cho nhẹ
       const params: any = {};
       if (invoice.partnerId) params.partnerId = invoice.partnerId;
 
@@ -1045,7 +1164,7 @@ const InvoiceDetailPage: React.FC = () => {
         const row: PaymentRow & { allocatedAmount: number } = {
           id: String(p.id),
           date: p.date,
-          createdAt: p.createdAt, // ✅ FIX: dùng createdAt để phân biệt từng lần thanh toán
+          createdAt: p.createdAt,
           type: p.type,
           amount: p.amount != null ? Number(p.amount) : undefined,
           refNo: p.refNo ?? null,
@@ -1061,7 +1180,6 @@ const InvoiceDetailPage: React.FC = () => {
       const filtered = mapped
         .filter((r) => r.allocatedAmount > 0)
         .sort((a, b) => {
-          // ✅ FIX: sort theo createdAt trước, fallback date
           const ta = a.createdAt ? new Date(a.createdAt).getTime() : a.date ? new Date(a.date).getTime() : 0;
           const tb = b.createdAt ? new Date(b.createdAt).getTime() : b.date ? new Date(b.date).getTime() : 0;
           return tb - ta;
@@ -1081,20 +1199,7 @@ const InvoiceDetailPage: React.FC = () => {
   function updateInvoice(partial: Partial<Invoice>) {
     setInvoice((prev) => {
       if (!prev) return prev;
-      const next: Invoice = { ...prev, ...partial };
-      const { subtotal, tax, totalAmount } = recalcTotals(next.lines, next.taxPercent);
-      next.subtotal = subtotal;
-      next.tax = tax;
-      next.totalAmount = totalAmount;
-
-      // ✅ nếu đang bật bảo hành thì recalculte lại hold theo total mới
-      if (next.hasWarrantyHold) {
-        next.warrantyHoldAmount = Math.round(Number(next.totalAmount || 0) * 0.05);
-      } else {
-        next.warrantyHoldAmount = 0;
-      }
-
-      return next;
+      return recomputeInvoiceCore(prev, partial);
     });
   }
 
@@ -1123,12 +1228,7 @@ const InvoiceDetailPage: React.FC = () => {
     setInvoice((prev) => {
       if (!prev) return prev;
       const lines = prev.lines.map((l, idx) => (idx === index ? { ...l, [field]: value } : l));
-      const { subtotal, tax, totalAmount } = recalcTotals(lines, prev.taxPercent);
-
-      const hasWarrantyHold = !!prev.hasWarrantyHold;
-      const warrantyHoldAmount = hasWarrantyHold ? Math.round(Number(totalAmount || 0) * 0.05) : 0;
-
-      return { ...prev, lines, subtotal, tax, totalAmount, warrantyHoldAmount };
+      return recomputeInvoiceCore(prev, { lines });
     });
   }
 
@@ -1139,12 +1239,7 @@ const InvoiceDetailPage: React.FC = () => {
       const lines = prev.lines.map((l, idx) =>
         idx === index ? { ...l, itemId: it.id, itemName: it.name, unit: it.unit, price: l.price || it.price || 0 } : l
       );
-      const { subtotal, tax, totalAmount } = recalcTotals(lines, prev.taxPercent);
-
-      const hasWarrantyHold = !!prev.hasWarrantyHold;
-      const warrantyHoldAmount = hasWarrantyHold ? Math.round(Number(totalAmount || 0) * 0.05) : 0;
-
-      return { ...prev, lines, subtotal, tax, totalAmount, warrantyHoldAmount };
+      return recomputeInvoiceCore(prev, { lines });
     });
     setOpenItemSuggestIndex(null);
   }
@@ -1154,12 +1249,7 @@ const InvoiceDetailPage: React.FC = () => {
     setInvoice((prev) => {
       if (!prev) return prev;
       const lines = [...prev.lines, { itemName: "", qty: 1, price: 0, unit: "" } as InvoiceLine];
-      const { subtotal, tax, totalAmount } = recalcTotals(lines, prev.taxPercent);
-
-      const hasWarrantyHold = !!prev.hasWarrantyHold;
-      const warrantyHoldAmount = hasWarrantyHold ? Math.round(Number(totalAmount || 0) * 0.05) : 0;
-
-      return { ...prev, lines, subtotal, tax, totalAmount, warrantyHoldAmount };
+      return recomputeInvoiceCore(prev, { lines });
     });
   }
 
@@ -1168,12 +1258,7 @@ const InvoiceDetailPage: React.FC = () => {
     setInvoice((prev) => {
       if (!prev) return prev;
       const lines = prev.lines.filter((_, idx) => idx !== index);
-      const { subtotal, tax, totalAmount } = recalcTotals(lines, prev.taxPercent);
-
-      const hasWarrantyHold = !!prev.hasWarrantyHold;
-      const warrantyHoldAmount = hasWarrantyHold ? Math.round(Number(totalAmount || 0) * 0.05) : 0;
-
-      return { ...prev, lines, subtotal, tax, totalAmount, warrantyHoldAmount };
+      return recomputeInvoiceCore(prev, { lines });
     });
   }
 
@@ -1226,11 +1311,13 @@ const InvoiceDetailPage: React.FC = () => {
   function applyPaymentStatus(status: PaymentStatus, manualPaid?: number) {
     setInvoice((prev) => {
       if (!prev) return prev;
-      const total = prev.totalAmount ?? 0;
+
+      // ✅ quan trọng: "đủ" phải theo collectible (Gross - Hold, và theo BE nếu có returnMeta)
+      const totalBase = calcCollectible(prev);
 
       let paidAmount = prev.paidAmount ?? 0;
       if (status === "UNPAID") paidAmount = 0;
-      else if (status === "PAID") paidAmount = total;
+      else if (status === "PAID") paidAmount = totalBase;
       else if (status === "PARTIAL") paidAmount = Math.max(0, manualPaid ?? paidAmount);
 
       return { ...prev, paymentStatus: status, paidAmount };
@@ -1253,20 +1340,25 @@ const InvoiceDetailPage: React.FC = () => {
       return;
     }
 
-    const total = invoice.totalAmount ?? 0;
+    const totalBase = calcCollectible(invoice);
     let paidAmount = Number(invoice.paidAmount ?? 0) || 0;
     const paymentStatus = (invoice.paymentStatus ?? "UNPAID") as PaymentStatus;
 
     if (paymentStatus === "UNPAID") paidAmount = 0;
-    if (paymentStatus === "PAID") paidAmount = total;
+    if (paymentStatus === "PAID") paidAmount = totalBase;
     if (paymentStatus === "PARTIAL") {
-      if (paidAmount > total) paidAmount = total;
+      if (paidAmount > totalBase) paidAmount = totalBase;
       if (paidAmount < 0) paidAmount = 0;
     }
 
-    // ✅ warranty payload
     const hasWarrantyHold = !!invoice.hasWarrantyHold;
-    const warrantyHoldAmount = hasWarrantyHold ? Math.round(Number(invoice.totalAmount || 0) * 0.05) : 0;
+    const warrantyHoldAmount = hasWarrantyHold ? Math.max(0, Number(invoice.warrantyHoldAmount || 0)) : 0;
+
+    const sub = Number(invoice.subtotal || 0);
+    if (hasWarrantyHold && warrantyHoldAmount > sub && sub > 0) {
+      toastError(`Số tiền treo bảo hành không được vượt quá tạm tính (${formatMoney(sub)} đ).`);
+      return;
+    }
 
     try {
       setSaving(true);
@@ -1289,13 +1381,11 @@ const InvoiceDetailPage: React.FC = () => {
 
         taxPercent: invoice.taxPercent ?? 0,
 
-        // ✅ vẫn giữ 3 trạng thái thu/1 phần/chưa thu theo UI hiện tại
         paymentStatus,
         paidAmount,
 
         receiveAccountId: safeId(invoice.receiveAccountId),
 
-        // ✅ warranty fields
         hasWarrantyHold,
         warrantyHoldAmount,
 
@@ -1459,7 +1549,6 @@ const InvoiceDetailPage: React.FC = () => {
           <div style={styles.content}>Đang tải...</div>
         </div>
 
-        {/* ✅ Toast */}
         <ToastHost toasts={toasts} onClose={remove} />
       </div>
     );
@@ -1484,14 +1573,39 @@ const InvoiceDetailPage: React.FC = () => {
       ? "Bị từ chối"
       : "Nháp";
 
-  // totals cho history
+  // ====== Payment derived ======
   const paidByPayments = paymentHistoryRows.reduce((s, r) => s + (r.allocatedAmount || 0), 0);
 
-  // ✅ tính “còn phải thu” theo collectible (trừ hold nếu có)
-  const totalAll = Number(invoice.totalAmount || 0);
-  const hold = invoice.hasWarrantyHold ? Number(invoice.warrantyHoldAmount || 0) : 0;
-  const collectible = Math.max(0, totalAll - hold);
-  const debtNow = Math.max(0, collectible - Number(invoice.paidAmount || 0));
+  // ✅ theo UI/BE: paidAmount là phần NORMAL (Gross - Hold). BH (hold) sẽ thu bằng phiếu riêng.
+  const paidNormal = Math.max(0, toNum(invoice.paidAmount));
+  const paidTotal = Math.max(0, paidByPayments);
+  const paidWarranty = Math.max(0, paidTotal - paidNormal); // best-effort (đủ để giải thích rõ như case bạn)
+
+  // ✅ Tính theo returnMeta nếu có
+  const totalGross = Math.max(0, toNum(invoice.totalAmount));
+  const vatAmount = Math.max(0, toNum(invoice.tax)); // ✅ show VAT rõ ràng
+  const returnedTotal =
+    invoice.type === "SALES" && invoice.returnMeta ? Math.max(0, toNum(invoice.returnMeta.returnedTotal)) : 0;
+  const netTotal = calcDisplayNetTotal(invoice);
+
+  const hold =
+    invoice.type === "SALES" && invoice.returnMeta
+      ? Math.max(0, toNum(invoice.returnMeta.holdAmount))
+      : invoice.hasWarrantyHold
+      ? Math.max(0, toNum(invoice.warrantyHoldAmount))
+      : 0;
+
+  const collectible = calcCollectible(invoice);
+  const debtNow = Math.max(0, collectible - Math.max(0, toNum(invoice.paidAmount)));
+
+  const derivedHoldPct =
+    invoice.hasWarrantyHold && Number(invoice.subtotal || 0) > 0
+      ? ((hold * 100) / Number(invoice.subtotal || 0)).toFixed(2)
+      : "0.00";
+
+  const returnState = getReturnState(invoice);
+  const returnText = returnState === "FULL" ? "Trả full" : returnState === "PARTIAL" ? "Trả 1 phần" : "Không trả";
+  const returnColor = returnState === "FULL" ? "#7c3aed" : returnState === "PARTIAL" ? "#6d28d9" : "#6b7280";
 
   return (
     <div style={styles.page}>
@@ -1566,6 +1680,16 @@ const InvoiceDetailPage: React.FC = () => {
                   </select>
                 </div>
               </div>
+
+              {/* ✅ Trả hàng badge theo BE */}
+              {invoice.type === "SALES" && (
+                <div style={{ marginTop: 6, fontSize: 13, color: returnColor }}>
+                  Trả hàng: <b>{returnText}</b>
+                  {invoice.returnMeta?.debtIgnore ? (
+                    <span style={{ marginLeft: 10, color: "#b91c1c" }}>(debtIgnore=true)</span>
+                  ) : null}
+                </div>
+              )}
             </div>
 
             {/* Khách hàng */}
@@ -1844,6 +1968,14 @@ const InvoiceDetailPage: React.FC = () => {
                 </div>
 
                 <div style={styles.summaryRow}>
+                  <span style={styles.summaryLabel}>VAT (thuế):</span>
+                  <span style={styles.summaryValue}>{formatMoney(vatAmount)} đ</span>
+                  <span style={{ fontSize: 12, color: "#6b7280" }}>
+                    (VAT đã nằm trong khoản thu NORMAL)
+                  </span>
+                </div>
+
+                <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Thuế (%)</span>
                   <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <input
@@ -1858,12 +1990,7 @@ const InvoiceDetailPage: React.FC = () => {
                         setInvoice((prev) => {
                           if (!prev) return prev;
                           const pct = isNaN(num) ? 0 : num;
-                          const { subtotal, tax, totalAmount } = recalcTotals(prev.lines, pct);
-
-                          const hasWarrantyHold = !!prev.hasWarrantyHold;
-                          const warrantyHoldAmount = hasWarrantyHold ? Math.round(Number(totalAmount || 0) * 0.05) : 0;
-
-                          return { ...prev, taxPercent: pct, subtotal, tax, totalAmount, warrantyHoldAmount };
+                          return recomputeInvoiceCore(prev, { taxPercent: pct });
                         });
                       }}
                     />
@@ -1872,7 +1999,7 @@ const InvoiceDetailPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* ✅ BẢO HÀNH (tick có/không) */}
+                {/* ✅ BẢO HÀNH */}
                 <div style={styles.summaryRow}>
                   <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <input
@@ -1882,23 +2009,80 @@ const InvoiceDetailPage: React.FC = () => {
                       onChange={(e) => {
                         markDirty();
                         const checked = e.target.checked;
+                        setWarrantyHoldManual(false);
                         setInvoice((prev) => {
                           if (!prev) return prev;
-                          const total = Number(prev.totalAmount || 0);
-                          const hold2 = checked ? Math.round(total * 0.05) : 0;
-                          return { ...prev, hasWarrantyHold: checked, warrantyHoldAmount: hold2 };
+                          const next = recomputeInvoiceCore(prev, { hasWarrantyHold: checked });
+                          return next;
                         });
                       }}
                     />
-                    <span>Có bảo hành (treo 5%)</span>
+                    <span>Có bảo hành (treo)</span>
                   </label>
                 </div>
 
                 {!!invoice.hasWarrantyHold && (
                   <div style={styles.summaryRow}>
-                    <span style={styles.summaryLabel}>Treo bảo hành (5%):</span>
-                    <span style={styles.summaryValue}>{formatMoney(invoice.warrantyHoldAmount || 0)} đ</span>
+                    <span style={styles.summaryLabel}>Số tiền treo bảo hành:</span>
+                    <WarrantyHoldInput
+                      value={Number(invoice.warrantyHoldAmount || 0)}
+                      disabled={lockedForStaff}
+                      onChange={(raw) => {
+                        markDirty();
+                        setWarrantyHoldManual(true);
+                        setInvoice((prev) => {
+                          if (!prev) return prev;
+                          const sub = Number(prev.subtotal || 0);
+                          const v = Math.max(0, raw);
+                          const clamped = sub > 0 ? Math.min(v, sub) : v;
+                          return { ...prev, warrantyHoldAmount: clamped };
+                        });
+                      }}
+                      styleInput={{ ...styles.smallInput, width: 140, textAlign: "right" }}
+                    />
+                    <span style={{ color: "#6b7280", fontSize: 12 }}>(≈ {derivedHoldPct}% của tạm tính)</span>
+                    <button
+                      type="button"
+                      style={styles.secondarySmallBtn}
+                      disabled={lockedForStaff}
+                      title="Đặt về mặc định 5% theo tạm tính"
+                      onClick={() => {
+                        markDirty();
+                        setWarrantyHoldManual(false);
+                        setInvoice((prev) => {
+                          if (!prev) return prev;
+                          const sub = Number(prev.subtotal || 0);
+                          return { ...prev, warrantyHoldAmount: defaultHoldAmountFromSubtotal(sub) };
+                        });
+                      }}
+                    >
+                      Reset 5%
+                    </button>
                   </div>
+                )}
+
+                {/* ✅ Hiển thị breakdown trả hàng theo BE */}
+                {invoice.type === "SALES" && (
+                  <>
+                    <div style={styles.summaryRow}>
+                      <span style={styles.summaryLabel}>Tổng gốc (Gross):</span>
+                      <span style={styles.summaryValue}>{formatMoney(totalGross)} đ</span>
+                    </div>
+
+                    {returnedTotal > 0 && (
+                      <div style={styles.summaryRow}>
+                        <span style={styles.summaryLabel}>Đã trả hàng:</span>
+                        <span style={{ ...styles.summaryValue, color: "#7c3aed" }}>
+                          {formatMoney(returnedTotal)} đ
+                        </span>
+                      </div>
+                    )}
+
+                    <div style={styles.summaryRow}>
+                      <span style={styles.summaryLabel}>Còn tính thu (NET):</span>
+                      <span style={styles.summaryValue}>{formatMoney(netTotal)} đ</span>
+                    </div>
+                  </>
                 )}
 
                 <div style={styles.summaryRow}>
@@ -1919,7 +2103,23 @@ const InvoiceDetailPage: React.FC = () => {
                 </div>
 
                 <div style={styles.summaryRow}>
-                  <span style={styles.summaryLabel}>Đã thu:</span>
+                  <span style={styles.summaryLabel}>Đã thu (NORMAL, gồm VAT):</span>
+                  <span style={styles.summaryValue}>{formatMoney(paidNormal)} đ</span>
+                </div>
+
+                <div style={styles.summaryRow}>
+                  <span style={styles.summaryLabel}>Đã thu (BH):</span>
+                  <span style={styles.summaryValue}>{formatMoney(paidWarranty)} đ</span>
+                </div>
+
+                <div style={styles.summaryRow}>
+                  <span style={styles.summaryLabel}>Đã thu (TỔNG theo phiếu):</span>
+                  <span style={styles.summaryValue}>{formatMoney(paidTotal)} đ</span>
+                </div>
+
+                {/* giữ input PARTIAL như cũ */}
+                <div style={styles.summaryRow}>
+                  <span style={styles.summaryLabel}>Chỉnh “Đã thu” (khi chọn 1 phần):</span>
                   <PaidAmountInput
                     value={invoice.paidAmount ?? 0}
                     disabled={!showPaidInput || lockedForStaff}
@@ -1959,12 +2159,19 @@ const InvoiceDetailPage: React.FC = () => {
                 {accountLoadError && <div style={{ ...styles.notice, ...styles.noticeError }}>{accountLoadError}</div>}
 
                 <div style={styles.summaryRow}>
-                  <span style={styles.summaryLabel}>Còn phải thu:</span>
-                  <span style={styles.summaryValue}>{formatMoney(debtNow)} đ</span>
+                  <span style={styles.summaryLabel}>Collectible (NORMAL = Gross - BH):</span>
+                  <span style={styles.summaryValue}>{formatMoney(collectible)} đ</span>
                 </div>
 
                 <div style={styles.summaryRow}>
-                  <span style={styles.summaryLabel}>Tổng cộng:</span>
+                  <span style={styles.summaryLabel}>Còn phải thu (NORMAL):</span>
+                  <span style={{ ...styles.summaryValue, color: isReturnedFull(invoice) ? "#6b7280" : "#111827" }}>
+                    {formatMoney(debtNow)} đ
+                  </span>
+                </div>
+
+                <div style={styles.summaryRow}>
+                  <span style={styles.summaryLabel}>Tổng cộng (Gross):</span>
                   <span style={styles.summaryValue}>{formatMoney(invoice.totalAmount)} đ</span>
                 </div>
 
@@ -1988,7 +2195,6 @@ const InvoiceDetailPage: React.FC = () => {
                 </div>
               )}
 
-              {/* Trạng thái + nút submit/approve/reject */}
               <div style={styles.postStatusRow}>
                 <span
                   style={{
@@ -2026,7 +2232,7 @@ const InvoiceDetailPage: React.FC = () => {
               </div>
             </div>
 
-            {/* ✅ LỊCH SỬ THANH TOÁN (thêm dưới cuối trang) */}
+            {/* ✅ LỊCH SỬ THANH TOÁN */}
             {!isCreate && invoice.id && (
               <div style={styles.sectionBox}>
                 <div style={styles.sectionTitle}>Lịch sử thanh toán</div>
@@ -2042,7 +2248,10 @@ const InvoiceDetailPage: React.FC = () => {
                   </button>
 
                   <div style={{ fontSize: 13, color: "#6b7280" }}>
-                    Tổng đã thanh toán theo phiếu: <b>{formatMoney(paidByPayments)} đ</b>
+                    Tổng allocations vào HĐ: <b>{formatMoney(paidTotal)} đ</b>
+                    <span style={{ marginLeft: 10 }}>
+                      (NORMAL: <b>{formatMoney(paidNormal)} đ</b> • BH: <b>{formatMoney(paidWarranty)} đ</b>)
+                    </span>
                   </div>
                 </div>
 
@@ -2052,9 +2261,7 @@ const InvoiceDetailPage: React.FC = () => {
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
                       <tr style={{ background: "#f9fafb" }}>
-                        <th style={{ textAlign: "left", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>
-                          Ngày
-                        </th>
+                        <th style={{ textAlign: "left", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>Ngày</th>
                         <th style={{ textAlign: "left", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>
                           Tài khoản
                         </th>
@@ -2110,7 +2317,7 @@ const InvoiceDetailPage: React.FC = () => {
                                   fontWeight: 600,
                                 }}
                               >
-                                {formatMoney(p.allocatedAmount)} đ
+                                {formatMoney((p as any).allocatedAmount || 0)} đ
                               </td>
 
                               <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6", textAlign: "right" }}>
@@ -2139,10 +2346,8 @@ const InvoiceDetailPage: React.FC = () => {
         </div>
       </div>
 
-      {/* ✅ Toast */}
       <ToastHost toasts={toasts} onClose={remove} />
 
-      {/* ✅ Confirm / Prompt Modals (thay confirm/prompt native) */}
       <ConfirmModal
         open={confirmOpen && !!confirmCfg}
         title={confirmCfg?.title || ""}
