@@ -313,11 +313,11 @@ function calcCollectible(inv: Invoice) {
   return Math.max(0, total - hold);
 }
 
-function calcDisplayNetTotal(inv: Invoice) {
-  // ✅ tổng còn tính thu/chi sau trả hàng (NET) – ưu tiên returnMeta
-  if (inv.type === "SALES" && inv.returnMeta) return Math.max(0, toNum(inv.returnMeta.netTotal));
-  return Math.max(0, toNum(inv.totalAmount));
-}
+// function calcDisplayNetTotal(inv: Invoice) {
+//   // ✅ tổng còn tính thu/chi sau trả hàng (NET) – ưu tiên returnMeta
+//   if (inv.type === "SALES" && inv.returnMeta) return Math.max(0, toNum(inv.returnMeta.netTotal));
+//   return Math.max(0, toNum(inv.totalAmount));
+// }
 
 // -------- styles (GIỮ NGUYÊN styles của bạn) ----------
 const styles: Record<string, React.CSSProperties> = {
@@ -1582,11 +1582,11 @@ const InvoiceDetailPage: React.FC = () => {
   const paidWarranty = Math.max(0, paidTotal - paidNormal); // best-effort (đủ để giải thích rõ như case bạn)
 
   // ✅ Tính theo returnMeta nếu có
-  const totalGross = Math.max(0, toNum(invoice.totalAmount));
+  // const totalGross = Math.max(0, toNum(invoice.totalAmount));
   const vatAmount = Math.max(0, toNum(invoice.tax)); // ✅ show VAT rõ ràng
   const returnedTotal =
     invoice.type === "SALES" && invoice.returnMeta ? Math.max(0, toNum(invoice.returnMeta.returnedTotal)) : 0;
-  const netTotal = calcDisplayNetTotal(invoice);
+  // const netTotal = calcDisplayNetTotal(invoice);
 
   const hold =
     invoice.type === "SALES" && invoice.returnMeta
