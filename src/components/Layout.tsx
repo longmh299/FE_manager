@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { NavLink, Outlet, useLocation, Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
 type GroupKey =
@@ -25,10 +25,13 @@ const Layout: React.FC = () => {
 
   const location = useLocation();
 
+  // ✅ chặn route "Doanh số cá nhân" nếu không phải staff
+  if (!isStaff && location.pathname.startsWith("/me/sales")) {
+    return <Navigate to="/" replace />;
+  }
+
   const navCls = ({ isActive }: { isActive: boolean }) =>
-    `block rounded px-3 py-2 ${
-      isActive ? "bg-slate-700" : "hover:bg-slate-800"
-    }`;
+    `block rounded px-3 py-2 ${isActive ? "bg-slate-700" : "hover:bg-slate-800"}`;
 
   const linkMatch = (to: string) => {
     const p = location.pathname;
@@ -43,7 +46,8 @@ const Layout: React.FC = () => {
   const invLinks = useMemo(
     () => [
       { to: "part-stocks", label: "Tồn linh kiện" },
-      { to: "machines", label: "Linh kiện theo dòng máy" },
+      // ✅ ẨN: Linh kiện theo dòng máy
+      // { to: "machines", label: "Linh kiện theo dòng máy" },
       { to: "machine-stocks", label: "Tồn máy móc" },
     ],
     []
@@ -51,11 +55,15 @@ const Layout: React.FC = () => {
 
   const salesLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
-    // revenue chỉ admin/accountant
+    // ✅ revenue: admin + accountant
     list.push({ to: "revenue", label: "Báo cáo doanh thu" });
     list.push({ to: "invoices", label: "Quản lý hóa đơn" });
+
     if (isAdmin) list.push({ to: "/sales-returns", label: "Khách trả hàng" });
-    list.push({ to: "/me/sales", label: "Doanh số cá nhân" });
+
+    // ✅ ẨN với admin/accountant: Doanh số cá nhân chỉ staff
+    // list.push({ to: "/me/sales", label: "Doanh số cá nhân" });
+
     return list;
   }, [isAdmin]);
 
@@ -68,27 +76,33 @@ const Layout: React.FC = () => {
   const opsLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
     if (isAdmin) list.push({ to: "stock-counts", label: "Kiểm kê tồn" });
-    if (isAdmin)
-      list.push({ to: "stock-import-opening", label: "Khởi tạo tồn đầu" });
+    if (isAdmin) list.push({ to: "stock-import-opening", label: "Khởi tạo tồn đầu" });
     return list;
   }, [isAdmin]);
 
   // ✅ BÁO CÁO & CÔNG NỢ
   const reportLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
+
+    // bạn đang để report chỉ admin, mình giữ như cũ
     if (isAdmin) list.push({ to: "debts/by-sale", label: "Công Nợ" });
     if (isAdmin) list.push({ to: "/reports/ledger", label: "Sổ kho" });
-    if (isAdmin)
-      list.push({ to: "/reports/sales-ledger", label: "Bảng kê bán" });
+    if (isAdmin) list.push({ to: "/reports/sales-ledger", label: "Bảng kê bán" });
+
+    // ✅ ADD: Báo cáo XNT (admin + accountant hay chỉ admin tuỳ bạn)
+    // Mặc định mình để admin + accountant đều thấy, vì đây là báo cáo kho.
+    if (isAdmin || isAccountant) {
+      list.push({ to: "/reports/stock-inout", label: "Báo cáo XNT" });
+    }
+
     return list;
-  }, [isAdmin]);
+  }, [isAdmin, isAccountant]);
 
   // ✅ QUẢN TRỊ
   const adminLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
     if (isAdmin) list.push({ to: "users", label: "Quản lý tài khoản" });
-    if (isAdmin)
-      list.push({ to: "payment-accounts", label: "Thêm tài khoản thanh toán" });
+    if (isAdmin) list.push({ to: "payment-accounts", label: "Thêm tài khoản thanh toán" });
 
     // ✅ AUDIT LOGS: admin + accountant
     if (canSeeAuditLogs) {
@@ -203,9 +217,14 @@ const Layout: React.FC = () => {
               <NavLink to="part-stocks" end className={navCls}>
                 Tồn linh kiện
               </NavLink>
+
+              {/* ✅ ẨN: Linh kiện theo dòng máy */}
+              {/*
               <NavLink to="machines" className={navCls}>
                 Linh kiện theo dòng máy
               </NavLink>
+              */}
+
               <NavLink to="machine-stocks" className={navCls}>
                 Tồn máy móc
               </NavLink>
@@ -215,6 +234,7 @@ const Layout: React.FC = () => {
                 Quản lý hóa đơn
               </NavLink>
 
+              {/* ✅ chỉ staff thấy */}
               <NavLink to="/me/sales" className={navCls}>
                 Doanh số cá nhân
               </NavLink>
@@ -222,6 +242,13 @@ const Layout: React.FC = () => {
               <NavLink to="partners" className={navCls}>
                 Khách hàng
               </NavLink>
+
+              {/* ✅ staff cũng có thể cần XNT (nếu bạn muốn staff thấy, mở comment) */}
+              {/* 
+              <NavLink to="/reports/stock-inout" className={navCls}>
+                Báo cáo XNT
+              </NavLink>
+              */}
 
               <NavLink to="change-password" className={navCls}>
                 Đổi mật khẩu

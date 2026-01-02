@@ -578,7 +578,7 @@ const MachineStocksPage: React.FC = () => {
               <th style={{ textAlign: "center", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 110 }}>
                 ĐVT
               </th>
-
+               <th style={{ textAlign: "right", padding: "8px 10px", width: 120 }}>Tồn kho</th>
               {isAdmin && (
                 <>
                   <th style={{ textAlign: "right", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 140 }}>
@@ -593,7 +593,7 @@ const MachineStocksPage: React.FC = () => {
                 </>
               )}
 
-              <th style={{ textAlign: "right", padding: "8px 10px", width: 120 }}>Tồn kho</th>
+             
             </tr>
           </thead>
 
@@ -622,7 +622,9 @@ const MachineStocksPage: React.FC = () => {
                   <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9", textAlign: "center", whiteSpace: "nowrap" }}>
                     {renderUnitCell(row)}
                   </td>
-
+                  <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", textAlign: "right", whiteSpace: "nowrap", fontWeight: 600 }}>
+                    {fmtQty(row.totalQty)}
+                  </td>
                   {isAdmin && (
                     <>
                       <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9", textAlign: "right", whiteSpace: "nowrap" }}>
@@ -652,9 +654,6 @@ const MachineStocksPage: React.FC = () => {
                     </>
                   )}
 
-                  <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", textAlign: "right", whiteSpace: "nowrap", fontWeight: 600 }}>
-                    {fmtQty(row.totalQty)}
-                  </td>
                 </tr>
               ))
             )}

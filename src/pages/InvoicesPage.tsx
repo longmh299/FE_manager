@@ -73,6 +73,28 @@ function formatDateDisplay(raw?: string) {
   return `${day}/${month}/${year}`;
 }
 
+
+function ymLocalNow() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${yyyy}-${mm}`;
+}
+
+function ymFromYmd(dateStr?: string) {
+  if (!dateStr) return "";
+  const s = String(dateStr).trim();
+  // Expect yyyy-mm-dd; nếu BE trả ISO full thì vẫn slice được yyyy-mm
+  return s.length >= 7 ? s.slice(0, 7) : "";
+}
+
+function isInCurrentMonth(issueDate?: string) {
+  const ym = ymFromYmd(issueDate);
+  if (!ym) return false;
+  return ym === ymLocalNow();
+}
+
+
 function unwrapList(res: any): any[] {
   const body = res?.data ?? {};
   if (body && typeof body === "object" && "data" in body) return body.data || [];
@@ -955,7 +977,7 @@ const InvoicesPage: React.FC = () => {
                     (derivePaymentStatus(inv) === "UNPAID" || derivePaymentStatus(inv) === "PARTIAL") &&
                     remainingNormal > 0;
 
-                  const canPay = isAdmin && canPayBase;
+                  const canPay = isAdmin && canPayBase && isInCurrentMonth(inv.date);
 
                   const isHighlighted = highlightInvoiceId && String(inv.id) === String(highlightInvoiceId);
                   const returnedBadge = renderReturnBadge(inv);

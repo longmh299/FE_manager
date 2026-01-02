@@ -4,8 +4,23 @@ import api from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
+import { CurrencyInput } from "../components/CurrencyInput";
 
 /* ======================= Types ======================= */
+
+type PaymentAccount = { id: string; code: string; name: string; isActive?: boolean };
+
+type PaymentHistoryRow = {
+  paymentId: string;
+  paymentDate: string; // yyyy-MM-dd
+  paymentType: string; // PaymentType
+  refNo: string | null;
+  allocationKind: "NORMAL" | "WARRANTY_HOLD" | "TAX";
+  amount: number;
+  note: string | null;
+  accountName?: string | null;
+  accountCode?: string | null;
+};
 
 type ReceivableInvoiceRow = {
   invoiceId: string;
@@ -17,7 +32,8 @@ type ReceivableInvoiceRow = {
   saleUserId?: string | null;
   saleName?: string | null;
 
-  total: number;
+  netTotal?: number; // ✅ dùng cho "Tổng hóa đơn"
+  total?: number; // legacy
 
   hasWarrantyHold: boolean;
   warrantyHoldAmount: number;
@@ -27,13 +43,15 @@ type ReceivableInvoiceRow = {
   paidNormal: number;
   paidWarranty: number;
 
-  normalOutstanding: number;
-  warrantyOutstanding: number;
+  normalOutstanding: number; // tiền hàng còn phải thu
+  warrantyOutstanding: number; // bảo hành còn phải thu
 
   warrantyHoldNotDue: number;
   warrantyHoldDue: number;
 
   totalOutstanding: number;
+
+  paymentHistory?: PaymentHistoryRow[];
 };
 
 type ReceivablesByPartnerRow = {
@@ -63,8 +81,6 @@ type ReportResp = {
     rows: ReceivableInvoiceRow[];
   };
 };
-
-type PaymentAccount = { id: string; code: string; name: string; isActive?: boolean };
 
 /* ======================= Helpers ======================= */
 
@@ -114,7 +130,6 @@ function safeFileSlug(s: string) {
 }
 
 function parseYmdToDate(ymd: string) {
-  // yyyy-mm-dd -> Date local (để Excel hiển thị đúng)
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
   if (!m) return new Date(ymd);
   const y = Number(m[1]);
@@ -123,7 +138,13 @@ function parseYmdToDate(ymd: string) {
   return new Date(y, mo, d);
 }
 
-/* ======================= Excel Builder ======================= */
+function getInvoiceNetTotal(r: ReceivableInvoiceRow): number {
+  const v = (r as any).netTotal;
+  if (v != null) return num(v);
+  return num((r as any).total);
+}
+
+/* ======================= Excel Builder (giữ logic như bản trước) ======================= */
 
 async function buildReceivablesExcel(params: {
   asOf: string;
@@ -132,7 +153,7 @@ async function buildReceivablesExcel(params: {
   searchLabel: string;
   includeRows: boolean;
   summary: ReportResp["data"]["summary"] | null;
-  totalsInView: { normal: number; hold: number; due: number; total: number; count: number };
+  totalsInView: { invoiceNet: number; normal: number; hold: number; due: number; total: number; count: number };
   rows: ReceivableInvoiceRow[];
 }) {
   const { asOf, tabLabel, saleLabel, searchLabel, includeRows, summary, totalsInView, rows } = params;
@@ -146,20 +167,19 @@ async function buildReceivablesExcel(params: {
     pageSetup: { fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
 
-  // Columns (A..J)
   ws.columns = [
-    { key: "A", width: 6 },   // STT
-    { key: "B", width: 16 },  // Mã HĐ
-    { key: "C", width: 13 },  // Ngày
-    { key: "D", width: 28 },  // Khách
-    { key: "E", width: 18 },  // NV sale
-    { key: "F", width: 15 },  // Tổng
-    { key: "G", width: 15 },  // Nợ thường
-    { key: "H", width: 15 },  // BH treo
-    { key: "I", width: 15 },  // BH đến hạn
-    { key: "J", width: 15 },  // Tổng nợ
-    { key: "K", width: 18 },  // BH tổng
-    { key: "L", width: 16 },  // Ngày đến hạn
+    { key: "A", width: 6 },
+    { key: "B", width: 16 },
+    { key: "C", width: 13 },
+    { key: "D", width: 28 },
+    { key: "E", width: 18 },
+    { key: "F", width: 16 }, // Tổng HĐ (net)
+    { key: "G", width: 16 }, // Tiền hàng
+    { key: "H", width: 15 }, // BH treo
+    { key: "I", width: 15 }, // BH đến hạn
+    { key: "J", width: 15 }, // Tổng nợ
+    { key: "K", width: 18 }, // BH tổng
+    { key: "L", width: 16 }, // Ngày đến hạn
   ];
 
   const moneyFmt = "#,##0";
@@ -181,7 +201,6 @@ async function buildReceivablesExcel(params: {
     }
   }
 
-  // ===== Title =====
   ws.mergeCells("A1:L1");
   const t = ws.getCell("A1");
   t.value = "BÁO CÁO CÔNG NỢ PHẢI THU";
@@ -189,7 +208,6 @@ async function buildReceivablesExcel(params: {
   t.alignment = { vertical: "middle", horizontal: "left" };
   ws.getRow(1).height = 28;
 
-  // ===== Meta block (2 columns) =====
   const metaTop = 3;
   const meta = [
     ["Chốt đến", asOf],
@@ -214,21 +232,19 @@ async function buildReceivablesExcel(params: {
   ws.mergeCells(`B${metaTop + 3}:D${metaTop + 3}`);
   ws.mergeCells(`B${metaTop + 4}:D${metaTop + 4}`);
 
-  // ===== KPI cards =====
   const kpiTop = 3;
-  const kpiLeft = 6; // col F
+  const kpiLeft = 6;
   const kpis = [
-    { label: "Nợ thường", value: num(summary?.normalOutstanding ?? 0), tone: "normal" },
+    { label: "Tiền hàng", value: num(summary?.normalOutstanding ?? 0), tone: "normal" },
     { label: "BH treo", value: num(summary?.warrantyHoldNotDue ?? 0), tone: "hold" },
     { label: "BH đến hạn", value: num(summary?.warrantyHoldDue ?? 0), tone: "due" },
     { label: "Tổng phải thu", value: num(summary?.totalOutstanding ?? 0), tone: "total" },
   ];
 
   for (let i = 0; i < kpis.length; i++) {
-    const colStart = kpiLeft + i * 2; // F/H/J/L (2 cols each)
+    const colStart = kpiLeft + i * 2;
     const colEnd = colStart + 1;
 
-    // merge block (2 columns, 3 rows)
     ws.mergeCells(kpiTop, colStart, kpiTop, colEnd);
     ws.mergeCells(kpiTop + 1, colStart, kpiTop + 1, colEnd);
     ws.mergeCells(kpiTop + 2, colStart, kpiTop + 2, colEnd);
@@ -247,11 +263,16 @@ async function buildReceivablesExcel(params: {
     valCell.alignment = { vertical: "middle", horizontal: "right" };
 
     hintCell.value =
-      kpis[i].tone === "normal" ? "Phải thu ngay" : kpis[i].tone === "hold" ? "Chưa đến hạn" : kpis[i].tone === "due" ? "Đã đến hạn" : "Tổng công nợ";
+      kpis[i].tone === "normal"
+        ? "Phải thu ngay"
+        : kpis[i].tone === "hold"
+        ? "Chưa đến hạn"
+        : kpis[i].tone === "due"
+        ? "Đã đến hạn"
+        : "Tổng công nợ";
     hintCell.font = { size: 10, color: { argb: "FF64748B" } };
     hintCell.alignment = { vertical: "middle", horizontal: "left" };
 
-    // background
     const bg =
       kpis[i].tone === "due"
         ? "FFFEE2E2"
@@ -266,45 +287,29 @@ async function buildReceivablesExcel(params: {
         ws.getCell(rr, cc).fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
       }
     }
-
     setBorder(kpiTop, colStart, kpiTop + 2, colEnd);
   }
 
-  // row heights around header
   ws.getRow(3).height = 18;
   ws.getRow(4).height = 24;
   ws.getRow(5).height = 18;
 
-  // ===== Totals-in-view strip =====
   const stripRow = 9;
   ws.mergeCells(stripRow, 1, stripRow, 12);
   const strip = ws.getCell(stripRow, 1);
-  strip.value = `TỔNG TRONG DANH SÁCH HIỆN TẠI (SAU LỌC): ${totalsInView.count} HĐ · Nợ thường ${fmtMoney(
-    totalsInView.normal
-  )} · BH treo ${fmtMoney(totalsInView.hold)} · BH đến hạn ${fmtMoney(totalsInView.due)} · Tổng ${fmtMoney(totalsInView.total)}`;
+  strip.value = `TỔNG TRONG DANH SÁCH HIỆN TẠI (SAU LỌC): ${totalsInView.count} HĐ · Tổng HĐ ${fmtMoney(
+    totalsInView.invoiceNet
+  )} · Tiền hàng ${fmtMoney(totalsInView.normal)} · BH treo ${fmtMoney(totalsInView.hold)} · BH đến hạn ${fmtMoney(
+    totalsInView.due
+  )} · Tổng phải thu ${fmtMoney(totalsInView.total)}`;
   strip.font = { bold: true, size: 11 };
   strip.alignment = { vertical: "middle", horizontal: "left" };
   strip.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FAFC" } };
   setBorder(stripRow, 1, stripRow, 12);
   ws.getRow(stripRow).height = 20;
 
-  // ===== Table header =====
   const headerRow = 12;
-  const headers = [
-    "STT",
-    "Mã HĐ",
-    "Ngày",
-    "Khách hàng",
-    "NV sale",
-    "Tổng (VAT)",
-    "Nợ thường",
-    "BH treo",
-    "BH đến hạn",
-    "Tổng nợ",
-    "BH tổng",
-    "Ngày đến hạn",
-  ];
-
+  const headers = ["STT", "Mã HĐ", "Ngày", "Khách hàng", "NV sale", "Tổng HĐ", "Tiền hàng", "BH treo", "BH đến hạn", "Tổng nợ", "BH tổng", "Ngày đến hạn"];
   ws.getRow(headerRow).values = headers as any;
   ws.getRow(headerRow).height = 22;
 
@@ -321,7 +326,6 @@ async function buildReceivablesExcel(params: {
     };
   }
 
-  // ===== Table rows =====
   let r = headerRow + 1;
   for (let i = 0; i < rows.length; i++) {
     const x = rows[i];
@@ -335,7 +339,7 @@ async function buildReceivablesExcel(params: {
     ws.getCell(r, 5).value = x.saleName || "";
 
     const moneyCells = [
-      { col: 6, val: num(x.total) },
+      { col: 6, val: getInvoiceNetTotal(x) },
       { col: 7, val: num(x.normalOutstanding || 0) },
       { col: 8, val: num(x.warrantyHoldNotDue || 0) },
       { col: 9, val: num(x.warrantyHoldDue || 0) },
@@ -353,13 +357,6 @@ async function buildReceivablesExcel(params: {
     ws.getCell(r, 12).value = x.warrantyDueDate ? parseYmdToDate(x.warrantyDueDate) : "";
     ws.getCell(r, 12).numFmt = "yyyy-mm-dd";
 
-    // alignment for text cols
-    ws.getCell(r, 1).alignment = { vertical: "middle", horizontal: "right" };
-    ws.getCell(r, 2).alignment = { vertical: "middle", horizontal: "left" };
-    ws.getCell(r, 4).alignment = { vertical: "middle", horizontal: "left", wrapText: true };
-    ws.getCell(r, 5).alignment = { vertical: "middle", horizontal: "left" };
-
-    // borders
     for (let c = 1; c <= 12; c++) {
       ws.getCell(r, c).border = {
         top: { style: "thin", color: { argb: "FFE2E8F0" } },
@@ -369,15 +366,10 @@ async function buildReceivablesExcel(params: {
       };
     }
 
-    // highlight due column if >0
-    if (dueWarn) {
-      ws.getCell(r, 9).font = { bold: true, color: { argb: "FFDC2626" } };
-    }
-
+    if (dueWarn) ws.getCell(r, 9).font = { bold: true, color: { argb: "FFDC2626" } };
     r++;
   }
 
-  // ===== Auto filter =====
   ws.autoFilter = {
     from: { row: headerRow, column: 1 },
     to: { row: headerRow, column: 12 },
@@ -447,7 +439,6 @@ const ReceivablesReportPage: React.FC = () => {
       throw lastErr;
     } catch (e: any) {
       if (mySeq !== reqSeq.current) return;
-
       const msg = e?.response?.data?.message || e?.message || "Lỗi tải báo cáo";
       setBannerError(msg);
       push({ type: "error", message: msg });
@@ -512,17 +503,20 @@ const ReceivablesReportPage: React.FC = () => {
   }, [rows, tab, searchDebounced, saleKey]);
 
   const totalsInView = useMemo(() => {
+    let invoiceNet = 0;
     let normal = 0;
     let hold = 0;
     let due = 0;
     let total = 0;
+
     for (const r of filteredRows) {
+      invoiceNet += getInvoiceNetTotal(r);
       normal += r.normalOutstanding || 0;
       hold += r.warrantyHoldNotDue || 0;
       due += r.warrantyHoldDue || 0;
       total += r.totalOutstanding || 0;
     }
-    return { normal, hold, due, total, count: filteredRows.length };
+    return { invoiceNet, normal, hold, due, total, count: filteredRows.length };
   }, [filteredRows]);
 
   async function exportExcelPretty() {
@@ -534,7 +528,7 @@ const ReceivablesReportPage: React.FC = () => {
 
       const saleLabel =
         saleKey === "__ALL__" ? "Tất cả NV sale" : saleOptions.find((x) => x.key === saleKey)?.label || "Đã chọn";
-      const tabLabel = tab === "ALL" ? "Tất cả" : tab === "NORMAL" ? "Nợ thường" : "Nợ bảo hành";
+      const tabLabel = tab === "ALL" ? "Tất cả" : tab === "NORMAL" ? "Tiền hàng" : "Bảo hành";
       const searchLabel = (searchDebounced || "").trim();
 
       const wb = await buildReceivablesExcel({
@@ -545,13 +539,11 @@ const ReceivablesReportPage: React.FC = () => {
         includeRows,
         summary,
         totalsInView,
-        rows: filteredRows, // ✅ export theo đúng list đang nhìn
+        rows: filteredRows,
       });
 
       const buf = await wb.xlsx.writeBuffer();
-      const blob = new Blob([buf], {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      });
+      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 
       const filename = `cong-no-phai-thu_${asOf}_${safeFileSlug(tabLabel)}.xlsx`;
       saveAs(blob, filename);
@@ -564,14 +556,12 @@ const ReceivablesReportPage: React.FC = () => {
     }
   }
 
-  /* ======================= Warranty Collect Modal (giữ nguyên) ======================= */
+  /* ======================= Common ======================= */
 
-  const [whOpen, setWhOpen] = useState(false);
-  const [whRow, setWhRow] = useState<ReceivableInvoiceRow | null>(null);
-
-  const [whPayDate, setWhPayDate] = useState(todayYmd());
-  const [whAmount, setWhAmount] = useState<number>(0);
-  const [whNote, setWhNote] = useState<string>("");
+  const NOTE_TEMPLATES = useMemo(
+    () => ["Thu tiền mặt", "Thu chuyển khoản", "Thu bù trừ công nợ", "Thu theo đối soát", "Thu hoàn ứng", "Khác"],
+    []
+  );
 
   const [accounts, setAccounts] = useState<PaymentAccount[]>([]);
   const [accountId, setAccountId] = useState<string>("");
@@ -583,7 +573,7 @@ const ReceivablesReportPage: React.FC = () => {
     accountsLoadedRef.current = true;
 
     try {
-      const resp = await api.get<any>("/payment_accounts");
+      const resp = await api.get<any>("/payment-accounts");
       const list: PaymentAccount[] = resp?.data?.data || resp?.data?.rows || resp?.data || resp?.data?.items || [];
       if (Array.isArray(list)) {
         setAccounts(
@@ -602,11 +592,37 @@ const ReceivablesReportPage: React.FC = () => {
     }
   }
 
+  // ✅ chỉ stopPropagation để input focus bình thường
+  function stopBubble(e: any) {
+    try {
+      e?.stopPropagation?.();
+    } catch {}
+  }
+  // dùng cho button trong table
+  function stopAll(e: any) {
+    try {
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
+    } catch {}
+  }
+
+  /* ======================= Collect WARRANTY Modal ======================= */
+
+  const [whOpen, setWhOpen] = useState(false);
+  const [whRow, setWhRow] = useState<ReceivableInvoiceRow | null>(null);
+
+  const [whPayDate, setWhPayDate] = useState(todayYmd());
+  const [whAmount, setWhAmount] = useState<number>(0);
+  const [whNoteTpl, setWhNoteTpl] = useState<string>(NOTE_TEMPLATES[0] || "");
+  const [whNote, setWhNote] = useState<string>("");
+
   function openCollectWarranty(row: ReceivableInvoiceRow) {
     setWhRow(row);
     setWhPayDate(todayYmd());
     setWhAmount(Math.max(0, Math.round(num(row.warrantyOutstanding))));
-    setWhNote(`Thu bảo hành treo HĐ ${row.code}`);
+    const tpl = NOTE_TEMPLATES[0] || "Thu bảo hành";
+    setWhNoteTpl(tpl);
+    setWhNote(`${tpl} - HĐ ${row.code}`);
     setAccountId("");
     setWhOpen(true);
     loadAccountsOnce();
@@ -639,6 +655,12 @@ const ReceivablesReportPage: React.FC = () => {
       return;
     }
 
+    const note = String(whNote || "").trim();
+    if (!note) {
+      push({ type: "error", message: "Ghi chú là bắt buộc. Vui lòng chọn mẫu hoặc nhập ghi chú." });
+      return;
+    }
+
     try {
       setLoadingPay(true);
 
@@ -648,7 +670,7 @@ const ReceivablesReportPage: React.FC = () => {
         type: "RECEIPT",
         amount: amt,
         accountId: accountId || undefined,
-        note: whNote || undefined,
+        note,
         allocations: [{ invoiceId: whRow.invoiceId, amount: amt, kind: "WARRANTY_HOLD" }],
       });
 
@@ -661,6 +683,87 @@ const ReceivablesReportPage: React.FC = () => {
     } catch (e: any) {
       const msg = e?.response?.data?.message || e?.message || "Không tạo được phiếu thu bảo hành";
       push({ type: "error", message: msg });
+    } finally {
+      setLoadingPay(false);
+    }
+  }
+
+  /* ======================= Collect NORMAL Modal ======================= */
+
+  const [nOpen, setNOpen] = useState(false);
+  const [nRow, setNRow] = useState<ReceivableInvoiceRow | null>(null);
+
+  const [nPayDate, setNPayDate] = useState(todayYmd());
+  const [nAmount, setNAmount] = useState<number>(0);
+  const [nNoteTpl, setNNoteTpl] = useState<string>(NOTE_TEMPLATES[0] || "");
+  const [nNote, setNNote] = useState<string>("");
+
+  function openCollectNormal(row: ReceivableInvoiceRow) {
+    setNRow(row);
+    setNPayDate(todayYmd());
+    setNAmount(Math.max(0, Math.round(num(row.normalOutstanding))));
+    const tpl = NOTE_TEMPLATES[0] || "Thu tiền";
+    setNNoteTpl(tpl);
+    setNNote(`${tpl} - HĐ ${row.code}`);
+    setAccountId("");
+    setNOpen(true);
+    loadAccountsOnce();
+  }
+
+  function closeCollectNormal() {
+    if (loadingPay) return;
+    setNOpen(false);
+    setNRow(null);
+  }
+
+  async function submitCollectNormal() {
+    if (!nRow) return;
+
+    const partnerId = nRow.partnerId;
+    if (!partnerId) {
+      push({ type: "error", message: "Hóa đơn chưa có khách hàng (partnerId) nên không thể tạo phiếu thu." });
+      return;
+    }
+
+    const remain = num(nRow.normalOutstanding);
+    const amt = Math.round(num(nAmount));
+
+    if (!Number.isFinite(amt) || amt <= 0) {
+      push({ type: "error", message: "Số tiền thu tiền hàng phải > 0." });
+      return;
+    }
+    if (amt > remain + 0.0001) {
+      push({ type: "error", message: `Thu vượt tiền hàng còn lại. Còn lại: ${fmtMoney(remain)}.` });
+      return;
+    }
+
+    const note = String(nNote || "").trim();
+    if (!note) {
+      push({ type: "error", message: "Ghi chú là bắt buộc. Vui lòng chọn mẫu hoặc nhập ghi chú." });
+      return;
+    }
+
+    try {
+      setLoadingPay(true);
+
+      await api.post("/payments", {
+        date: nPayDate,
+        partnerId,
+        type: "RECEIPT",
+        amount: amt,
+        accountId: accountId || undefined,
+        note,
+        allocations: [{ invoiceId: nRow.invoiceId, amount: amt, kind: "NORMAL" }],
+      });
+
+      push({ type: "success", message: `Đã thu tiền hàng: ${fmtMoney(amt)} (HĐ ${nRow.code})` });
+
+      setNOpen(false);
+      setNRow(null);
+
+      await fetchData({ silent: true });
+    } catch (e: any) {
+      push({ type: "error", message: e?.response?.data?.message || e?.message || "Tạo phiếu thu thất bại" });
     } finally {
       setLoadingPay(false);
     }
@@ -690,11 +793,11 @@ const ReceivablesReportPage: React.FC = () => {
             <span>Chi tiết hóa đơn</span>
           </label>
 
-          <button onClick={exportExcelPretty} disabled={exporting || loading} style={ghostBtnBtn(exporting || loading)}>
+          <button type="button" onClick={exportExcelPretty} disabled={exporting || loading} style={ghostBtnBtn(exporting || loading)}>
             {exporting ? "Đang xuất..." : "Xuất Excel"}
           </button>
 
-          <button onClick={() => fetchData({ silent: false })} disabled={loading} style={primaryBtn(loading)}>
+          <button type="button" onClick={() => fetchData({ silent: false })} disabled={loading} style={primaryBtn(loading)}>
             {loading ? "Đang tải..." : "Tải lại"}
           </button>
         </div>
@@ -705,7 +808,7 @@ const ReceivablesReportPage: React.FC = () => {
           <div style={{ fontWeight: 900 }}>Không tải được báo cáo</div>
           <div style={{ opacity: 0.85, marginTop: 2 }}>{bannerError}</div>
           <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button style={ghostBtn} onClick={() => fetchData({ silent: false })}>
+            <button type="button" style={ghostBtn} onClick={() => fetchData({ silent: false })}>
               Thử lại
             </button>
           </div>
@@ -714,7 +817,7 @@ const ReceivablesReportPage: React.FC = () => {
 
       {/* KPI */}
       <div style={kpiGrid}>
-        <KpiCard label="Nợ thường" value={summary?.normalOutstanding ?? 0} hint="Phải thu ngay" />
+        <KpiCard label="Tiền hàng" value={summary?.normalOutstanding ?? 0} hint="Phải thu ngay" />
         <KpiCard label="Bảo hành treo" value={summary?.warrantyHoldNotDue ?? 0} hint="Chưa đến hạn" tone="hold" />
         <KpiCard label="Bảo hành đến hạn" value={summary?.warrantyHoldDue ?? 0} hint="Đã đến hạn" tone="due" />
         <KpiCard label="Tổng phải thu" value={summary?.totalOutstanding ?? 0} hint="Tổng công nợ" strong />
@@ -728,31 +831,24 @@ const ReceivablesReportPage: React.FC = () => {
               <div style={panelTitle}>Chi tiết hóa đơn</div>
               <div style={{ ...subtitle, marginTop: 2, opacity: 0.75 }}>
                 Lọc theo NV sale:{" "}
-                <b>
-                  {saleKey === "__ALL__" ? "Tất cả" : saleOptions.find((x) => x.key === saleKey)?.label || "Đã chọn"}
-                </b>
+                <b>{saleKey === "__ALL__" ? "Tất cả" : saleOptions.find((x) => x.key === saleKey)?.label || "Đã chọn"}</b>
               </div>
             </div>
 
             <div style={filtersRow}>
               <div style={tabs}>
-                <button style={tabBtn(tab === "ALL")} onClick={() => setTab("ALL")}>
+                <button type="button" style={tabBtn(tab === "ALL")} onClick={() => setTab("ALL")}>
                   Tất cả
                 </button>
-                <button style={tabBtn(tab === "NORMAL")} onClick={() => setTab("NORMAL")}>
-                  Nợ thường
+                <button type="button" style={tabBtn(tab === "NORMAL")} onClick={() => setTab("NORMAL")}>
+                  Tiền hàng
                 </button>
-                <button style={tabBtn(tab === "WARRANTY")} onClick={() => setTab("WARRANTY")}>
-                  Nợ bảo hành
+                <button type="button" style={tabBtn(tab === "WARRANTY")} onClick={() => setTab("WARRANTY")}>
+                  Bảo hành
                 </button>
               </div>
 
-              <select
-                value={saleKey}
-                onChange={(e) => setSaleKey(e.target.value)}
-                style={{ ...input, width: 220, cursor: "pointer" }}
-                title="Lọc theo nhân viên sale"
-              >
+              <select value={saleKey} onChange={(e) => setSaleKey(e.target.value)} style={{ ...input, width: 220, cursor: "pointer" }}>
                 <option value="__ALL__">Tất cả NV sale</option>
                 {saleOptions.map((o) => (
                   <option key={o.key} value={o.key}>
@@ -761,12 +857,7 @@ const ReceivablesReportPage: React.FC = () => {
                 ))}
               </select>
 
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Tìm mã HĐ / khách / sale..."
-                style={{ ...input, width: 280 }}
-              />
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Tìm mã HĐ / khách / sale..." style={{ ...input, width: 280 }} />
             </div>
           </div>
 
@@ -777,7 +868,11 @@ const ReceivablesReportPage: React.FC = () => {
               <div style={stripValue}>{totalsInView.count} HĐ</div>
             </div>
             <div style={stripItem}>
-              <div style={stripLabel}>Nợ thường</div>
+              <div style={stripLabel}>Tổng hóa đơn</div>
+              <div style={stripValue}>{fmtMoney(totalsInView.invoiceNet)}</div>
+            </div>
+            <div style={stripItem}>
+              <div style={stripLabel}>Tiền hàng</div>
               <div style={stripValue}>{fmtMoney(totalsInView.normal)}</div>
             </div>
             <div style={stripItem}>
@@ -805,18 +900,18 @@ const ReceivablesReportPage: React.FC = () => {
                     <th style={th}>Ngày</th>
                     <th style={th}>Khách</th>
                     <th style={th}>NV sale</th>
-                    <th style={thRight}>Tổng</th>
-                    <th style={thRight}>Nợ thường</th>
+                    <th style={thRight}>Tổng HĐ</th>
+                    <th style={thRight}>Tiền hàng</th>
                     <th style={thRight}>BH treo</th>
                     <th style={thRight}>BH đến hạn</th>
                     <th style={thRight}>Tổng nợ</th>
-                    {tab === "WARRANTY" ? <th style={thRight}>Thao tác</th> : null}
+                    <th style={thRight}>Thao tác</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredRows.length === 0 ? (
                     <tr>
-                      <td colSpan={tab === "WARRANTY" ? 10 : 9} style={{ padding: 14, opacity: 0.75 }}>
+                      <td colSpan={10} style={{ padding: 14, opacity: 0.75 }}>
                         Không có hóa đơn phù hợp bộ lọc.
                       </td>
                     </tr>
@@ -838,24 +933,48 @@ const ReceivablesReportPage: React.FC = () => {
                           <td style={td}>{r.issueDate}</td>
                           <td style={td}>{clampText(r.partnerName, 28)}</td>
                           <td style={td}>{clampText(r.saleName || "-", 22) || "-"}</td>
-                          <td style={tdRight}>{fmtMoney(r.total)}</td>
+
+                          <td style={tdRight}>{fmtMoney(getInvoiceNetTotal(r))}</td>
                           <td style={tdRight}>{fmtMoney(r.normalOutstanding || 0)}</td>
                           <td style={tdRight}>{fmtMoney(r.warrantyHoldNotDue || 0)}</td>
                           <td style={{ ...tdRight, ...(warnDue ? dueText : null) }}>{fmtMoney(r.warrantyHoldDue || 0)}</td>
                           <td style={tdRightStrong}>{fmtMoney(r.totalOutstanding || 0)}</td>
 
-                          {tab === "WARRANTY" ? (
-                            <td style={tdRight}>
-                              <button
-                                style={miniBtn(!canCollectWarranty)}
-                                disabled={!canCollectWarranty}
-                                onClick={() => openCollectWarranty(r)}
-                                title={canCollectWarranty ? "Thu bảo hành treo" : "Không còn nợ bảo hành"}
-                              >
-                                Thu BH
-                              </button>
-                            </td>
-                          ) : null}
+                          <td style={tdRight}>
+                            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+                              {tab !== "WARRANTY" ? (
+                                <button
+                                  type="button"
+                                  style={miniBtn(!(r.normalOutstanding > 0))}
+                                  disabled={!(r.normalOutstanding > 0)}
+                                  onMouseDown={stopAll}
+                                  onClick={(e) => {
+                                    stopAll(e);
+                                    openCollectNormal(r);
+                                  }}
+                                  title={r.normalOutstanding > 0 ? "Thu tiền hàng" : "Không còn tiền hàng"}
+                                >
+                                  Thu tiền
+                                </button>
+                              ) : null}
+
+                              {tab !== "NORMAL" ? (
+                                <button
+                                  type="button"
+                                  style={miniBtn(!canCollectWarranty)}
+                                  disabled={!canCollectWarranty}
+                                  onMouseDown={stopAll}
+                                  onClick={(e) => {
+                                    stopAll(e);
+                                    openCollectWarranty(r);
+                                  }}
+                                  title={canCollectWarranty ? "Thu bảo hành" : "Không còn bảo hành"}
+                                >
+                                  Thu BH
+                                </button>
+                              ) : null}
+                            </div>
+                          </td>
                         </tr>
                       );
                     })
@@ -870,22 +989,22 @@ const ReceivablesReportPage: React.FC = () => {
       {/* Modal Thu bảo hành */}
       {whOpen && whRow ? (
         <div style={modalOverlay} onMouseDown={closeCollectWarranty}>
-          <div style={modalCard} onMouseDown={(e) => e.stopPropagation()}>
+          <div style={modalCard} onMouseDown={stopBubble}>
             <div style={modalHeader}>
               <div>
-                <div style={{ fontWeight: 950, fontSize: 14 }}>Thu bảo hành treo</div>
+                <div style={{ fontWeight: 950, fontSize: 14 }}>Thu bảo hành</div>
                 <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>
                   HĐ <b>{whRow.code}</b> · Khách: <b>{whRow.partnerName}</b>
                 </div>
               </div>
-              <button style={modalCloseBtn} onClick={closeCollectWarranty} disabled={loadingPay}>
+              <button type="button" style={modalCloseBtn} onClick={closeCollectWarranty} disabled={loadingPay}>
                 ✕
               </button>
             </div>
 
             <div style={modalBody}>
               <div style={modalInfoGrid}>
-                <InfoLine label="Bảo hành treo" value={fmtMoney(num(whRow.warrantyHoldAmount))} />
+                <InfoLine label="Bảo hành tổng" value={fmtMoney(num(whRow.warrantyHoldAmount))} />
                 <InfoLine label="Còn phải thu" value={fmtMoney(num(whRow.warrantyOutstanding))} strong />
                 <InfoLine label="Đến hạn" value={whRow.warrantyDueDate || "-"} />
               </div>
@@ -898,13 +1017,15 @@ const ReceivablesReportPage: React.FC = () => {
 
                 <div style={field}>
                   <div style={fieldLabel}>Số tiền thu</div>
-                  <input
-                    value={String(whAmount)}
-                    onChange={(e) => setWhAmount(num(e.target.value))}
-                    style={input}
+                  <CurrencyInput
+                    value={whAmount}
+                    onValueChange={(v) => setWhAmount(v)}
+                    min={0}
+                    max={Math.round(num(whRow.warrantyOutstanding))}
                     disabled={loadingPay}
-                    inputMode="numeric"
                     placeholder="0"
+                    className="ri-currency-wrap"
+                    inputClassName="ri-input"
                   />
                   <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
                     Tối đa: <b>{fmtMoney(num(whRow.warrantyOutstanding))}</b>
@@ -913,13 +1034,7 @@ const ReceivablesReportPage: React.FC = () => {
 
                 <div style={field}>
                   <div style={fieldLabel}>Tài khoản nhận</div>
-                  <select
-                    value={accountId}
-                    onChange={(e) => setAccountId(e.target.value)}
-                    style={{ ...input, cursor: "pointer" }}
-                    disabled={loadingPay}
-                    title="Chọn tài khoản nhận tiền (nếu có)"
-                  >
+                  <select value={accountId} onChange={(e) => setAccountId(e.target.value)} style={{ ...input, cursor: "pointer" }} disabled={loadingPay}>
                     <option value="">Không chọn</option>
                     {accounts.map((a) => (
                       <option key={a.id} value={a.id}>
@@ -935,18 +1050,204 @@ const ReceivablesReportPage: React.FC = () => {
                 </div>
 
                 <div style={{ ...field, gridColumn: "1 / -1" }}>
-                  <div style={fieldLabel}>Ghi chú</div>
-                  <input value={whNote} onChange={(e) => setWhNote(e.target.value)} style={input} disabled={loadingPay} placeholder="Ghi chú..." />
+                  <div style={fieldLabel}>Mẫu ghi chú</div>
+                  <select
+                    value={whNoteTpl}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setWhNoteTpl(v);
+                      setWhNote(`${v} - HĐ ${whRow.code}`);
+                    }}
+                    style={{ ...input, cursor: "pointer" }}
+                    disabled={loadingPay}
+                  >
+                    {NOTE_TEMPLATES.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ ...field, gridColumn: "1 / -1" }}>
+                  <div style={fieldLabel}>Ghi chú (bắt buộc)</div>
+                  <input value={whNote} onChange={(e) => setWhNote(e.target.value)} style={input} disabled={loadingPay} placeholder="Bắt buộc" />
+                </div>
+              </div>
+
+              <div style={{ marginTop: 14 }}>
+                <div style={{ fontWeight: 900, fontSize: 12, marginBottom: 6 }}>Lịch sử giao dịch</div>
+                <div style={historyBox}>
+                  {!(whRow.paymentHistory && whRow.paymentHistory.length) ? (
+                    <div style={{ fontSize: 12, opacity: 0.7 }}>Chưa có phát sinh thu/chi.</div>
+                  ) : (
+                    <table style={historyTable}>
+                      <thead>
+                        <tr>
+                          <th style={hThLeft}>Ngày</th>
+                          <th style={hTh}>Loại</th>
+                          <th style={hTh}>Ref</th>
+                          <th style={hThRight}>Số tiền</th>
+                          <th style={hThLeft}>Ghi chú</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {whRow.paymentHistory!.map((h) => (
+                          <tr key={h.paymentId + "_" + h.paymentDate + "_" + h.amount + "_" + h.allocationKind}>
+                            <td style={hTdLeft}>{h.paymentDate}</td>
+                            <td style={hTd}>{h.allocationKind}</td>
+                            <td style={hTd}>{h.refNo || ""}</td>
+                            <td style={hTdRight}>{fmtMoney(h.amount)}</td>
+                            <td style={hTdLeft}>{h.note || ""}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
                 </div>
               </div>
             </div>
 
             <div style={modalFooter}>
-              <button style={ghostBtn} onClick={closeCollectWarranty} disabled={loadingPay}>
+              <button type="button" style={ghostBtn} onClick={closeCollectWarranty} disabled={loadingPay}>
                 Đóng
               </button>
-              <button style={primaryBtn(loadingPay)} onClick={submitCollectWarranty} disabled={loadingPay}>
-                {loadingPay ? "Đang tạo phiếu..." : "Xác nhận thu bảo hành"}
+              <button type="button" style={primaryBtn(loadingPay)} onClick={submitCollectWarranty} disabled={loadingPay}>
+                {loadingPay ? "Đang tạo phiếu..." : "Xác nhận thu"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Modal Thu tiền hàng */}
+      {nOpen && nRow ? (
+        <div style={modalOverlay} onMouseDown={closeCollectNormal}>
+          <div style={modalCard} onMouseDown={stopBubble}>
+            <div style={modalHeader}>
+              <div>
+                <div style={{ fontWeight: 950, fontSize: 14 }}>Thu tiền hàng</div>
+                <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>
+                  HĐ <b>{nRow.code}</b> · Khách: <b>{nRow.partnerName}</b>
+                </div>
+              </div>
+              <button type="button" style={modalCloseBtn} onClick={closeCollectNormal} disabled={loadingPay}>
+                ✕
+              </button>
+            </div>
+
+            <div style={modalBody}>
+              <div style={modalInfoGrid}>
+                <InfoLine label="Còn tiền hàng" value={fmtMoney(num(nRow.normalOutstanding))} strong />
+                <InfoLine label="Tổng phải thu" value={fmtMoney(num(nRow.totalOutstanding))} />
+                <InfoLine label="Ngày HĐ" value={nRow.issueDate || "-"} />
+              </div>
+
+              <div style={modalFormGrid}>
+                <div style={field}>
+                  <div style={fieldLabel}>Ngày thu</div>
+                  <input type="date" value={nPayDate} onChange={(e) => setNPayDate(e.target.value)} style={input} disabled={loadingPay} />
+                </div>
+
+                <div style={field}>
+                  <div style={fieldLabel}>Số tiền thu</div>
+                  <CurrencyInput
+                    value={nAmount}
+                    onValueChange={(v) => setNAmount(v)}
+                    min={0}
+                    max={Math.round(num(nRow.normalOutstanding))}
+                    disabled={loadingPay}
+                    placeholder="0"
+                    className="ri-currency-wrap"
+                    inputClassName="ri-input"
+                  />
+                  <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+                    Tối đa: <b>{fmtMoney(num(nRow.normalOutstanding))}</b>
+                  </div>
+                </div>
+
+                <div style={field}>
+                  <div style={fieldLabel}>Tài khoản nhận</div>
+                  <select value={accountId} onChange={(e) => setAccountId(e.target.value)} style={{ ...input, cursor: "pointer" }} disabled={loadingPay}>
+                    <option value="">Không chọn</option>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name} {a.code ? `(${a.code})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {accounts.length === 0 ? (
+                    <div style={{ fontSize: 12, opacity: 0.65, marginTop: 4 }}>
+                      (Chưa có API danh sách tài khoản hoặc chưa cấu hình — vẫn thu được nếu không chọn.)
+                    </div>
+                  ) : null}
+                </div>
+
+                <div style={{ ...field, gridColumn: "1 / -1" }}>
+                  <div style={fieldLabel}>Mẫu ghi chú</div>
+                  <select
+                    value={nNoteTpl}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setNNoteTpl(v);
+                      setNNote(`${v} - HĐ ${nRow.code}`);
+                    }}
+                    style={{ ...input, cursor: "pointer" }}
+                    disabled={loadingPay}
+                  >
+                    {NOTE_TEMPLATES.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ ...field, gridColumn: "1 / -1" }}>
+                  <div style={fieldLabel}>Ghi chú (bắt buộc)</div>
+                  <input value={nNote} onChange={(e) => setNNote(e.target.value)} style={input} disabled={loadingPay} placeholder="Bắt buộc" />
+                </div>
+              </div>
+
+              <div style={{ marginTop: 14 }}>
+                <div style={{ fontWeight: 900, fontSize: 12, marginBottom: 6 }}>Lịch sử giao dịch</div>
+                <div style={historyBox}>
+                  {!(nRow.paymentHistory && nRow.paymentHistory.length) ? (
+                    <div style={{ fontSize: 12, opacity: 0.7 }}>Chưa có phát sinh thu/chi.</div>
+                  ) : (
+                    <table style={historyTable}>
+                      <thead>
+                        <tr>
+                          <th style={hThLeft}>Ngày</th>
+                          <th style={hTh}>Loại</th>
+                          <th style={hTh}>Ref</th>
+                          <th style={hThRight}>Số tiền</th>
+                          <th style={hThLeft}>Ghi chú</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {nRow.paymentHistory!.map((h) => (
+                          <tr key={h.paymentId + "_" + h.paymentDate + "_" + h.amount + "_" + h.allocationKind}>
+                            <td style={hTdLeft}>{h.paymentDate}</td>
+                            <td style={hTd}>{h.allocationKind}</td>
+                            <td style={hTd}>{h.refNo || ""}</td>
+                            <td style={hTdRight}>{fmtMoney(h.amount)}</td>
+                            <td style={hTdLeft}>{h.note || ""}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div style={modalFooter}>
+              <button type="button" style={ghostBtn} onClick={closeCollectNormal} disabled={loadingPay}>
+                Đóng
+              </button>
+              <button type="button" style={primaryBtn(loadingPay)} onClick={submitCollectNormal} disabled={loadingPay}>
+                {loadingPay ? "Đang tạo phiếu..." : "Thu tiền"}
               </button>
             </div>
           </div>
@@ -955,6 +1256,22 @@ const ReceivablesReportPage: React.FC = () => {
 
       <style>{`
         .rowHover:hover { background: rgba(15, 23, 42, 0.04); }
+
+        /* CurrencyInput styling để giống input inline */
+        .ri-currency-wrap { width: 100%; }
+        .ri-input {
+          width: 100%;
+          padding: 8px 10px;
+          border-radius: 10px;
+          border: 1px solid rgba(148, 163, 184, 0.28);
+          background: rgba(2, 6, 23, 0.02);
+          outline: none;
+          box-sizing: border-box;
+        }
+        .ri-input:disabled {
+          cursor: not-allowed;
+          opacity: 0.75;
+        }
       `}</style>
     </div>
   );
@@ -1000,11 +1317,9 @@ const InfoLine: React.FC<{ label: string; value: string; strong?: boolean }> = (
   );
 };
 
-/* ======================= Styles (giữ nguyên như bạn gửi) ======================= */
+/* ======================= Styles ======================= */
 
-const page: React.CSSProperties = {
-  padding: 18,
-};
+const page: React.CSSProperties = { padding: 18 };
 
 const header: React.CSSProperties = {
   display: "flex",
@@ -1014,35 +1329,15 @@ const header: React.CSSProperties = {
   flexWrap: "wrap",
 };
 
-const title: React.CSSProperties = {
-  fontSize: 20,
-  fontWeight: 900,
-  letterSpacing: 0.2,
-};
+const title: React.CSSProperties = { fontSize: 20, fontWeight: 900, letterSpacing: 0.2 };
 
-const subtitle: React.CSSProperties = {
-  marginTop: 4,
-  fontSize: 12.5,
-  opacity: 0.75,
-};
+const subtitle: React.CSSProperties = { marginTop: 4, fontSize: 12.5, opacity: 0.75 };
 
-const headerRight: React.CSSProperties = {
-  display: "flex",
-  gap: 10,
-  alignItems: "center",
-  flexWrap: "wrap",
-};
+const headerRight: React.CSSProperties = { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" };
 
-const field: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 4,
-};
+const field: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 4 };
 
-const fieldLabel: React.CSSProperties = {
-  fontSize: 11,
-  opacity: 0.7,
-};
+const fieldLabel: React.CSSProperties = { fontSize: 11, opacity: 0.7 };
 
 const input: React.CSSProperties = {
   padding: "8px 10px",
@@ -1074,13 +1369,7 @@ function ghostBtnBtn(disabled: boolean): React.CSSProperties {
   };
 }
 
-const checkRow: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  fontSize: 13,
-  opacity: 0.9,
-};
+const checkRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, fontSize: 13, opacity: 0.9 };
 
 const banner: React.CSSProperties = {
   marginTop: 12,
@@ -1097,28 +1386,13 @@ const kpiGrid: React.CSSProperties = {
   gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
 };
 
-const card: React.CSSProperties = {
-  borderRadius: 14,
-  padding: 14,
-};
+const card: React.CSSProperties = { borderRadius: 14, padding: 14 };
 
-const cardLabel: React.CSSProperties = {
-  fontSize: 12,
-  opacity: 0.75,
-  fontWeight: 800,
-};
+const cardLabel: React.CSSProperties = { fontSize: 12, opacity: 0.75, fontWeight: 800 };
 
-const cardValue: React.CSSProperties = {
-  marginTop: 8,
-  fontSize: 22,
-  fontWeight: 900,
-};
+const cardValue: React.CSSProperties = { marginTop: 8, fontSize: 22, fontWeight: 900 };
 
-const cardHint: React.CSSProperties = {
-  marginTop: 6,
-  fontSize: 12,
-  opacity: 0.65,
-};
+const cardHint: React.CSSProperties = { marginTop: 6, fontSize: 12, opacity: 0.65 };
 
 const mainGridSingle: React.CSSProperties = {
   marginTop: 14,
@@ -1145,10 +1419,7 @@ const panelHeader: React.CSSProperties = {
   flexWrap: "wrap",
 };
 
-const panelTitle: React.CSSProperties = {
-  fontWeight: 900,
-  fontSize: 14,
-};
+const panelTitle: React.CSSProperties = { fontWeight: 900, fontSize: 14 };
 
 const ghostBtn: React.CSSProperties = {
   padding: "7px 10px",
@@ -1160,12 +1431,7 @@ const ghostBtn: React.CSSProperties = {
   fontSize: 12,
 };
 
-const filtersRow: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  flexWrap: "wrap",
-};
+const filtersRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" };
 
 const tabs: React.CSSProperties = {
   display: "flex",
@@ -1200,25 +1466,13 @@ const strip: React.CSSProperties = {
   flexWrap: "wrap",
 };
 
-const stripItem: React.CSSProperties = {
-  minWidth: 120,
-};
+const stripItem: React.CSSProperties = { minWidth: 120 };
 
-const stripLabel: React.CSSProperties = {
-  fontSize: 11,
-  opacity: 0.7,
-  fontWeight: 800,
-};
+const stripLabel: React.CSSProperties = { fontSize: 11, opacity: 0.7, fontWeight: 800 };
 
-const stripValue: React.CSSProperties = {
-  marginTop: 4,
-  fontSize: 13.5,
-  fontWeight: 900,
-};
+const stripValue: React.CSSProperties = { marginTop: 4, fontSize: 13.5, fontWeight: 900 };
 
-const dueText: React.CSSProperties = {
-  color: "#dc2626",
-};
+const dueText: React.CSSProperties = { color: "#dc2626" };
 
 const tableWrap: React.CSSProperties = {
   marginTop: 10,
@@ -1228,12 +1482,7 @@ const tableWrap: React.CSSProperties = {
   border: "1px solid rgba(148, 163, 184, 0.18)",
 };
 
-const table: React.CSSProperties = {
-  width: "100%",
-  borderCollapse: "separate",
-  borderSpacing: 0,
-  fontSize: 13,
-};
+const table: React.CSSProperties = { width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: 13 };
 
 const thBase: React.CSSProperties = {
   position: "sticky",
@@ -1262,9 +1511,7 @@ const td: React.CSSProperties = { ...tdBase };
 const tdRight: React.CSSProperties = { ...tdBase, textAlign: "right" };
 const tdRightStrong: React.CSSProperties = { ...tdRight, fontWeight: 900 };
 
-const trRow: React.CSSProperties = {
-  cursor: "default",
-};
+const trRow: React.CSSProperties = { cursor: "default" };
 
 function miniBtn(disabled: boolean): React.CSSProperties {
   return {
@@ -1279,7 +1526,7 @@ function miniBtn(disabled: boolean): React.CSSProperties {
   };
 }
 
-/* ===== Modal styles (giữ nguyên) ===== */
+/* ===== Modal styles ===== */
 
 const modalOverlay: React.CSSProperties = {
   position: "fixed",
@@ -1323,10 +1570,7 @@ const modalCloseBtn: React.CSSProperties = {
   lineHeight: 1,
 };
 
-const modalBody: React.CSSProperties = {
-  padding: 14,
-  overflow: "auto",
-};
+const modalBody: React.CSSProperties = { padding: 14, overflow: "auto" };
 
 const modalFooter: React.CSSProperties = {
   padding: 14,
@@ -1338,6 +1582,41 @@ const modalFooter: React.CSSProperties = {
   bottom: 0,
   background: "#fff",
 };
+
+const historyBox: React.CSSProperties = {
+  marginTop: 6,
+  padding: 10,
+  borderRadius: 12,
+  border: "1px solid rgba(148, 163, 184, 0.22)",
+  background: "rgba(2, 6, 23, 0.02)",
+  maxHeight: 220,
+  overflow: "auto",
+};
+
+const historyTable: React.CSSProperties = { width: "100%", borderCollapse: "collapse", fontSize: 12 };
+
+const hThBase: React.CSSProperties = {
+  textAlign: "left",
+  padding: "8px 8px",
+  borderBottom: "1px solid rgba(148, 163, 184, 0.18)",
+  background: "rgba(15, 23, 42, 0.04)",
+  position: "sticky",
+  top: 0,
+};
+
+const hThLeft: React.CSSProperties = { ...hThBase };
+const hTh: React.CSSProperties = { ...hThBase };
+const hThRight: React.CSSProperties = { ...hThBase, textAlign: "right" };
+
+const hTdBase: React.CSSProperties = {
+  padding: "8px 8px",
+  borderBottom: "1px solid rgba(148, 163, 184, 0.14)",
+  verticalAlign: "top",
+};
+
+const hTdLeft: React.CSSProperties = { ...hTdBase };
+const hTd: React.CSSProperties = { ...hTdBase };
+const hTdRight: React.CSSProperties = { ...hTdBase, textAlign: "right", fontWeight: 900 };
 
 const modalInfoGrid: React.CSSProperties = {
   display: "grid",
@@ -1353,17 +1632,9 @@ const infoLine: React.CSSProperties = {
   padding: 10,
 };
 
-const infoLabel: React.CSSProperties = {
-  fontSize: 11,
-  opacity: 0.7,
-  fontWeight: 800,
-};
+const infoLabel: React.CSSProperties = { fontSize: 11, opacity: 0.7, fontWeight: 800 };
 
-const infoValue: React.CSSProperties = {
-  marginTop: 6,
-  fontSize: 14,
-  fontWeight: 900,
-};
+const infoValue: React.CSSProperties = { marginTop: 6, fontSize: 14, fontWeight: 900 };
 
 const modalFormGrid: React.CSSProperties = {
   display: "grid",

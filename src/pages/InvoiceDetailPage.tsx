@@ -1327,10 +1327,10 @@ const InvoiceDetailPage: React.FC = () => {
   async function handleSave() {
     if (!invoice) return;
 
-    if (!invoice.code.trim()) {
-      toastError("Mã hóa đơn là bắt buộc.", "Thiếu thông tin");
-      return;
-    }
+    // if (!invoice.code.trim()) {
+    //   toastError("Mã hóa đơn là bắt buộc.", "Thiếu thông tin");
+    //   return;
+    // }
 
     const status = invoice.status ?? "DRAFT";
     const lockedForStaff = !isAdmin && (status === "SUBMITTED" || status === "APPROVED" || status === "REJECTED");
@@ -2064,10 +2064,10 @@ const InvoiceDetailPage: React.FC = () => {
                 {/* ✅ Hiển thị breakdown trả hàng theo BE */}
                 {invoice.type === "SALES" && (
                   <>
-                    <div style={styles.summaryRow}>
+                    {/* <div style={styles.summaryRow}>
                       <span style={styles.summaryLabel}>Tổng gốc (Gross):</span>
                       <span style={styles.summaryValue}>{formatMoney(totalGross)} đ</span>
-                    </div>
+                    </div> */}
 
                     {returnedTotal > 0 && (
                       <div style={styles.summaryRow}>
@@ -2078,10 +2078,10 @@ const InvoiceDetailPage: React.FC = () => {
                       </div>
                     )}
 
-                    <div style={styles.summaryRow}>
+                    {/* <div style={styles.summaryRow}>
                       <span style={styles.summaryLabel}>Còn tính thu (NET):</span>
                       <span style={styles.summaryValue}>{formatMoney(netTotal)} đ</span>
-                    </div>
+                    </div> */}
                   </>
                 )}
 
@@ -2102,12 +2102,8 @@ const InvoiceDetailPage: React.FC = () => {
                   </select>
                 </div>
 
-                <div style={styles.summaryRow}>
-                  <span style={styles.summaryLabel}>Đã thu (NORMAL, gồm VAT):</span>
-                  <span style={styles.summaryValue}>{formatMoney(paidNormal)} đ</span>
-                </div>
-
-                <div style={styles.summaryRow}>
+                
+                {/*<div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Đã thu (BH):</span>
                   <span style={styles.summaryValue}>{formatMoney(paidWarranty)} đ</span>
                 </div>
@@ -2115,11 +2111,11 @@ const InvoiceDetailPage: React.FC = () => {
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Đã thu (TỔNG theo phiếu):</span>
                   <span style={styles.summaryValue}>{formatMoney(paidTotal)} đ</span>
-                </div>
+                </div> */}
 
                 {/* giữ input PARTIAL như cũ */}
                 <div style={styles.summaryRow}>
-                  <span style={styles.summaryLabel}>Chỉnh “Đã thu” (khi chọn 1 phần):</span>
+                  <span style={styles.summaryLabel}>Nhập số tiền đã thu:</span>
                   <PaidAmountInput
                     value={invoice.paidAmount ?? 0}
                     disabled={!showPaidInput || lockedForStaff}
@@ -2158,22 +2154,27 @@ const InvoiceDetailPage: React.FC = () => {
 
                 {accountLoadError && <div style={{ ...styles.notice, ...styles.noticeError }}>{accountLoadError}</div>}
 
-                <div style={styles.summaryRow}>
+                {/* <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Collectible (NORMAL = Gross - BH):</span>
                   <span style={styles.summaryValue}>{formatMoney(collectible)} đ</span>
+                </div> */}
+                <div style={styles.summaryRow}>
+                  <span style={styles.summaryLabel}>Tổng cộng:</span>
+                  <span style={styles.summaryValue}>{formatMoney(invoice.totalAmount)} đ</span>
+                </div>
+                <div style={styles.summaryRow}>
+                  <span style={styles.summaryLabel}>Đã thu:</span>
+                  <span style={styles.summaryValue}>{formatMoney(paidNormal)} đ</span>
                 </div>
 
                 <div style={styles.summaryRow}>
-                  <span style={styles.summaryLabel}>Còn phải thu (NORMAL):</span>
+                  <span style={styles.summaryLabel}>Còn phải thu:</span>
                   <span style={{ ...styles.summaryValue, color: isReturnedFull(invoice) ? "#6b7280" : "#111827" }}>
                     {formatMoney(debtNow)} đ
                   </span>
                 </div>
 
-                <div style={styles.summaryRow}>
-                  <span style={styles.summaryLabel}>Tổng cộng (Gross):</span>
-                  <span style={styles.summaryValue}>{formatMoney(invoice.totalAmount)} đ</span>
-                </div>
+                
 
                 <div style={{ ...styles.formRow, marginTop: 10 }}>
                   <label style={styles.label}>Ghi chú</label>

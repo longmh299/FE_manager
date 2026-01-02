@@ -28,6 +28,7 @@ import SalesLedgerReportPage from "./pages/SalesLedgerReportPage";
 import PaymentAccountsPage from "./pages/PaymentAccountsPage";
 import MySalesDashboardPage from "./pages/MySalesDashboardPage";
 import AuditLogsPage from "./pages/AuditLogsPage";
+import StockInOutReportPage from "./pages/StockInOutReportPage";
 
 const App: React.FC = () => {
   return (
@@ -82,11 +83,11 @@ const App: React.FC = () => {
         <Route path="payment-accounts" element={<PaymentAccountsPage />}/>
         <Route path="/me/sales" element={<MySalesDashboardPage />} />
         <Route path="audit-logs" element={<AuditLogsPage />} />
+        <Route path="reports/stock-inout" element={<StockInOutReportPage />} />
       </Route>
       <Route path="invoices/:id/print" element={<InvoicePrintPage />} />
       <Route path="*" element={<div className="p-4">404 Not Found</div>} />
     </Routes>
   );
 };
-
 export default App;

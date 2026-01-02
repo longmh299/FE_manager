@@ -1,15 +1,22 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+// src/pages/SalesLedgerReportPage.tsx
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import api from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
+import { saveAs } from "file-saver";
 
-type UserRole = "staff" | "accountant" | "admin";
-// type PaymentStatus = "UNPAID" | "PARTIAL" | "PAID";
+type PaymentStatus = "UNPAID" | "PARTIAL" | "PAID" | "";
 
-
-type StaffUser = { id: string; name: string };
+type StaffUser = {
+  id: string;
+  username?: string | null;
+  fullName?: string | null;
+  name?: string | null;
+  role?: string | null;
+};
 
 type SalesLedgerRow = {
+  invoiceId: string;
+
   issueDate: string; // yyyy-mm-dd
   code: string;
   partnerName: string;
@@ -20,8 +27,15 @@ type SalesLedgerRow = {
   qty: number;
   unitPrice: number;
   unitCost: number;
-  costTotal: number;
 
+  // ✅ NEW (BE trả unitCostMonthAvg/costTotalMonthAvg)
+  unitCostMonthAvg: number;
+  costTotalMonthAvg: number;
+
+  // (giữ tương thích nếu BE cũ trả unitCostPeriodAvg)
+  unitCostPeriodAvg?: number;
+
+  costTotal: number;
   lineAmount: number;
 
   paid: number;
@@ -31,191 +45,273 @@ type SalesLedgerRow = {
   techUserName: string;
 };
 
-type SalesLedgerResponse = {
+type Totals = {
+  totalRevenue: number;
+  totalCost: number;
+  totalPaid: number;
+  totalDebt: number;
+};
+
+type ReportData = {
   rows: SalesLedgerRow[];
-  totals: {
-    totalRevenue: number;
-    totalCost: number;
-    totalPaid: number;
-    totalDebt: number;
-  };
+  totals: Totals;
 };
 
-function unwrap<T = any>(res: any): T {
-  const body = res?.data;
-  if (body && typeof body === "object" && "data" in body) return body.data as T;
-  return body as T;
-}
+type InvoiceDetail = {
+  id: string;
+  code?: string | null;
+  issueDate?: string | null;
 
-async function fetchMeRole(): Promise<UserRole | null> {
-  try {
-    const r = await api.get("/auth/me");
-    return (r?.data?.role ?? r?.data?.user?.role ?? null) as any;
-  } catch {
-    return null;
+  partnerName?: string | null;
+  partnerPhone?: string | null;
+
+  saleUserName?: string | null;
+  techUserName?: string | null;
+  saleUser?: any;
+  techUser?: any;
+
+  status?: string | null;
+  paymentStatus?: string | null;
+
+  subtotal?: any;
+  tax?: any;
+  total?: any;
+
+  netSubtotal?: any;
+  netTax?: any;
+  netTotal?: any;
+
+  paidAmount?: any;
+
+  note?: string | null;
+
+  lines?: any[];
+};
+
+type ReturnAggByItem = { qty: number; amount: number };
+type ReturnAgg = {
+  byItemId: Record<string, ReturnAggByItem>;
+  totalQty: number;
+  totalAmount: number;
+};
+
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+function toDateInputValue(d: Date) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+function safeNum(v: any) {
+  const n = typeof v === "number" ? v : Number(String(v ?? ""));
+  return Number.isFinite(n) ? n : 0;
+}
+function fmtMoney(n: number) {
+  const v = Number.isFinite(n) ? n : 0;
+  return v.toLocaleString("vi-VN", { maximumFractionDigits: 0 }) + " đ";
+}
+function fmtQty(n: number) {
+  if (!Number.isFinite(n)) return "0";
+  const isInt = Math.abs(n - Math.round(n)) < 1e-9;
+  return isInt ? String(Math.round(n)) : n.toLocaleString("vi-VN", { maximumFractionDigits: 3 });
+}
+function fmtDateDMY(dateStr?: string | null) {
+  if (!dateStr) return "";
+  const s = String(dateStr).slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [y, m, d] = s.split("-");
+    return `${d}/${m}/${y}`;
   }
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
+function pickName(u: any) {
+  return u?.fullName || u?.name || u?.username || u?.email || u?.id || "";
 }
 
-function formatMoney(n: number) {
-  return Number(n || 0).toLocaleString("vi-VN");
+function viInvoiceStatus(s?: string | null) {
+  const v = (s || "").toUpperCase();
+  if (v === "DRAFT") return "Nháp";
+  if (v === "SUBMITTED") return "Chờ duyệt";
+  if (v === "APPROVED") return "Đã duyệt";
+  if (v === "REJECTED") return "Từ chối";
+  return s || "-";
+}
+function viPaymentStatus(s?: string | null) {
+  const v = (s || "").toUpperCase();
+  if (v === "UNPAID") return "Chưa thanh toán";
+  if (v === "PARTIAL") return "Thanh toán một phần";
+  if (v === "PAID") return "Đã thanh toán";
+  return s || "-";
 }
 
-function ghostBtnStyle(): React.CSSProperties {
-  return {
-    padding: "10px 14px",
-    borderRadius: 12,
-    border: "1px solid #E5E7EB",
-    background: "#fff",
-    color: "#111827",
-    fontWeight: 800,
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  };
-}
+const PAGE_SIZE = 20;
 
-function primaryBtnStyle(): React.CSSProperties {
-  return {
-    padding: "10px 14px",
-    borderRadius: 12,
-    border: "1px solid #111827",
-    background: "#111827",
-    color: "#fff",
-    fontWeight: 800,
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  };
-}
+type LoadOpts = { silent?: boolean };
 
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: 12,
-  border: "1px solid #E5E7EB",
-  borderRadius: 12,
-};
+const SalesLedgerReportPage: React.FC = () => {
+  const { toasts, push, remove } = useToast();
 
-const labelStyle: React.CSSProperties = { fontWeight: 800, marginBottom: 6 };
+  const pushRef = useRef(push);
+  useEffect(() => {
+    pushRef.current = push;
+  }, [push]);
 
-export default function SalesLedgerReportPage() {
-  const nav = useNavigate();
-  const toast = useToast();
-
-  const [role, setRole] = useState<UserRole | null>(null);
-  const [loadingRole, setLoadingRole] = useState(true);
-
-  const [loading, setLoading] = useState(false);
-
-  // filters
-  const [from, setFrom] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(1);
-    return d.toISOString().slice(0, 10);
+  const [from, setFrom] = useState(() => {
+    const now = new Date();
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    return toDateInputValue(first);
   });
-  const [to, setTo] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [to, setTo] = useState(() => toDateInputValue(new Date()));
   const [q, setQ] = useState("");
-  const [saleUserId, setSaleUserId] = useState("");
-  const [techUserId, setTechUserId] = useState("");
-  const [paymentStatus, setPaymentStatus] = useState<string>("");
+
+  const [saleUserId, setSaleUserId] = useState<string>("");
+  const [techUserId, setTechUserId] = useState<string>("");
+  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>("");
 
   const [staffs, setStaffs] = useState<StaffUser[]>([]);
-
-  const [data, setData] = useState<SalesLedgerResponse>(() => ({
+  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState<ReportData>({
     rows: [],
     totals: { totalRevenue: 0, totalCost: 0, totalPaid: 0, totalDebt: 0 },
-  }));
+  });
 
-  // hover row
-  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
-
-  // ✅ pagination by INVOICE (20 invoices / page)
-  const PAGE_SIZE_INVOICE = 20;
   const [page, setPage] = useState(1);
 
-  // role gate
+  // ===== Invoice detail modal =====
+  const [openInv, setOpenInv] = useState(false);
+  const [invId, setInvId] = useState<string>("");
+  const [invLoading, setInvLoading] = useState(false);
+  const [inv, setInv] = useState<InvoiceDetail | null>(null);
+
+  // ✅ returns info
+  const [retLoading, setRetLoading] = useState(false);
+  const [retAgg, setRetAgg] = useState<ReturnAgg | null>(null);
+
   useEffect(() => {
-    (async () => {
-      setLoadingRole(true);
-      const r = await fetchMeRole();
-      setRole(r);
-      setLoadingRole(false);
-
-      if (!r) return nav("/login", { replace: true });
-      if (r === "staff") {
-        toast.push({ type: "error", title: "Không có quyền", message: "Bạn không có quyền xem báo cáo." });
-        return nav("/", { replace: true });
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // load staff list for filters
-  useEffect(() => {
-    if (!role || role === "staff") return;
-
     (async () => {
       try {
-        const res = await api.get("/users", { params: { page: 1, pageSize: 3000 } });
-        const body = (res as any).data || {};
-        const itemsData = (body.items || body?.data?.items || []) as any[];
-
-        const mapped: StaffUser[] = (Array.isArray(itemsData) ? itemsData : [])
-          .filter((u) => u.role === "staff")
-          .map((u) => ({ id: String(u.id), name: String(u.username || u.name || u.email || u.id) }));
-
-        setStaffs(mapped);
+        const res = await api.get("/users");
+        const payload = res?.data?.data ?? res?.data;
+        const list: StaffUser[] = Array.isArray(payload) ? payload : payload?.rows ?? payload?.users ?? [];
+        setStaffs(Array.isArray(list) ? list : []);
       } catch {
-        setStaffs([]);
+        // ignore
       }
     })();
-  }, [role]);
+  }, []);
 
-  async function fetchReport() {
-    setLoading(true);
+  const rows = data.rows || [];
+
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(rows.length / PAGE_SIZE)), [rows.length]);
+  const pagedRows = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return rows.slice(start, start + PAGE_SIZE);
+  }, [rows, page]);
+
+  useEffect(() => setPage(1), [from, to, q, saleUserId, techUserId, paymentStatus]);
+
+  async function load(opts?: LoadOpts) {
     try {
-      const res = await api.get("/reports/sales-ledger", {
-        params: {
-          from: from || undefined,
-          to: to || undefined,
-          q: q?.trim() || undefined,
-          saleUserId: saleUserId || undefined,
-          techUserId: techUserId || undefined,
-          paymentStatus: paymentStatus || undefined,
-        },
+      setLoading(true);
+      const params = new URLSearchParams();
+      if (from) params.set("from", from);
+      if (to) params.set("to", to);
+      if (q.trim()) params.set("q", q.trim());
+      if (saleUserId) params.set("saleUserId", saleUserId);
+      if (techUserId) params.set("techUserId", techUserId);
+      if (paymentStatus) params.set("paymentStatus", paymentStatus);
+
+      const res = await api.get(`/reports/sales-ledger?${params.toString()}`);
+      const payload = res?.data?.data ?? res?.data;
+
+      const rawRows = payload?.rows ?? payload?.data?.rows ?? [];
+      const rawTotals = payload?.totals ?? payload?.data?.totals ?? {};
+
+      const normalizedRows: SalesLedgerRow[] = (rawRows as any[]).map((r: any) => {
+        // ✅ lấy field mới từ BE, fallback field cũ nếu có
+        const unitCostMonthAvg = safeNum(
+          r.unitCostMonthAvg ?? r.unitCostPeriodAvg ?? r.unitCostMonth ?? r.unitCostAvg ?? 0
+        );
+        const qty = safeNum(r.qty);
+        const costTotalMonthAvg = safeNum(r.costTotalMonthAvg) || qty * unitCostMonthAvg;
+
+        return {
+          invoiceId: String(r.invoiceId ?? r.invoiceID ?? ""),
+          issueDate: String(r.issueDate ?? "").slice(0, 10),
+          code: String(r.code ?? ""),
+          partnerName: String(r.partnerName ?? ""),
+
+          itemName: String(r.itemName ?? ""),
+          itemSku: r.itemSku ?? null,
+
+          qty,
+          unitPrice: safeNum(r.unitPrice),
+          unitCost: safeNum(r.unitCost),
+
+          unitCostMonthAvg,
+          costTotalMonthAvg,
+
+          // giữ tương thích
+          unitCostPeriodAvg: safeNum(r.unitCostPeriodAvg),
+
+          costTotal: safeNum(r.costTotal),
+          lineAmount: safeNum(r.lineAmount),
+
+          paid: safeNum(r.paid),
+          debt: safeNum(r.debt),
+
+          saleUserName: String(r.saleUserName ?? ""),
+          techUserName: String(r.techUserName ?? ""),
+        };
       });
 
-      const body = unwrap<any>(res);
-      const payload = (body?.data ?? body) as SalesLedgerResponse;
+      const normalizedTotals: Totals = {
+        totalRevenue: safeNum(rawTotals.totalRevenue),
+        totalCost: safeNum(rawTotals.totalCost),
+        totalPaid: safeNum(rawTotals.totalPaid),
+        totalDebt: safeNum(rawTotals.totalDebt),
+      };
 
-      setData({
-        rows: Array.isArray(payload?.rows) ? payload.rows : [],
-        totals: payload?.totals || { totalRevenue: 0, totalCost: 0, totalPaid: 0, totalDebt: 0 },
-      });
+      setData({ rows: normalizedRows, totals: normalizedTotals });
 
-      // ✅ reset page whenever refetch
-      setPage(1);
+      // ✅ tránh spam toast khi auto-load (và tránh StrictMode dev show 2 toast)
+      if (!opts?.silent) {
+        pushRef.current({ type: "success", title: "OK", message: `Đã tải ${normalizedRows.length} dòng.` });
+      }
     } catch (e: any) {
-      toast.push({
+      pushRef.current({
         type: "error",
-        title: "Lỗi",
-        message: e?.response?.data?.message || e?.message || "Không tải được bảng kê bán.",
+        title: "Lỗi tải báo cáo",
+        message: e?.response?.data?.message || e?.message || "Không tải được báo cáo",
       });
     } finally {
       setLoading(false);
     }
   }
 
+  // ✅ chặn StrictMode dev gọi effect 2 lần
+  const didInitialLoadRef = useRef(false);
+  useEffect(() => {
+    if (didInitialLoadRef.current) return;
+    didInitialLoadRef.current = true;
+
+    // auto-load: silent để khỏi hiện toast (và khỏi bị 2 toast khi reload dev)
+    load({ silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function exportExcel() {
     try {
-      setLoading(true);
+      const params = new URLSearchParams();
+      if (from) params.set("from", from);
+      if (to) params.set("to", to);
+      if (q.trim()) params.set("q", q.trim());
+      if (saleUserId) params.set("saleUserId", saleUserId);
+      if (techUserId) params.set("techUserId", techUserId);
+      if (paymentStatus) params.set("paymentStatus", paymentStatus);
 
-      const res = await api.get("/reports/sales-ledger.xlsx", {
-        params: {
-          from: from || undefined,
-          to: to || undefined,
-          q: q?.trim() || undefined,
-          saleUserId: saleUserId || undefined,
-          techUserId: techUserId || undefined,
-          paymentStatus: paymentStatus || undefined,
-        },
+      const res = await api.get(`/reports/sales-ledger/excel?${params.toString()}`, {
         responseType: "blob",
       });
 
@@ -224,409 +320,722 @@ export default function SalesLedgerReportPage() {
       });
 
       const now = new Date();
-      const y = now.getFullYear();
-      const m = String(now.getMonth() + 1).padStart(2, "0");
-      const d = String(now.getDate()).padStart(2, "0");
-      const filename = `bang_ke_ban_${y}${m}${d}.xlsx`;
+      const fileName = `bang_ke_ban_${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}.xlsx`;
+      saveAs(blob, fileName);
 
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      pushRef.current({ type: "success", title: "OK", message: "Đã export Excel." });
     } catch (e: any) {
-      toast.push({
-        type: "error",
-        title: "Lỗi",
-        message: e?.response?.data?.message || e?.message || "Không export được Excel.",
-      });
-    } finally {
-      setLoading(false);
+      pushRef.current({ type: "error", title: "Lỗi export", message: e?.message || "Export thất bại" });
     }
   }
 
-  // auto load first time after role ok
+  function openInvoiceDetail(invoiceId?: string) {
+    const id = String(invoiceId || "");
+    if (!id) {
+      pushRef.current({
+        type: "warning",
+        title: "Thiếu invoiceId",
+        message: "Dòng này không có invoiceId để mở chi tiết.",
+      });
+      return;
+    }
+    setInvId(id);
+    setInv(null);
+    setRetAgg(null);
+    setOpenInv(true);
+  }
+
+  // ====== load invoice detail ======
+  const detailReqSeq = useRef(0);
   useEffect(() => {
-    if (!role || role === "staff") return;
-    fetchReport();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [role]);
+    if (!openInv || !invId) return;
 
-  const profit = useMemo(
-    () => (data.totals.totalRevenue || 0) - (data.totals.totalCost || 0),
-    [data.totals]
-  );
+    const seq = ++detailReqSeq.current;
+    let cancelled = false;
 
-  // ✅ build invoice keys (by code) in display order
-  const invoiceKeys = useMemo(() => {
-    const seen = new Set<string>();
-    const keys: string[] = [];
-    for (const r of data.rows || []) {
-      const k = String(r.code || "");
-      if (!k) continue;
-      if (!seen.has(k)) {
-        seen.add(k);
-        keys.push(k);
+    (async () => {
+      try {
+        setInvLoading(true);
+
+        const res = await api.get(`/invoices/${invId}`);
+        if (cancelled || seq !== detailReqSeq.current) return;
+
+        const payload = res?.data?.data ?? res?.data;
+        const invObj: any = payload?.invoice || payload?.data?.invoice || payload?.data || payload;
+
+        const detail: InvoiceDetail = {
+          id: String(invObj?.id ?? invId),
+          code: invObj?.code ?? null,
+          issueDate: invObj?.issueDate ? String(invObj.issueDate).slice(0, 10) : null,
+
+          partnerName: invObj?.partnerName ?? null,
+          partnerPhone: invObj?.partnerPhone ?? null,
+
+          saleUserName: invObj?.saleUserName ?? null,
+          techUserName: invObj?.techUserName ?? null,
+          saleUser: invObj?.saleUser ?? null,
+          techUser: invObj?.techUser ?? null,
+
+          status: invObj?.status ?? null,
+          paymentStatus: invObj?.paymentStatus ?? null,
+
+          subtotal: invObj?.subtotal,
+          tax: invObj?.tax,
+          total: invObj?.total,
+
+          netSubtotal: invObj?.netSubtotal,
+          netTax: invObj?.netTax,
+          netTotal: invObj?.netTotal,
+
+          paidAmount: invObj?.paidAmount,
+
+          note: invObj?.note ?? null,
+          lines: Array.isArray(invObj?.lines) ? invObj.lines : [],
+        };
+
+        setInv(detail);
+      } catch (e: any) {
+        if (cancelled || seq !== detailReqSeq.current) return;
+        pushRef.current({
+          type: "error",
+          title: "Lỗi tải chi tiết hóa đơn",
+          message: e?.response?.data?.message || e?.message || "Không tải được chi tiết hóa đơn",
+        });
+        setInv(null);
+      } finally {
+        if (!cancelled && seq === detailReqSeq.current) setInvLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [openInv, invId]);
+
+  // ====== Returns: FIX false positive ======
+  function getTypeUpper(obj: any) {
+    const t =
+      obj?.type ??
+      obj?.invoiceType ??
+      obj?.data?.type ??
+      obj?.invoice?.type ??
+      obj?.invoice?.invoiceType ??
+      "";
+    return String(t || "").toUpperCase();
+  }
+
+  function getRefInvoiceId(obj: any) {
+    const id =
+      obj?.refInvoiceId ??
+      obj?.refInvoice?.id ??
+      obj?.refInvoice?.invoiceId ??
+      obj?.data?.refInvoiceId ??
+      "";
+    return String(id || "");
+  }
+
+  async function tryFetchReturns(refInvoiceId: string): Promise<any[] | null> {
+    const candidates = [
+      `/invoices?type=SALES_RETURN&refInvoiceId=${encodeURIComponent(refInvoiceId)}&status=APPROVED`,
+      `/invoices?refInvoiceId=${encodeURIComponent(refInvoiceId)}&type=SALES_RETURN`,
+      `/invoices?type=SALES_RETURN&refInvoiceId=${encodeURIComponent(refInvoiceId)}`,
+      `/invoices/returns?refInvoiceId=${encodeURIComponent(refInvoiceId)}`,
+      `/invoices/return?refInvoiceId=${encodeURIComponent(refInvoiceId)}`,
+    ];
+
+    for (const url of candidates) {
+      try {
+        const res = await api.get(url);
+        const payload = res?.data?.data ?? res?.data;
+
+        const list =
+          (Array.isArray(payload) ? payload : null) ||
+          payload?.rows ||
+          payload?.data?.rows ||
+          payload?.invoices ||
+          payload?.data?.invoices ||
+          payload?.items ||
+          payload?.data?.items ||
+          null;
+
+        if (!Array.isArray(list)) continue;
+
+        // ✅ CHỈ nhận SALES_RETURN + refInvoiceId đúng
+        const filtered = (list as any[]).filter((x) => {
+          const t = getTypeUpper(x);
+          const ref = getRefInvoiceId(x);
+          return t === "SALES_RETURN" && ref === refInvoiceId;
+        });
+
+        const hasAnyTyped = (list as any[]).some((x) => !!getTypeUpper(x));
+        const hasAnyRef = (list as any[]).some((x) => !!getRefInvoiceId(x));
+        if (!hasAnyTyped || !hasAnyRef) continue;
+
+        return filtered;
+      } catch {
+        // next
       }
     }
-    return keys;
-  }, [data.rows]);
-
-  const totalInvoices = invoiceKeys.length;
-  const totalPages = Math.max(1, Math.ceil(totalInvoices / PAGE_SIZE_INVOICE));
-  const safePage = Math.min(Math.max(1, page), totalPages);
-
-  const visibleInvoiceKeySet = useMemo(() => {
-    const start = (safePage - 1) * PAGE_SIZE_INVOICE;
-    const end = start + PAGE_SIZE_INVOICE;
-    const keys = invoiceKeys.slice(start, end);
-    return new Set(keys);
-  }, [invoiceKeys, safePage]);
-
-  const visibleRows = useMemo(() => {
-    if (!data.rows?.length) return [];
-    if (!visibleInvoiceKeySet.size) return [];
-    return data.rows.filter((r) => visibleInvoiceKeySet.has(String(r.code || "")));
-  }, [data.rows, visibleInvoiceKeySet]);
-
-  // ✅ zebra + hover + highlight (loss/debt)
-  function rowStyle(r: SalesLedgerRow, idx: number): React.CSSProperties {
-    const lineProfit = Number(r.lineAmount || 0) - Number(r.costTotal || 0);
-    const isDebt = Number(r.debt || 0) > 0;
-    const isLoss = lineProfit < 0 || (Number(r.unitCost || 0) > 0 && Number(r.unitPrice || 0) > 0 && Number(r.unitCost) > Number(r.unitPrice));
-
-    const zebra = idx % 2 === 0 ? "#FFFFFF" : "#FAFAFB";
-
-    if (hoverIdx === idx) return { background: "#F1F5F9" };
-    if (isLoss) return { background: "#FEF2F2" };
-    if (isDebt) return { background: "#FFF7ED" };
-    return { background: zebra };
+    return null;
   }
 
-  // semantic styles
-  const moneyMuted: React.CSSProperties = { color: "#374151", fontWeight: 700 };
-  const moneyStrong: React.CSSProperties = { color: "#111827", fontWeight: 900 };
-  const moneyPaid: React.CSSProperties = { color: "#15803D", fontWeight: 800 };
-  const moneyDebt: React.CSSProperties = { color: "#DC2626", fontWeight: 900 };
+  const returnReqSeq = useRef(0);
+  useEffect(() => {
+    if (!openInv || !invId) return;
 
-  function Pagination() {
-    const start = totalInvoices === 0 ? 0 : (safePage - 1) * PAGE_SIZE_INVOICE + 1;
-    const end = Math.min(totalInvoices, safePage * PAGE_SIZE_INVOICE);
+    const seq = ++returnReqSeq.current;
+    let cancelled = false;
 
-    const btnBase: React.CSSProperties = {
-      padding: "8px 10px",
-      borderRadius: 10,
-      border: "1px solid #E5E7EB",
-      background: "#fff",
-      fontWeight: 800,
-      cursor: "pointer",
+    (async () => {
+      try {
+        setRetLoading(true);
+        setRetAgg(null);
+
+        const returns = await tryFetchReturns(invId);
+        if (cancelled || seq !== returnReqSeq.current) return;
+
+        if (returns == null || returns.length === 0) {
+          setRetAgg(null);
+          return;
+        }
+
+        const byItemId: Record<string, ReturnAggByItem> = {};
+        let totalQty = 0;
+        let totalAmount = 0;
+
+        for (const r of returns as any[]) {
+          const lines: any[] = Array.isArray(r?.lines) ? r.lines : [];
+          for (const l of lines) {
+            const itemId = String(l?.itemId || l?.item?.id || "");
+            if (!itemId) continue;
+
+            const qtyRaw = safeNum(l?.qty);
+            const qty = Math.max(0, Math.abs(qtyRaw));
+
+            const amountRaw = safeNum(l?.amount);
+            const price = safeNum(l?.price ?? l?.unitPrice ?? 0);
+            const amount = Math.max(0, amountRaw || (qty > 0 ? price * qty : 0));
+
+            const cur = byItemId[itemId] || { qty: 0, amount: 0 };
+            cur.qty += qty;
+            cur.amount += amount;
+            byItemId[itemId] = cur;
+
+            totalQty += qty;
+            totalAmount += amount;
+          }
+        }
+
+        if (totalQty <= 0.0001 && totalAmount <= 0.0001) {
+          setRetAgg(null);
+          return;
+        }
+
+        setRetAgg({
+          byItemId,
+          totalQty: Math.max(0, totalQty),
+          totalAmount: Math.max(0, totalAmount),
+        });
+      } finally {
+        if (!cancelled && seq === returnReqSeq.current) setRetLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
     };
+  }, [openInv, invId]);
 
-    const btnDisabled: React.CSSProperties = {
-      ...btnBase,
-      cursor: "not-allowed",
-      opacity: 0.5,
-    };
+  const staffOptions = useMemo(() => {
+    const arr = staffs || [];
+    return arr
+      .map((u) => ({
+        id: String(u.id),
+        label: (u.fullName || u.name || u.username || u.id || "").toString(),
+      }))
+      .filter((x) => x.id && x.label);
+  }, [staffs]);
 
-    const btnActive: React.CSSProperties = {
-      ...btnBase,
-      border: "1px solid #111827",
-      background: "#111827",
-      color: "#fff",
-    };
+  const kpi = useMemo(() => {
+    const revenue = data.totals.totalRevenue || 0;
+    const cost = data.totals.totalCost || 0;
+    const paid = data.totals.totalPaid || 0;
+    const debt = data.totals.totalDebt || 0;
+    const qtySum = rows.reduce((s, r) => s + safeNum(r.qty), 0);
+    return { revenue, cost, paid, debt, qtySum };
+  }, [data.totals, rows]);
 
-    // show a small window of pages
-    const windowSize = 7;
-    const half = Math.floor(windowSize / 2);
-    let pStart = Math.max(1, safePage - half);
-    let pEnd = Math.min(totalPages, pStart + windowSize - 1);
-    pStart = Math.max(1, pEnd - windowSize + 1);
+  const invSummary = useMemo(() => {
+    if (!inv) return null;
 
-    const pages: number[] = [];
-    for (let p = pStart; p <= pEnd; p++) pages.push(p);
+    const subtotal = safeNum(inv.netSubtotal ?? inv.subtotal);
+    const tax = safeNum(inv.netTax ?? inv.tax);
+    const total = safeNum(inv.netTotal ?? inv.total);
 
-    return (
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: 12, borderTop: "1px solid #E5E7EB" }}>
-        <div style={{ color: "#6b7280", fontWeight: 700 }}>
-          Hóa đơn: <b>{totalInvoices}</b> • Hiển thị <b>{start}-{end}</b> (20 hóa đơn/trang)
-        </div>
+    const paid = safeNum(inv.paidAmount);
+    const debt = Math.max(0, total - paid);
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <button
-            style={safePage <= 1 ? btnDisabled : btnBase}
-            disabled={safePage <= 1}
-            onClick={() => setPage(1)}
-          >
-            «
-          </button>
-          <button
-            style={safePage <= 1 ? btnDisabled : btnBase}
-            disabled={safePage <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-          >
-            ‹
-          </button>
+    const saleName = inv.saleUserName || pickName(inv.saleUser) || "";
+    const techName = inv.techUserName || pickName(inv.techUser) || "";
 
-          {pages.map((p) => (
-            <button key={p} style={p === safePage ? btnActive : btnBase} onClick={() => setPage(p)}>
-              {p}
-            </button>
-          ))}
-
-          <button
-            style={safePage >= totalPages ? btnDisabled : btnBase}
-            disabled={safePage >= totalPages}
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-          >
-            ›
-          </button>
-          <button
-            style={safePage >= totalPages ? btnDisabled : btnBase}
-            disabled={safePage >= totalPages}
-            onClick={() => setPage(totalPages)}
-          >
-            »
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (loadingRole) return <div style={{ padding: 16 }}>Đang kiểm tra đăng nhập…</div>;
-  if (!role || role === "staff") return null;
+    return { subtotal, tax, total, paid, debt, saleName, techName };
+  }, [inv]);
 
   return (
-    <div style={{ padding: 16 }}>
-      <ToastHost toasts={toast.toasts} onClose={toast.remove} />
+    <div className="space-y-4">
+      <ToastHost toasts={toasts} onClose={remove} />
 
-      {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <h2 style={{ margin: 0 }}>Bảng kê bán hàng</h2>
-          <div style={{ color: "#6b7280" }}>
-            Theo dòng hàng (chỉ lấy HĐ <b>SALES</b> đã <b>DUYỆT</b>), giá vốn lấy từ snapshot unitCost/costTotal.
-          </div>
+      {/* Filter */}
+      <div className="bg-white rounded-xl border border-slate-200 p-4">
+        <div className="text-lg font-semibold text-slate-800">Bảng kê bán hàng</div>
+        <div className="text-xs text-slate-500 mt-1">
+          Theo dòng hàng (chỉ lấy HĐ SALES đã DUYỆT). Click vào dòng hoặc mã HĐ để xem chi tiết.
         </div>
 
-        <button style={ghostBtnStyle()} onClick={() => nav("/")}>
-          ← Trang chủ
-        </button>
-      </div>
-
-      {/* Filter Card */}
-      <div style={{ marginTop: 14, border: "1px solid #E5E7EB", borderRadius: 14, padding: 14, background: "#fff" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.2fr 1fr 1fr", gap: 12 }}>
+        <div className="mt-3 grid grid-cols-1 lg:grid-cols-6 gap-3 items-end">
           <div>
-            <div style={labelStyle}>Từ ngày</div>
-            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} style={inputStyle} />
-          </div>
-
-          <div>
-            <div style={labelStyle}>Đến ngày</div>
-            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} style={inputStyle} />
-          </div>
-
-          <div>
-            <div style={labelStyle}>Tìm kiếm</div>
+            <div className="text-xs text-slate-500 mb-1">Từ ngày</div>
             <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              style={inputStyle}
-              placeholder="Số chứng từ / khách / sản phẩm..."
+              type="date"
+              value={from}
+              onChange={(e) => setFrom(e.target.value)}
+              className="w-full border border-slate-300 rounded px-3 py-2"
             />
           </div>
 
           <div>
-            <div style={labelStyle}>NV sale</div>
-            <select value={saleUserId} onChange={(e) => setSaleUserId(e.target.value)} style={{ ...inputStyle, background: "#fff" }}>
+            <div className="text-xs text-slate-500 mb-1">Đến ngày</div>
+            <input
+              type="date"
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+              className="w-full border border-slate-300 rounded px-3 py-2"
+            />
+          </div>
+
+          <div className="lg:col-span-2">
+            <div className="text-xs text-slate-500 mb-1">Tìm kiếm</div>
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Số chứng từ / khách / sản phẩm..."
+              className="w-full border border-slate-300 rounded px-3 py-2"
+            />
+          </div>
+
+          <div>
+            <div className="text-xs text-slate-500 mb-1">NV sale</div>
+            <select
+              value={saleUserId}
+              onChange={(e) => setSaleUserId(e.target.value)}
+              className="w-full border border-slate-300 rounded px-3 py-2 bg-white"
+            >
               <option value="">-- Tất cả --</option>
-              {staffs.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
+              {staffOptions.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.label}
                 </option>
               ))}
             </select>
           </div>
 
           <div>
-            <div style={labelStyle}>Kỹ thuật</div>
-            <select value={techUserId} onChange={(e) => setTechUserId(e.target.value)} style={{ ...inputStyle, background: "#fff" }}>
+            <div className="text-xs text-slate-500 mb-1">Kỹ thuật</div>
+            <select
+              value={techUserId}
+              onChange={(e) => setTechUserId(e.target.value)}
+              className="w-full border border-slate-300 rounded px-3 py-2 bg-white"
+            >
               <option value="">-- Tất cả --</option>
-              {staffs.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
+              {staffOptions.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.label}
                 </option>
               ))}
             </select>
           </div>
 
           <div>
-            <div style={labelStyle}>Thanh toán</div>
-            <select value={paymentStatus} onChange={(e) => setPaymentStatus(e.target.value)} style={{ ...inputStyle, background: "#fff" }}>
+            <div className="text-xs text-slate-500 mb-1">Thanh toán</div>
+            <select
+              value={paymentStatus}
+              onChange={(e) => setPaymentStatus(e.target.value as PaymentStatus)}
+              className="w-full border border-slate-300 rounded px-3 py-2 bg-white"
+            >
               <option value="">-- Tất cả --</option>
               <option value="UNPAID">Chưa thanh toán</option>
-              <option value="PARTIAL">Thanh toán 1 phần</option>
+              <option value="PARTIAL">Thanh toán một phần</option>
               <option value="PAID">Đã thanh toán</option>
             </select>
           </div>
 
-          <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
-            <button style={primaryBtnStyle()} onClick={fetchReport} disabled={loading}>
-              Lọc
+          <div className="flex gap-2 lg:col-span-6">
+            <button
+              onClick={() => load()} // ✅ tránh React truyền event vào load()
+              disabled={loading}
+              className={`px-4 py-2 rounded bg-slate-900 text-white hover:bg-slate-800 ${
+                loading ? "opacity-60 cursor-not-allowed" : ""
+              }`}
+            >
+              {loading ? "Đang tải..." : "Lọc"}
             </button>
-            <button style={ghostBtnStyle()} onClick={exportExcel} disabled={loading}>
+
+            <button
+              onClick={exportExcel}
+              disabled={loading}
+              className={`px-4 py-2 rounded border border-slate-300 bg-white hover:bg-slate-50 ${
+                loading ? "opacity-60 cursor-not-allowed" : ""
+              }`}
+            >
               Export Excel
             </button>
-          </div>
 
-          <div style={{ gridColumn: "1 / -1", color: "#6b7280", fontSize: 12 }}>
-            Highlight: <b>đỏ nhạt</b> = bán lỗ, <b>cam nhạt</b> = còn nợ. Phân trang: <b>20 hóa đơn/trang</b> (mỗi hóa đơn có thể nhiều dòng).
+            <div className="ml-auto text-xs text-slate-500 self-center">
+              Highlight: đỏ nhạt = bán lỗ, cam nhạt = còn nợ. Phân trang: {PAGE_SIZE} dòng/trang.
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Summary */}
-      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
-        {[
-          { k: "Doanh thu", v: formatMoney(data.totals.totalRevenue) },
-          { k: "Giá vốn", v: formatMoney(data.totals.totalCost) },
-          { k: "Lợi nhuận", v: formatMoney(profit) },
-          { k: "Đã thu", v: formatMoney(data.totals.totalPaid) },
-          { k: "Còn nợ", v: formatMoney(data.totals.totalDebt) },
-        ].map((x) => (
-          <div key={x.k} style={{ border: "1px solid #E5E7EB", borderRadius: 14, padding: 12, background: "#fff" }}>
-            <div style={{ color: "#6b7280", fontSize: 12, fontWeight: 800 }}>{x.k}</div>
-            <div style={{ fontSize: 18, fontWeight: 900, marginTop: 4 }}>{x.v}</div>
-          </div>
-        ))}
+      {/* KPI */}
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <div className="text-xs text-slate-500">Doanh thu</div>
+          <div className="text-lg font-semibold">{fmtMoney(kpi.revenue)}</div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <div className="text-xs text-slate-500">Giá vốn</div>
+          <div className="text-lg font-semibold">{fmtMoney(kpi.cost)}</div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <div className="text-xs text-slate-500">Số lượng máy bán</div>
+          <div className="text-lg font-semibold">{fmtQty(kpi.qtySum)}</div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <div className="text-xs text-slate-500">Đã thu</div>
+          <div className="text-lg font-semibold">{fmtMoney(kpi.paid)}</div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <div className="text-xs text-slate-500">Còn nợ</div>
+          <div className="text-lg font-semibold">{fmtMoney(kpi.debt)}</div>
+        </div>
       </div>
 
       {/* Table */}
-      <div style={{ marginTop: 12, border: "1px solid #E5E7EB", borderRadius: 14, background: "#fff" }}>
-        <div style={{ padding: 12, borderBottom: "1px solid #E5E7EB", display: "flex", justifyContent: "space-between" }}>
-          <div style={{ fontWeight: 900 }}>Danh sách</div>
-          <div style={{ color: "#6b7280", fontWeight: 700 }}>
-            {loading ? "Đang tải…" : `${visibleRows.length} dòng • ${totalInvoices} hóa đơn`}
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+          <div className="font-semibold">Danh sách</div>
+          <div className="text-sm text-slate-600">
+            {rows.length} dòng • {new Set(rows.map((r) => r.invoiceId).filter(Boolean)).size} hóa đơn
           </div>
         </div>
 
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1420 }}>
-            <thead style={{ background: "#F9FAFB" }}>
-              <tr>
-                {[
-                  "Ngày",
-                  "Số chứng từ",
-                  "Tên khách hàng",
-                  "Tên sản phẩm",
-                  "Đơn giá",
-                  "Đơn giá vốn",
-                  "Tiền vốn",
-                  "Thành tiền",
-                  "Lợi nhuận",
-                  "Đã thanh toán",
-                  "Còn nợ",
-                  "NV sale",
-                  "Kĩ thuật",
-                ].map((h) => (
-                  <th
-                    key={h}
-                    style={{
-                      textAlign: ["Đơn giá", "Đơn giá vốn", "Tiền vốn", "Thành tiền", "Lợi nhuận", "Đã thanh toán", "Còn nợ"].includes(h)
-                        ? "right"
-                        : "left",
-                      padding: 12,
-                      borderBottom: "1px solid #E5E7EB",
-                      whiteSpace: "nowrap",
-                      fontSize: 13,
-                    }}
-                  >
-                    {h}
-                  </th>
-                ))}
+        <div className="overflow-auto">
+          <table className="min-w-[1320px] w-full text-sm">
+            <thead className="bg-slate-50">
+              <tr className="text-left">
+                <th className="px-4 py-3 border-b border-slate-200 whitespace-nowrap">Ngày</th>
+                <th className="px-4 py-3 border-b border-slate-200 whitespace-nowrap">Số chứng từ</th>
+                <th className="px-4 py-3 border-b border-slate-200">Tên khách hàng</th>
+                <th className="px-4 py-3 border-b border-slate-200">Tên sản phẩm</th>
+
+                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đơn giá</th>
+                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đơn giá vốn</th>
+                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Giá vốn TB (kỳ)</th>
+
+                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Tiền vốn</th>
+                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Thành tiền</th>
+
+                <th className="px-4 py-3 border-b border-slate-200 text-center whitespace-nowrap">Số lượng bán</th>
+                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đã thanh toán</th>
+                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Còn nợ</th>
+                <th className="px-4 py-3 border-b border-slate-200 whitespace-nowrap">NV sale</th>
+                <th className="px-4 py-3 border-b border-slate-200 whitespace-nowrap">Kỹ thuật</th>
               </tr>
             </thead>
 
             <tbody>
-              {visibleRows.length === 0 ? (
+              {!loading && pagedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={13} style={{ padding: 16, color: "#6b7280" }}>
-                    Không có dữ liệu.
+                  <td className="px-4 py-8 text-slate-500" colSpan={14}>
+                    Chưa có dữ liệu.
                   </td>
                 </tr>
-              ) : (
-                visibleRows.map((r, i) => {
-                  const lineProfit = Number(r.lineAmount || 0) - Number(r.costTotal || 0);
-                  const profitStyle: React.CSSProperties =
-                    lineProfit >= 0 ? { color: "#15803D", fontWeight: 900 } : { color: "#DC2626", fontWeight: 900 };
+              ) : null}
 
-                  return (
-                    <tr
-                      key={`${r.code}-${i}`}
-                      style={rowStyle(r, i)}
-                      onMouseEnter={() => setHoverIdx(i)}
-                      onMouseLeave={() => setHoverIdx(null)}
-                    >
-                      <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", whiteSpace: "nowrap" }}>
-                        {r.issueDate.split("-").reverse().join("/")}
-                      </td>
-                      <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", whiteSpace: "nowrap", fontWeight: 900 }}>
+              {pagedRows.map((r, idx) => {
+                const loss = r.lineAmount - r.costTotal;
+                const isLoss = loss < -0.0001;
+                const isDebt = r.debt > 0.0001;
+                const rowBg = isLoss ? "bg-red-50" : isDebt ? "bg-amber-50" : "bg-white";
+
+                return (
+                  <tr
+                    key={`${r.invoiceId}:${r.itemSku || r.itemName}:${idx}`}
+                    className={`hover:bg-slate-50 cursor-pointer ${rowBg}`}
+                    onClick={() => openInvoiceDetail(r.invoiceId)}
+                    title="Click để xem chi tiết hóa đơn"
+                  >
+                    <td className="px-4 py-3 border-b border-slate-100 whitespace-nowrap">{fmtDateDMY(r.issueDate)}</td>
+
+                    <td className="px-4 py-3 border-b border-slate-100 whitespace-nowrap">
+                      <button
+                        className="text-blue-700 hover:underline"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openInvoiceDetail(r.invoiceId);
+                        }}
+                      >
                         {r.code}
-                      </td>
-                      <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9" }}>{r.partnerName}</td>
+                      </button>
+                    </td>
 
-                      <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9" }}>
-                        <div style={{ fontWeight: 900 }}>{r.itemName}</div>
-                        {r.itemSku ? <div style={{ fontSize: 12, color: "#6b7280" }}>SKU: {r.itemSku}</div> : null}
-                        <div style={{ fontSize: 12, color: "#6b7280" }}>SL: {formatMoney(r.qty)}</div>
-                      </td>
+                    <td className="px-4 py-3 border-b border-slate-100">{r.partnerName}</td>
 
-                      <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", textAlign: "right", whiteSpace: "nowrap" }}>
-                        {formatMoney(r.unitPrice)}
-                      </td>
+                    <td className="px-4 py-3 border-b border-slate-100">
+                      <div className="font-semibold">{r.itemName}</div>
+                      <div className="text-xs text-slate-500">
+                        SL: {fmtQty(r.qty)} {r.itemSku ? `• ${r.itemSku}` : ""}
+                      </div>
+                    </td>
 
-                      <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", textAlign: "right", whiteSpace: "nowrap" }}>
-                        <span style={moneyMuted}>{formatMoney(r.unitCost)}</span>
-                      </td>
+                    <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">{fmtMoney(r.unitPrice)}</td>
+                    <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">{fmtMoney(r.unitCost)}</td>
 
-                      <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", textAlign: "right", whiteSpace: "nowrap" }}>
-                        <span style={moneyMuted}>{formatMoney(r.costTotal)}</span>
-                      </td>
+                    {/* ✅ render đúng field mới */}
+                    <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">
+                      {fmtMoney(safeNum(r.unitCostMonthAvg))}
+                    </td>
 
-                      <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", textAlign: "right", whiteSpace: "nowrap" }}>
-                        <span style={moneyStrong}>{formatMoney(r.lineAmount)}</span>
-                      </td>
+                    <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">{fmtMoney(r.costTotal)}</td>
+                    <td className="px-4 py-3 border-b border-slate-100 text-right font-semibold whitespace-nowrap">{fmtMoney(r.lineAmount)}</td>
 
-                      <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", textAlign: "right", whiteSpace: "nowrap" }}>
-                        <span style={profitStyle}>{formatMoney(lineProfit)}</span>
-                      </td>
+                    <td className="px-4 py-3 border-b border-slate-100 text-center whitespace-nowrap">{fmtQty(r.qty)}</td>
 
-                      <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", textAlign: "right", whiteSpace: "nowrap" }}>
-                        <span style={moneyPaid}>{formatMoney(r.paid)}</span>
-                      </td>
+                    <td className="px-4 py-3 border-b border-slate-100 text-right text-green-700 font-semibold whitespace-nowrap">{fmtMoney(r.paid)}</td>
+                    <td className="px-4 py-3 border-b border-slate-100 text-right text-red-700 font-semibold whitespace-nowrap">{fmtMoney(r.debt)}</td>
 
-                      <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", textAlign: "right", whiteSpace: "nowrap" }}>
-                        <span style={Number(r.debt || 0) > 0 ? moneyDebt : { color: "#111827", fontWeight: 800 }}>
-                          {formatMoney(r.debt)}
-                        </span>
-                      </td>
-
-                      <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9" }}>{r.saleUserName}</td>
-                      <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9" }}>{r.techUserName}</td>
-                    </tr>
-                  );
-                })
-              )}
+                    <td className="px-4 py-3 border-b border-slate-100 whitespace-nowrap">{r.saleUserName}</td>
+                    <td className="px-4 py-3 border-b border-slate-100 whitespace-nowrap">{r.techUserName}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
 
-        {/* ✅ Pagination by invoice */}
-        <Pagination />
+        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-200 text-sm">
+          <div className="text-slate-600">
+            Trang <b>{page}</b> / <b>{totalPages}</b> — {PAGE_SIZE} dòng / trang
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              className="px-3 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-50"
+              disabled={page <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+            >
+              «
+            </button>
+            <button
+              className="px-3 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-50"
+              disabled={page >= totalPages}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            >
+              »
+            </button>
+          </div>
+        </div>
       </div>
+
+      {/* ===== Invoice Detail Modal ===== */}
+      {openInv ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => {
+              setOpenInv(false);
+              setInvId("");
+              setInv(null);
+              setRetAgg(null);
+            }}
+          />
+          <div
+            className="relative w-[980px] max-w-[calc(100vw-24px)] bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-slate-200 flex items-start justify-between">
+              <div>
+                <div className="text-lg font-semibold text-slate-800">Chi tiết hóa đơn</div>
+                <div className="text-xs text-slate-500">ID: {invId}</div>
+              </div>
+              <button
+                className="px-4 py-2 rounded border border-slate-300 bg-white hover:bg-slate-50"
+                onClick={() => {
+                  setOpenInv(false);
+                  setInvId("");
+                  setInv(null);
+                  setRetAgg(null);
+                }}
+              >
+                Đóng
+              </button>
+            </div>
+
+            <div className="p-5">
+              {invLoading ? (
+                <div className="py-8 text-slate-500">Đang tải chi tiết...</div>
+              ) : !inv ? (
+                <div className="py-8 text-slate-500">Không có dữ liệu hóa đơn.</div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className="rounded-xl border border-slate-200 p-3 bg-slate-50">
+                      <div className="text-xs text-slate-500">Mã HĐ</div>
+                      <div className="font-semibold">{inv.code || ""}</div>
+                      <div className="text-xs text-slate-500 mt-1">
+                        Ngày: <span className="text-slate-700 font-medium">{fmtDateDMY(inv.issueDate)}</span>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 p-3 bg-slate-50">
+                      <div className="text-xs text-slate-500">Khách</div>
+                      <div className="font-semibold">{inv.partnerName || ""}</div>
+                      {inv.partnerPhone ? (
+                        <div className="text-xs text-slate-500 mt-1">
+                          SĐT: <span className="text-slate-700 font-medium">{inv.partnerPhone}</span>
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 p-3 bg-slate-50">
+                      <div className="text-xs text-slate-500">Trạng thái</div>
+                      <div className="font-semibold">
+                        {viInvoiceStatus(inv.status)} • {viPaymentStatus(inv.paymentStatus)}
+                      </div>
+                      {invSummary ? (
+                        <div className="text-xs text-slate-500 mt-1">
+                          NV sale: <span className="text-slate-700 font-medium">{invSummary.saleName || "-"}</span> • KT:{" "}
+                          <span className="text-slate-700 font-medium">{invSummary.techName || "-"}</span>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {invSummary ? (
+                    <div className="mt-3 grid grid-cols-1 md:grid-cols-5 gap-3">
+                      <div className="rounded-xl border border-slate-200 p-3">
+                        <div className="text-xs text-slate-500">Tạm tính</div>
+                        <div className="font-semibold">{fmtMoney(invSummary.subtotal)}</div>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 p-3">
+                        <div className="text-xs text-slate-500">VAT</div>
+                        <div className="font-semibold">{fmtMoney(invSummary.tax)}</div>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 p-3">
+                        <div className="text-xs text-slate-500">Tổng</div>
+                        <div className="font-semibold">{fmtMoney(invSummary.total)}</div>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 p-3">
+                        <div className="text-xs text-slate-500">Đã thu</div>
+                        <div className="font-semibold text-green-700">{fmtMoney(invSummary.paid)}</div>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 p-3">
+                        <div className="text-xs text-slate-500">Còn nợ</div>
+                        <div className="font-semibold">{fmtMoney(invSummary.debt)}</div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* TRẢ HÀNG summary */}
+                  <div className="mt-3">
+                    {retLoading ? (
+                      <div className="text-xs text-slate-500">Đang kiểm tra trả hàng...</div>
+                    ) : retAgg && (retAgg.totalQty > 0.0001 || retAgg.totalAmount > 0.0001) ? (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+                        <div className="font-semibold text-amber-900">
+                          Hóa đơn có trả hàng: {fmtQty(retAgg.totalQty)} • Giá trị trả: {fmtMoney(retAgg.totalAmount)}
+                        </div>
+                        <div className="text-xs text-amber-900/70">
+                          Dòng hàng bên dưới sẽ hiển thị “Đã trả / Còn lại / Thành tiền (sau trả)”.
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 rounded-xl border border-slate-200 overflow-hidden">
+                    <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 font-semibold">Dòng hàng</div>
+                    <div className="overflow-auto">
+                      <table className="min-w-[920px] w-full text-sm">
+                        <thead className="bg-white">
+                          <tr className="text-left">
+                            <th className="px-4 py-2 border-b border-slate-200">Sản phẩm</th>
+                            <th className="px-4 py-2 border-b border-slate-200 text-center whitespace-nowrap">SL</th>
+                            <th className="px-4 py-2 border-b border-slate-200 text-center whitespace-nowrap">Đã trả</th>
+                            <th className="px-4 py-2 border-b border-slate-200 text-center whitespace-nowrap">Còn lại</th>
+                            <th className="px-4 py-2 border-b border-slate-200 text-right whitespace-nowrap">Đơn giá</th>
+                            <th className="px-4 py-2 border-b border-slate-200 text-right whitespace-nowrap">
+                              Thành tiền (sau trả)
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(inv.lines || []).map((l: any, i: number) => {
+                            const qty = safeNum(l.qty);
+                            const amount = safeNum(l.amount);
+
+                            const unitPrice = safeNum(l.price ?? l.unitPrice ?? (qty > 0 ? amount / qty : 0));
+
+                            const itemId = String(l?.itemId || l?.item?.id || "");
+                            const ret = itemId && retAgg?.byItemId ? retAgg.byItemId[itemId] : undefined;
+                            const retQty = Math.max(0, safeNum(ret?.qty));
+                            const retAmt = Math.max(0, safeNum(ret?.amount));
+
+                            const netQty = Math.max(0, qty - retQty);
+                            const netAmt = Math.max(0, amount - retAmt);
+
+                            const name = l.itemName || l.name || l.item?.name || "(Không rõ)";
+                            const sku = l.itemSku || l.sku || l.item?.sku || "";
+
+                            return (
+                              <tr key={i} className="hover:bg-slate-50">
+                                <td className="px-4 py-2 border-b border-slate-100">
+                                  <div className="font-medium">{name}</div>
+                                  {sku ? <div className="text-xs text-slate-500">{sku}</div> : null}
+                                </td>
+                                <td className="px-4 py-2 border-b border-slate-100 text-center">{fmtQty(qty)}</td>
+                                <td className="px-4 py-2 border-b border-slate-100 text-center text-amber-700">
+                                  {retQty > 0 ? fmtQty(retQty) : "0"}
+                                </td>
+                                <td className="px-4 py-2 border-b border-slate-100 text-center font-semibold">{fmtQty(netQty)}</td>
+                                <td className="px-4 py-2 border-b border-slate-100 text-right whitespace-nowrap">{fmtMoney(unitPrice)}</td>
+                                <td className="px-4 py-2 border-b border-slate-100 text-right font-semibold whitespace-nowrap">
+                                  {fmtMoney(netAmt)}
+                                </td>
+                              </tr>
+                            );
+                          })}
+
+                          {(inv.lines || []).length === 0 ? (
+                            <tr>
+                              <td className="px-4 py-6 text-slate-500" colSpan={6}>
+                                Hóa đơn không có dòng hàng.
+                              </td>
+                            </tr>
+                          ) : null}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
-}
+};
+
+export default SalesLedgerReportPage;
