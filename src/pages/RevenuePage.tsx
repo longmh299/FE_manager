@@ -57,6 +57,17 @@ type RevenueResp = {
     paidTotal?: number;
     paidGross?: number;
     totalCollected?: number;
+
+    // ✅ backend mới (đã tách SALES vs RETURN)
+    salesNet?: number;
+    salesVat?: number;
+    salesGross?: number;
+    salesCollectedNet?: number;
+
+    returnNet?: number;
+    returnVat?: number;
+    returnGross?: number;
+    returnCollectedNet?: number;
   };
   byProduct: Array<{
     itemId: string;
@@ -114,19 +125,12 @@ function hasOwn(o: any, k: string) {
 
 /**
  * ✅ Lấy "đã thu" theo tiền THỰC THU (GROSS) nếu backend có trả.
- * Nếu backend chưa trả grossCollected => fallback netCollected (nhưng sẽ bật cảnh báo).
+ * Nếu backend chưa trả grossCollected => fallback netCollected.
  */
 function pickCollectedGross(kpis: any): { value: number; usedFallbackNet: boolean; usedKey: string | null } {
   if (!kpis) return { value: 0, usedFallbackNet: false, usedKey: null };
 
-  const grossKeys = [
-    "grossCollected",
-    "collectedGross",
-    "collectedTotal",
-    "paidTotal",
-    "paidGross",
-    "totalCollected",
-  ];
+  const grossKeys = ["grossCollected", "collectedGross", "collectedTotal", "paidTotal", "paidGross", "totalCollected"];
 
   for (const k of grossKeys) {
     if (hasOwn(kpis, k)) {
@@ -134,12 +138,31 @@ function pickCollectedGross(kpis: any): { value: number; usedFallbackNet: boolea
     }
   }
 
-  // fallback (không đúng ý bạn nếu backend đang "quy đổi về NET", nên sẽ show warning)
   if (hasOwn(kpis, "netCollected")) {
     return { value: num(kpis.netCollected), usedFallbackNet: true, usedKey: "netCollected" };
   }
 
   return { value: 0, usedFallbackNet: false, usedKey: null };
+}
+
+/**
+ * ✅ Tiền hàng hoàn (NET, chưa VAT) - ưu tiên backend mới trả returnNet.
+ * Fallback: suy ra từ salesNet & netRevenue.
+ */
+function pickReturnNet(kpis: any): { value: number; usedFallback: boolean; usedKey: string | null } {
+  if (!kpis) return { value: 0, usedFallback: false, usedKey: null };
+
+  if (hasOwn(kpis, "returnNet")) {
+    return { value: num(kpis.returnNet), usedFallback: false, usedKey: "returnNet" };
+  }
+
+  // returnNet ≈ salesNet - netRevenue (vì netRevenue = salesNet - returnNet)
+  if (hasOwn(kpis, "salesNet") && hasOwn(kpis, "netRevenue")) {
+    const v = num(kpis.salesNet) - num(kpis.netRevenue);
+    return { value: Math.max(0, v), usedFallback: true, usedKey: "salesNet-netRevenue" };
+  }
+
+  return { value: 0, usedFallback: false, usedKey: null };
 }
 
 // normalize staffInvoices row để tránh lỗi field mismatch (vd collected_normal, paidAmount...)
@@ -155,7 +178,6 @@ function normalizeStaffInvoiceRow(x: any): StaffInvoiceRow {
 
   const need = num(x?.need ?? x?.needGross ?? x?.need_gross);
 
-  // ✅ cái hay bị 0 do backend trả key khác
   const collectedNormal = num(
     x?.collectedNormal ??
       x?.collected_normal ??
@@ -204,7 +226,7 @@ const styles: Record<string, React.CSSProperties> = {
 
   filterBar: {
     display: "grid",
-    gridTemplateColumns: "1.3fr 1.2fr 140px 140px", // ✅ thêm nút export
+    gridTemplateColumns: "1.3fr 1.2fr 140px 140px",
     gap: 12,
     background: "#fff",
     border: "1px solid #e6eaf2",
@@ -253,7 +275,7 @@ const styles: Record<string, React.CSSProperties> = {
 
   cards: {
     display: "grid",
-    gridTemplateColumns: "repeat(4, 1fr)",
+    gridTemplateColumns: "repeat(5, 1fr)",
     gap: 12,
     marginTop: 12,
   },
@@ -265,7 +287,6 @@ const styles: Record<string, React.CSSProperties> = {
   },
   cardTitle: { fontSize: 13, color: "#0f172a", fontWeight: 800 },
   cardValue: { fontSize: 22, fontWeight: 900, marginTop: 6 },
-  cardSub: { fontSize: 12, color: "#64748b", marginTop: 6 },
 
   panel: {
     background: "#fff",
@@ -503,7 +524,6 @@ export default function RevenuePage() {
         return;
       }
 
-      // ✅ normalize để tránh field mismatch => gây collectedNormal = 0
       const normalized = rows.map(normalizeStaffInvoiceRow);
       setStaffInvoices(normalized);
     } catch (e: any) {
@@ -559,6 +579,7 @@ export default function RevenuePage() {
   const staffName = me?.username || "Tôi";
 
   const collected = useMemo(() => pickCollectedGross(data?.kpis), [data]);
+  const returnsNet = useMemo(() => pickReturnNet(data?.kpis), [data]);
 
   return (
     <div style={styles.page}>
@@ -620,26 +641,21 @@ export default function RevenuePage() {
           <div style={styles.card}>
             <div style={styles.cardTitle}>Đã thu</div>
             <div style={{ ...styles.cardValue, color: "#2563eb" }}>{fmtVnd(collected.value)}</div>
-
-            {collected.usedFallbackNet ? (
-              <div style={{ ...styles.cardSub, color: "#b45309", fontWeight: 800 }}>
-                ⚠ Backend chưa trả tổng thu (gross) — đang tạm dùng số “quy về NET”.
-              </div>
-            ) : (
-              <div style={styles.cardSub}>Tiền thực thu (không quy đổi)</div>
-            )}
           </div>
 
           <div style={styles.card}>
             <div style={styles.cardTitle}>Doanh thu thuần (chưa VAT)</div>
             <div style={{ ...styles.cardValue, color: "#16a34a" }}>{fmtVnd(data?.kpis?.netRevenue ?? 0)}</div>
-            <div style={styles.cardSub}>SALES (+) • SALES_RETURN (-)</div>
+          </div>
+
+          <div style={styles.card}>
+            <div style={styles.cardTitle}>Tiền hàng hoàn</div>
+            <div style={{ ...styles.cardValue, color: "#dc2626" }}>{fmtVnd(returnsNet.value)}</div>
           </div>
 
           <div style={styles.card}>
             <div style={styles.cardTitle}>VAT</div>
             <div style={{ ...styles.cardValue, color: "#0f172a" }}>{fmtVnd(data?.kpis?.netVat ?? 0)}</div>
-            <div style={styles.cardSub}>Không cộng vào doanh thu thuần</div>
           </div>
 
           <div style={styles.card}>
@@ -647,13 +663,12 @@ export default function RevenuePage() {
             <div style={{ ...styles.cardValue, color: "#0f172a" }}>
               {(data?.kpis?.orderCount ?? 0).toLocaleString("vi-VN")}
             </div>
-            <div style={styles.cardSub}>Đã duyệt (APPROVED)</div>
           </div>
         </div>
 
         {/* STAFF TABLE */}
         <div style={styles.panel}>
-          <div style={styles.panelTitle}>Doanh số theo nhân viên (NET, không VAT)</div>
+          <div style={styles.panelTitle}>Doanh số theo nhân viên </div>
 
           <div style={{ marginTop: 6, fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
             Quy tắc: NV chỉ tính <b>NET (không VAT)</b>. Nếu hoá đơn có hold bảo hành thì chỉ cần thu đủ phần có thể thu (
@@ -674,12 +689,12 @@ export default function RevenuePage() {
               <span style={styles.pillPrimary}>
                 Số NV: <b>{staffSummary.count}</b>
               </span>
-              <span style={styles.pillPrimary}>
+              {/* <span style={styles.pillPrimary}>
                 Tổng doanh số (NET): <b>{fmtVnd(staffSummary.total)}</b>
               </span>
               <span style={styles.pillPrimary}>
                 NORMAL (NET): <b>{fmtVnd(staffSummary.normal)}</b>
-              </span>
+              </span> */}
 
               <button style={styles.ghostBtn} onClick={loadDashboard} disabled={loading}>
                 Làm mới
@@ -702,7 +717,6 @@ export default function RevenuePage() {
                     <tr key={r.userId}>
                       <td style={styles.td}>
                         <div style={{ fontWeight: 900 }}>{r.name}</div>
-                        <div style={{ fontSize: 12, color: "#64748b" }}>ID: {r.userId}</div>
                       </td>
                       <td style={{ ...styles.td, ...styles.right, fontWeight: 900 }}>{fmtVnd(Number(r.revenue || 0))}</td>
                       <td style={{ ...styles.td, ...styles.right }}>
@@ -772,7 +786,6 @@ export default function RevenuePage() {
                     <tr key={r.itemId}>
                       <td style={styles.td}>
                         <div style={{ fontWeight: 900 }}>{r.name}</div>
-                        <div style={{ fontSize: 12, color: "#64748b" }}>ID: {r.itemId}</div>
                       </td>
                       <td style={{ ...styles.td, ...styles.right }}>{fmtQty(r.qty)}</td>
                       <td style={{ ...styles.td, ...styles.right }}>{fmtVnd((r as any).avgSell || 0)}</td>
@@ -885,9 +898,7 @@ export default function RevenuePage() {
                                 <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.vat || 0)}</td>
                                 <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.gross || 0)}</td>
                                 <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.need || 0)}</td>
-                                <td style={{ ...styles.td, ...styles.right, fontWeight: 900 }}>
-                                  {fmtVnd(r.collectedNormal || 0)}
-                                </td>
+                                <td style={{ ...styles.td, ...styles.right, fontWeight: 900 }}>{fmtVnd(r.collectedNormal || 0)}</td>
                                 <td style={styles.td}>{r.dsDate ? String(r.dsDate) : "-"}</td>
                                 <td style={{ ...styles.td, ...styles.right, fontWeight: 900 }}>{fmtVnd(r.dsNet || 0)}</td>
                               </tr>

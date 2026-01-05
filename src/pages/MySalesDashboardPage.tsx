@@ -1,30 +1,15 @@
-// src/pages/MySalesDashboardPage.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import api from "../api/client";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
 
 /* =======================
    Types (loose + safe)
 ======================= */
 type Summary = {
-  revenue: number; // doanh thu thuần (NET) = subtotal
-
-  // ⚠️ legacy: một số BE trả "collected" theo NET (đã quy đổi)
-  collected: number;
-
-  // ✅ tiền thực thu (cash, gross) - ưu tiên field này nếu có
-  collectedGross?: number;
-
+  revenue: number; // NET = subtotal
+  collected: number; // legacy NET
+  collectedGross?: number; // gross cash (ưu tiên nếu có)
   outstanding: number; // legacy
 
-  // optional split (nếu BE có)
   normalOutstanding?: number;
   holdOutstanding?: number;
   totalOutstanding?: number;
@@ -32,53 +17,40 @@ type Summary = {
   orderCount: number;
 };
 
-type TrendRow = { date: string; revenue: number };
-
 type DebtRow = {
   invoiceId: string;
   invoiceCode: string;
   customerName: string;
 
-  // cũ
-  date?: string; // dd/MM/yyyy
+  date?: string;
+  issueDate?: string;
+
+  invoiceTotal?: number;
   totalAmount?: number;
+  total?: number;
+
+  paid?: number;
+  paidAmount?: number;
   collected?: number;
   collectedGross?: number;
-  outstanding?: number;
-
-  // mới (route split)
-  issueDate?: string; // dd/MM/yyyy
-  invoiceTotal?: number; // total (VAT)
-  paid?: number; // paidAmount (total)
-  paidAmount?: number;
-  total?: number;
 
   normalOutstanding?: number;
   holdOutstanding?: number;
   totalOutstanding?: number;
 
-  // extra (route trả)
   subtotal?: number;
 };
 
-type TopDebtorRow = { customerName: string; outstanding: number };
-
 type DashboardResp = {
-  period?: { month: number; year: number; from?: string; to?: string };
+  period?: { from?: string; to?: string; month?: number; year?: number };
   summary?: Summary;
-  trend?: TrendRow[];
+  trend?: any[];
   debts?: DebtRow[];
-  topDebtors?: TopDebtorRow[];
-
-  customers?: any[];
   invoices?: any[];
+  customers?: any[];
 };
 
-/** Invoice detail response from GET /invoices/:id */
-type InvoiceDetailResp = {
-  ok: boolean;
-  data: any;
-};
+type InvoiceDetailResp = { ok: boolean; data: any };
 
 /* =======================
    Helpers
@@ -102,6 +74,9 @@ function fmtDateVN(raw: any) {
 function safeStr(v: any) {
   return String(v ?? "");
 }
+function hasVal(v: any) {
+  return v !== undefined && v !== null;
+}
 
 function unwrapData<T = any>(resData: any): T {
   if (resData && typeof resData === "object" && "ok" in resData && "data" in resData) {
@@ -110,49 +85,88 @@ function unwrapData<T = any>(resData: any): T {
   return resData as T;
 }
 
-// pick helpers: ưu tiên field mới/đúng rồi fallback
-function pickDate(d: any): string {
-  return safeStr(d?.date || d?.issueDate || d?.createdAt || "");
-}
+// pick common helpers
 function pickTotal(d: any): number {
-  // total VAT thật của invoice
-  return num(
-    d?.invoiceTotal ??
-      d?.totalAmount ??
-      d?.total ??
-      d?.grandTotal ??
-      d?.invoiceTotalWithTax ??
-      0
-  );
+  return num(d?.invoiceTotal ?? d?.totalAmount ?? d?.total ?? d?.grandTotal ?? 0);
 }
 function pickPaidGross(d: any): number {
-  // ✅ TIỀN THỰC THU: ưu tiên paid/paidAmount; ưu tiên collectedGross nếu có; fallback collected (legacy)
-  return num(
-    d?.paid ??
-      d?.paidAmount ??
-      d?.paidTotal ??
-      d?.collectedGross ??
-      d?.collected ??
-      0
+  // ưu tiên paid/paidAmount; ưu tiên collectedGross nếu có; fallback collected
+  return num(d?.paid ?? d?.paidAmount ?? d?.paidTotal ?? d?.collectedGross ?? d?.collected ?? 0);
+}
+
+// invoice-history helpers
+function pickInvId(d: any): string {
+  return safeStr(d?.id ?? d?.invoiceId ?? "");
+}
+function pickInvCode(d: any): string {
+  return safeStr(d?.code ?? d?.invoiceCode ?? d?.invoiceNo ?? "");
+}
+function pickInvCustomer(d: any): string {
+  return (
+    safeStr(d?.partnerName) ||
+    safeStr(d?.customerName) ||
+    safeStr(d?.partner?.name) ||
+    safeStr(d?.snapshot?.partnerName) ||
+    "Khách lẻ"
   );
 }
-function pickNormalOutstanding(d: any): number {
-  return num(
-    d?.normalOutstanding ??
-      d?.outstandingNormal ??
-      d?.outstanding ??
-      0
-  );
+function pickInvDate(d: any): any {
+  return d?.issueDate ?? d?.date ?? d?.createdAt ?? d?.approvedAt ?? "";
 }
-function pickHoldOutstanding(d: any): number {
-  return num(d?.holdOutstanding ?? d?.warrantyOutstanding ?? 0);
+function parseTime(d: any): number {
+  const raw = pickInvDate(d);
+  const t = new Date(raw).getTime();
+  return Number.isFinite(t) ? t : 0;
 }
-function pickTotalOutstanding(d: any): number {
-  return num(d?.totalOutstanding ?? d?.outstanding ?? 0);
+
+function pickInvHoldOutstanding(d: any): number {
+  if (hasVal(d?.holdOutstanding) || hasVal(d?.warrantyOutstanding)) {
+    return num(d?.holdOutstanding ?? d?.warrantyOutstanding ?? 0);
+  }
+
+  // fallback theo invoice warranty fields
+  const total = pickTotal(d);
+  const hasHold = Boolean(d?.hasWarrantyHold);
+  if (!hasHold) return 0;
+
+  const holdAmt = num(d?.warrantyHoldAmount);
+  const holdPct = num(d?.warrantyHoldPct);
+  const hold = holdAmt > 0 ? holdAmt : holdPct > 0 ? (total * holdPct) / 100 : 0;
+  return Math.max(0, hold);
+}
+
+function pickInvNormalOutstanding(d: any): number {
+  // ✅ nếu BE có field (dù = 0) thì dùng, không fallback
+  if (hasVal(d?.normalOutstanding) || hasVal(d?.outstandingNormal)) {
+    return num(d?.normalOutstanding ?? d?.outstandingNormal ?? 0);
+  }
+
+  // fallback: total - paid - hold
+  const total = pickTotal(d);
+  const paidGross = pickPaidGross(d);
+  const outstanding = Math.max(0, total - paidGross);
+  const hold = pickInvHoldOutstanding(d);
+  return Math.max(0, outstanding - Math.max(0, hold));
+}
+
+function pickInvTotalOutstanding(d: any): number {
+  if (hasVal(d?.totalOutstanding)) return num(d?.totalOutstanding);
+  if (hasVal(d?.outstanding)) return num(d?.outstanding);
+
+  // fallback: total - paid (gross)
+  const total = pickTotal(d);
+  const paidGross = pickPaidGross(d);
+  return Math.max(0, total - paidGross);
+}
+
+function invoiceIsDebt(d: any): boolean {
+  const normalO = pickInvNormalOutstanding(d);
+  const holdO = pickInvHoldOutstanding(d);
+  return normalO > 0.0001 || holdO > 0.0001;
 }
 
 /* =======================
-   Dialog (Invoice detail)
+   Modal
 ======================= */
 function Modal({
   open,
@@ -169,23 +183,14 @@ function Modal({
 
   return (
     <div className="fixed inset-0 z-50">
-      <div
-        className="absolute inset-0 bg-black/40"
-        onClick={onClose}
-        aria-hidden="true"
-      />
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
       <div className="absolute inset-0 flex items-center justify-center p-4">
         <div className="w-full max-w-5xl bg-white rounded-lg shadow-lg border">
           <div className="flex items-start justify-between gap-4 p-4 border-b">
             <div className="min-w-0">
-              <div className="font-semibold text-lg truncate">
-                {title || "Chi tiết"}
-              </div>
+              <div className="font-semibold text-lg truncate">{title || "Chi tiết"}</div>
             </div>
-            <button
-              className="px-3 py-2 rounded border hover:bg-gray-50"
-              onClick={onClose}
-            >
+            <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={onClose}>
               Đóng
             </button>
           </div>
@@ -193,10 +198,7 @@ function Modal({
           <div className="p-4 max-h-[75vh] overflow-auto">{children}</div>
 
           <div className="p-4 border-t flex justify-end">
-            <button
-              className="px-3 py-2 rounded border hover:bg-gray-50"
-              onClick={onClose}
-            >
+            <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={onClose}>
               Đóng
             </button>
           </div>
@@ -224,9 +226,7 @@ function Kpi({
       }`}
     >
       <div className="text-sm text-gray-500">{title}</div>
-      <div className={`text-xl font-semibold ${highlight ? "text-red-600" : ""}`}>
-        {value}
-      </div>
+      <div className={`text-xl font-semibold ${highlight ? "text-red-600" : ""}`}>{value}</div>
       {subHint ? <div className="text-xs text-gray-500 mt-1">{subHint}</div> : null}
     </div>
   );
@@ -235,11 +235,16 @@ function Kpi({
 /* =======================
    Page
 ======================= */
+type HistoryTab = "ALL" | "DEBT" | "PAID";
+
 const MySalesDashboardPage: React.FC = () => {
-  const now = new Date();
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [year, setYear] = useState(now.getFullYear());
-  const [search, setSearch] = useState("");
+  // ✅ date range filter
+  const [fromDate, setFromDate] = useState<string>("");
+  const [toDate, setToDate] = useState<string>("");
+
+  // history tabs + search
+  const [tab, setTab] = useState<HistoryTab>("ALL");
+  const [histSearch, setHistSearch] = useState("");
 
   const [dash, setDash] = useState<DashboardResp | null>(null);
   const [loading, setLoading] = useState(false);
@@ -257,16 +262,16 @@ const MySalesDashboardPage: React.FC = () => {
     setErr(null);
 
     try {
-      const res = await api.get("/me/sales-dashboard", { params: { month, year } });
+      const params: any = {};
+      if (fromDate) params.from = fromDate;
+      if (toDate) params.to = toDate;
+
+      const res = await api.get("/me/sales-dashboard", { params });
       const data = unwrapData<DashboardResp>(res.data);
       setDash(data || null);
     } catch (e: any) {
       setDash(null);
-      setErr(
-        e?.response?.data?.message ||
-          e?.message ||
-          "Không lấy được dữ liệu doanh thu cá nhân"
-      );
+      setErr(e?.response?.data?.message || e?.message || "Không lấy được dữ liệu doanh thu cá nhân");
     } finally {
       setLoading(false);
     }
@@ -282,11 +287,7 @@ const MySalesDashboardPage: React.FC = () => {
       const data = unwrapData<any>(res.data);
       setInv(data);
     } catch (e: any) {
-      setInvErr(
-        e?.response?.data?.message ||
-          e?.message ||
-          "Không lấy được chi tiết hoá đơn"
-      );
+      setInvErr(e?.response?.data?.message || e?.message || "Không lấy được chi tiết hoá đơn");
     } finally {
       setInvLoading(false);
     }
@@ -298,15 +299,17 @@ const MySalesDashboardPage: React.FC = () => {
     fetchInvoiceDetail(id);
   }
 
+  // ✅ vào trang auto load ALL TIME
   useEffect(() => {
     fetchDashboard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month, year]);
+  }, []);
 
   const view: Required<DashboardResp> = {
-    period: dash?.period || { month, year },
+    period: dash?.period || {},
     summary:
-      dash?.summary || ({
+      dash?.summary ||
+      ({
         revenue: 0,
         collected: 0,
         collectedGross: 0,
@@ -315,64 +318,36 @@ const MySalesDashboardPage: React.FC = () => {
       } as any),
     trend: Array.isArray(dash?.trend) ? dash!.trend! : [],
     debts: Array.isArray(dash?.debts) ? dash!.debts! : [],
-    topDebtors: Array.isArray(dash?.topDebtors) ? dash!.topDebtors! : [],
-    customers: Array.isArray((dash as any)?.customers) ? (dash as any).customers : [],
     invoices: Array.isArray((dash as any)?.invoices) ? (dash as any).invoices : [],
+    customers: Array.isArray((dash as any)?.customers) ? (dash as any).customers : [],
   };
 
   // KPI numbers
   const kpiNeedCollect = num((view.summary as any).normalOutstanding ?? view.summary.outstanding);
   const kpiHold = num((view.summary as any).holdOutstanding ?? 0);
   const kpiTotalDebt = num((view.summary as any).totalOutstanding ?? view.summary.outstanding);
-
-  // ✅ "Đã thu (thực tế)" = CASH (gross). Ưu tiên summary.collectedGross nếu BE trả.
   const kpiCollectedCash = num((view.summary as any).collectedGross ?? view.summary.collected);
-
-  // ✅ không hint, không quy đổi, không KPI linh tinh
-  const collectedHint = "";
-
-  const filteredDebts = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return view.debts;
-
-    return view.debts.filter((d) => {
-      const code = safeStr((d as any).invoiceCode).toLowerCase();
-      const name = safeStr((d as any).customerName).toLowerCase();
-      return code.includes(q) || name.includes(q);
-    });
-  }, [view.debts, search]);
 
   // ===== derive customer cards from debts =====
   const customerAgg = useMemo(() => {
     const m = new Map<
       string,
-      {
-        customerName: string;
-        normalOutstanding: number;
-        holdOutstanding: number;
-        totalOutstanding: number;
-        count: number;
-      }
+      { customerName: string; normalOutstanding: number; holdOutstanding: number; totalOutstanding: number; count: number }
     >();
 
     for (const d of view.debts) {
       const key = safeStr((d as any).customerName || "Khách lẻ");
-      const cur =
-        m.get(key) || {
-          customerName: key,
-          normalOutstanding: 0,
-          holdOutstanding: 0,
-          totalOutstanding: 0,
-          count: 0,
-        };
+      const cur = m.get(key) || {
+        customerName: key,
+        normalOutstanding: 0,
+        holdOutstanding: 0,
+        totalOutstanding: 0,
+        count: 0,
+      };
 
-      const normalO = pickNormalOutstanding(d);
-      const holdO = pickHoldOutstanding(d);
-      const totalO = pickTotalOutstanding(d);
-
-      cur.normalOutstanding += normalO;
-      cur.holdOutstanding += holdO;
-      cur.totalOutstanding += totalO;
+      cur.normalOutstanding += num((d as any).normalOutstanding ?? (d as any).outstanding ?? 0);
+      cur.holdOutstanding += num((d as any).holdOutstanding ?? 0);
+      cur.totalOutstanding += num((d as any).totalOutstanding ?? (d as any).outstanding ?? 0);
       cur.count += 1;
 
       m.set(key, cur);
@@ -381,42 +356,89 @@ const MySalesDashboardPage: React.FC = () => {
     return Array.from(m.values()).sort((a, b) => b.totalOutstanding - a.totalOutstanding);
   }, [view.debts]);
 
+  const historyAll = useMemo(() => {
+    const rows = Array.isArray(view.invoices) ? [...view.invoices] : [];
+    rows.sort((a, b) => parseTime(b) - parseTime(a));
+    return rows;
+  }, [view.invoices]);
+
+  const historyFiltered = useMemo(() => {
+    let rows = historyAll;
+
+    // tab filter
+    if (tab === "DEBT") rows = rows.filter((r) => invoiceIsDebt(r));
+    if (tab === "PAID") rows = rows.filter((r) => !invoiceIsDebt(r));
+
+    // search filter
+    const q = histSearch.trim().toLowerCase();
+    if (q) {
+      rows = rows.filter((r) => {
+        const code = pickInvCode(r).toLowerCase();
+        const name = pickInvCustomer(r).toLowerCase();
+        return code.includes(q) || name.includes(q);
+      });
+    }
+
+    return rows;
+  }, [historyAll, tab, histSearch]);
+
+  const counts = useMemo(() => {
+    const total = historyAll.length;
+    const debt = historyAll.filter((r) => invoiceIsDebt(r)).length;
+    const paid = total - debt;
+    return { total, debt, paid };
+  }, [historyAll]);
+
+  const rangeLabel = useMemo(() => {
+    if (!fromDate && !toDate) return "Tất cả thời gian";
+    const a = fromDate ? fmtDateVN(fromDate) : "…";
+    const b = toDate ? fmtDateVN(toDate) : "…";
+    return `${a} → ${b}`;
+  }, [fromDate, toDate]);
+
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 flex flex-col gap-6 min-h-screen">
       {/* Header */}
       <div className="flex items-start md:items-center justify-between gap-4 flex-col md:flex-row">
         <div>
           <h1 className="text-2xl font-semibold">Doanh thu của tôi</h1>
           <p className="text-sm text-gray-500">Nhân viên SALE</p>
+          <p className="text-xs text-gray-500 mt-1">Khoảng thời gian: {rangeLabel}</p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <select
-            className="border rounded px-2 py-2 bg-white"
-            value={month}
-            onChange={(e) => setMonth(Number(e.target.value))}
-          >
-            {Array.from({ length: 12 }).map((_, i) => (
-              <option key={i + 1} value={i + 1}>
-                Tháng {i + 1}
-              </option>
-            ))}
-          </select>
+        <div className="flex items-end gap-2 flex-wrap">
+          <div className="flex flex-col">
+            <label className="text-xs text-gray-500 mb-1">Từ ngày</label>
+            <input
+              type="date"
+              className="border rounded px-2 py-2 bg-white"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+            />
+          </div>
 
-          <select
-            className="border rounded px-2 py-2 bg-white"
-            value={year}
-            onChange={(e) => setYear(Number(e.target.value))}
+          <div className="flex flex-col">
+            <label className="text-xs text-gray-500 mb-1">Đến ngày</label>
+            <input
+              type="date"
+              className="border rounded px-2 py-2 bg-white"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+            />
+          </div>
+
+          <button
+            className="px-4 py-2 rounded border bg-white hover:bg-gray-50"
+            onClick={() => {
+              setFromDate("");
+              setToDate("");
+              setTimeout(() => fetchDashboard(), 0);
+            }}
+            disabled={loading}
+            title="Bỏ lọc (tất cả thời gian)"
           >
-            {Array.from({ length: 6 }).map((_, i) => {
-              const y = now.getFullYear() - i;
-              return (
-                <option key={y} value={y}>
-                  {y}
-                </option>
-              );
-            })}
-          </select>
+            Toàn bộ
+          </button>
 
           <button
             className="px-4 py-2 rounded bg-blue-600 text-white disabled:opacity-60"
@@ -429,57 +451,160 @@ const MySalesDashboardPage: React.FC = () => {
       </div>
 
       {/* State */}
-      {err && (
-        <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded">
-          {err}
-        </div>
-      )}
-
-      {loading && (
-        <div className="bg-white border rounded p-6 text-center text-gray-500">
-          Đang tải dữ liệu…
-        </div>
-      )}
+      {err && <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded">{err}</div>}
+      {loading && <div className="bg-white border rounded p-6 text-center text-gray-500">Đang tải dữ liệu…</div>}
 
       {/* KPI */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Kpi title="Doanh thu thuần" value={money(view.summary.revenue)} />
-        <Kpi title="Đã thu (thực tế)" value={money(kpiCollectedCash)} subHint={collectedHint} />
-        <Kpi
-          title="Cần thu (nợ thường)"
-          value={money(kpiNeedCollect)}
-          highlight={kpiNeedCollect > 0}
-        />
+        <Kpi title="Đã thu (thực tế)" value={money(kpiCollectedCash)} />
+        <Kpi title="Nợ cần thu" value={money(kpiNeedCollect)} highlight={kpiNeedCollect > 0} />
         <Kpi title="Số đơn" value={String(num(view.summary.orderCount))} />
       </div>
 
-      {/* Chart + Debtors */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-white rounded shadow border p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="font-medium">Xu hướng doanh thu</h2>
-            <span className="text-xs text-gray-500">Theo ngày phát hành hoá đơn</span>
+      {/* ✅ Fill remaining height: History + Quick debt */}
+      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
+        {/* History with tabs */}
+        <div className="lg:col-span-2 bg-white rounded shadow border p-4 flex flex-col min-h-0">
+          <div className="flex flex-col gap-3 mb-3">
+            <div className="flex items-start md:items-center justify-between gap-3 flex-col md:flex-row">
+              <div className="min-w-0">
+                <h2 className="font-medium">Lịch sử hoá đơn bán</h2>
+                <div className="text-xs text-gray-500">
+                  Theo ngày phát hành hoá đơn • {historyFiltered.length} dòng
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 w-full md:w-auto">
+                <div className="inline-flex rounded border overflow-hidden bg-white shrink-0">
+                  <button
+                    className={`px-3 py-2 text-sm ${tab === "ALL" ? "bg-blue-600 text-white" : "hover:bg-gray-50"}`}
+                    onClick={() => setTab("ALL")}
+                    type="button"
+                  >
+                    Tất cả
+                  </button>
+                  <button
+                    className={`px-3 py-2 text-sm ${tab === "DEBT" ? "bg-blue-600 text-white" : "hover:bg-gray-50"}`}
+                    onClick={() => setTab("DEBT")}
+                    type="button"
+                  >
+                    Còn nợ
+                  </button>
+                  <button
+                    className={`px-3 py-2 text-sm ${tab === "PAID" ? "bg-blue-600 text-white" : "hover:bg-gray-50"}`}
+                    onClick={() => setTab("PAID")}
+                    type="button"
+                  >
+                    Đã thu đủ
+                  </button>
+                </div>
+
+                <input
+                  className="border rounded px-3 py-2 text-sm w-full md:w-72 bg-white"
+                  placeholder="Tìm mã HĐ / khách hàng"
+                  value={histSearch}
+                  onChange={(e) => setHistSearch(e.target.value)}
+                  disabled={historyAll.length === 0}
+                />
+              </div>
+            </div>
+
+            <div className="text-xs text-gray-500">
+              Tổng: <b>{counts.total}</b> • Còn nợ: <b>{counts.debt}</b> • Đã thu đủ: <b>{counts.paid}</b>
+            </div>
           </div>
 
-          <div className="h-72">
-            {view.trend.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-gray-400 text-sm">
-                Không có dữ liệu biểu đồ
+          {/* ✅ Scroll INSIDE table area */}
+          <div className="flex-1 min-h-0">
+            {historyAll.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-gray-400 text-sm border rounded">
+                Không có dữ liệu hoá đơn trong khoảng thời gian
+              </div>
+            ) : historyFiltered.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-gray-400 text-sm border rounded">
+                Không có kết quả phù hợp
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={view.trend}>
-                  <XAxis dataKey="date" />
-                  <YAxis />
-                  <Tooltip formatter={(v: any) => money(v)} />
-                  <Line dataKey="revenue" strokeWidth={2} />
-                </LineChart>
-              </ResponsiveContainer>
+              <div className="h-full overflow-auto border rounded">
+                <table className="w-full text-sm min-w-[980px]">
+                  <thead className="bg-gray-50 sticky top-0 z-10 border-b">
+                    <tr>
+                      <th className="text-left py-2 px-2">Ngày</th>
+                      <th className="text-left px-2">Mã HĐ</th>
+                      <th className="text-left px-2">Khách hàng</th>
+                      <th className="text-right px-2">Tổng tiền</th>
+                      <th className="text-right px-2">Đã thu</th>
+                      <th className="text-right px-2 text-red-600">Còn thu</th>
+                      <th className="text-right px-2">Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historyFiltered.map((r, idx) => {
+                      const id = pickInvId(r) || `${idx}`;
+                      const code = pickInvCode(r);
+                      const customer = pickInvCustomer(r);
+                      const date = pickInvDate(r);
+
+                      const total = pickTotal(r);
+                      const paidCash = pickPaidGross(r);
+
+                      const normalO = pickInvNormalOutstanding(r);
+                      const holdO = pickInvHoldOutstanding(r);
+                      const totalO = pickInvTotalOutstanding(r);
+
+                      return (
+                        <tr key={id} className="border-b last:border-0 hover:bg-gray-50">
+                          <td className="py-2 px-2">{fmtDateVN(date)}</td>
+
+                          <td className="px-2">
+                            <div className="font-medium">{code || "(Chưa có mã)"}</div>
+                            {(r?.paymentStatus || r?.status) && (
+                              <div className="text-xs text-gray-500">{safeStr(r?.paymentStatus || r?.status || "")}</div>
+                            )}
+                          </td>
+
+                          <td className="px-2">{customer}</td>
+
+                          <td className="text-right px-2 font-semibold">{money(total)}</td>
+                          <td className="text-right px-2">{money(paidCash)}</td>
+
+                          <td className="text-right px-2">
+                            <div className={`font-semibold ${invoiceIsDebt(r) ? "text-red-600" : ""}`}>
+                              {money(normalO)}
+                            </div>
+                            {holdO > 0 && (
+                              <div className="text-xs text-amber-700">
+                                BH treo: {money(holdO)} (tổng nợ: {money(totalO)})
+                              </div>
+                            )}
+                          </td>
+
+                          <td className="text-right px-2">
+                            <button
+                              className="px-3 py-1.5 rounded border hover:bg-white bg-gray-50"
+                              onClick={() => {
+                                const realId = pickInvId(r);
+                                if (realId) openInvoice(String(realId));
+                              }}
+                              disabled={!pickInvId(r)}
+                              title={!pickInvId(r) ? "Không có invoiceId để mở chi tiết" : "Xem chi tiết"}
+                            >
+                              Xem
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         </div>
 
-        <div className="bg-white rounded shadow border p-4">
+        {/* Quick debt */}
+        <div className="bg-white rounded shadow border p-4 flex flex-col min-h-0">
           <div className="flex items-center justify-between">
             <h2 className="font-medium">Công nợ nhanh</h2>
             <div className="text-xs text-gray-500">{customerAgg.length} khách</div>
@@ -487,12 +612,12 @@ const MySalesDashboardPage: React.FC = () => {
 
           <div className="mt-3 space-y-1">
             <div className="flex justify-between">
-              <span className="text-sm text-gray-600">Cần thu (nợ thường)</span>
+              <span className="text-sm text-gray-600">Nợ cần thu</span>
               <span className="font-semibold text-red-600">{money(kpiNeedCollect)}</span>
             </div>
 
             <div className="flex justify-between">
-              <span className="text-sm text-gray-600">BH treo</span>
+              <span className="text-sm text-gray-600">Giữ tiền bảo hành</span>
               <span className="font-semibold text-amber-700">{money(kpiHold)}</span>
             </div>
 
@@ -506,16 +631,19 @@ const MySalesDashboardPage: React.FC = () => {
             * BH treo là phần giữ lại bảo hành (thường 5%), không tính vào khoản cần thu ngay.
           </div>
 
-          <div className="mt-3">
+          {/* ✅ list scroll inside */}
+          <div className="mt-3 flex-1 min-h-0">
             {customerAgg.length === 0 ? (
-              <div className="text-sm text-gray-400">Không có khách nợ trong tháng</div>
+              <div className="h-full flex items-center justify-center text-sm text-gray-400 border rounded">
+                Không có khách nợ trong khoảng thời gian
+              </div>
             ) : (
-              <div className="space-y-2">
-                {customerAgg.slice(0, 8).map((c) => (
+              <div className="h-full overflow-auto border rounded p-2 space-y-2">
+                {customerAgg.map((c) => (
                   <div
                     key={c.customerName}
                     className="flex items-center justify-between text-sm border rounded px-3 py-2 hover:bg-gray-50"
-                    title="Bấm vào hoá đơn ở bảng bên dưới để xem chi tiết"
+                    title="Xem chi tiết bằng cách bấm 'Xem' ở bảng lịch sử"
                   >
                     <div className="min-w-0">
                       <div className="font-medium truncate">{c.customerName}</div>
@@ -524,103 +652,14 @@ const MySalesDashboardPage: React.FC = () => {
                     <div className="text-right whitespace-nowrap">
                       <div className="font-semibold text-red-600">{money(c.totalOutstanding)}</div>
                       {c.holdOutstanding > 0 && (
-                        <div className="text-xs text-amber-700">
-                          BH treo: {money(c.holdOutstanding)}
-                        </div>
+                        <div className="text-xs text-amber-700">BH treo: {money(c.holdOutstanding)}</div>
                       )}
                     </div>
                   </div>
                 ))}
-
-                <div className="text-xs text-gray-500 mt-2">
-                  Gợi ý: Bấm vào từng hoá đơn ở bảng bên dưới để mở hộp thoại chi tiết
-                  (dòng hàng + lịch sử thanh toán).
-                </div>
               </div>
             )}
           </div>
-        </div>
-      </div>
-
-      {/* Debt table */}
-      <div className="bg-white rounded shadow border p-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
-          <div>
-            <h2 className="font-medium">Danh sách hoá đơn còn nợ</h2>
-            <div className="text-xs text-gray-500">Bấm vào một hoá đơn để xem chi tiết.</div>
-          </div>
-
-          <input
-            className="border rounded px-3 py-2 text-sm w-full md:w-72 bg-white"
-            placeholder="Tìm mã HĐ / khách hàng"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            disabled={view.debts.length === 0}
-          />
-        </div>
-
-        <div className="overflow-auto">
-          <table className="w-full text-sm min-w-[860px]">
-            <thead className="border-b bg-gray-50">
-              <tr>
-                <th className="text-left py-2 px-2">Mã HĐ</th>
-                <th className="text-left px-2">Khách hàng</th>
-                <th className="text-left px-2">Ngày</th>
-                <th className="text-right px-2">Tổng tiền</th>
-                <th className="text-right px-2">Đã thu</th>
-                <th className="text-right px-2 text-red-600">Cần thu</th>
-                <th className="text-right px-2">Thao tác</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredDebts.map((d) => {
-                const total = pickTotal(d);
-                const paidGross = pickPaidGross(d);
-                const normalO = pickNormalOutstanding(d);
-                const holdO = pickHoldOutstanding(d);
-
-                return (
-                  <tr
-                    key={safeStr((d as any).invoiceId)}
-                    className="border-b last:border-0 hover:bg-gray-50"
-                  >
-                    <td className="py-2 px-2 font-medium">{safeStr((d as any).invoiceCode)}</td>
-                    <td className="px-2">{safeStr((d as any).customerName || "Khách lẻ")}</td>
-                    <td className="px-2">{pickDate(d)}</td>
-
-                    <td className="text-right px-2">{money(total)}</td>
-                    <td className="text-right px-2">{money(paidGross)}</td>
-
-                    <td className="text-right px-2">
-                      <div className="font-semibold text-red-600">{money(normalO)}</div>
-                      {holdO > 0 && (
-                        <div className="text-xs text-amber-700">BH treo: {money(holdO)}</div>
-                      )}
-                    </td>
-
-                    <td className="text-right px-2">
-                      <button
-                        className="px-3 py-1.5 rounded border hover:bg-white bg-gray-50"
-                        onClick={() => openInvoice(String((d as any).invoiceId))}
-                      >
-                        Xem
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-
-              {filteredDebts.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="text-center py-10 text-gray-500">
-                    {view.debts.length === 0
-                      ? "Không có hoá đơn còn nợ 🎉"
-                      : "Không tìm thấy kết quả phù hợp"}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
         </div>
       </div>
 
@@ -636,16 +675,10 @@ const MySalesDashboardPage: React.FC = () => {
         title={inv ? `Hoá đơn ${safeStr(inv.code || invId || "")}` : "Chi tiết hoá đơn"}
       >
         {invLoading && (
-          <div className="bg-white border rounded p-6 text-center text-gray-500">
-            Đang tải chi tiết hoá đơn…
-          </div>
+          <div className="bg-white border rounded p-6 text-center text-gray-500">Đang tải chi tiết hoá đơn…</div>
         )}
 
-        {invErr && (
-          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded">
-            {invErr}
-          </div>
-        )}
+        {invErr && <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded">{invErr}</div>}
 
         {!invLoading && !invErr && inv && <InvoiceDetailView inv={inv} />}
       </Modal>
@@ -656,34 +689,22 @@ const MySalesDashboardPage: React.FC = () => {
 export default MySalesDashboardPage;
 
 /* =======================
-   Invoice Detail View
+   Invoice Detail View (giữ nguyên)
 ======================= */
 function InvoiceDetailView({ inv }: { inv: any }) {
   const partnerObj = inv.partner || null;
 
   const partnerName =
-    safeStr(partnerObj?.name) ||
-    safeStr(inv.partnerName) ||
-    safeStr(inv.snapshot?.partnerName) ||
-    "Khách lẻ";
+    safeStr(partnerObj?.name) || safeStr(inv.partnerName) || safeStr(inv.snapshot?.partnerName) || "Khách lẻ";
 
   const partnerPhone =
-    safeStr(partnerObj?.phone) ||
-    safeStr(inv.partnerPhone) ||
-    safeStr(inv.snapshot?.partnerPhone) ||
-    "";
+    safeStr(partnerObj?.phone) || safeStr(inv.partnerPhone) || safeStr(inv.snapshot?.partnerPhone) || "";
 
   const partnerEmail =
-    safeStr(partnerObj?.email) ||
-    safeStr(inv.partnerEmail) ||
-    safeStr(inv.snapshot?.partnerEmail) ||
-    "";
+    safeStr(partnerObj?.email) || safeStr(inv.partnerEmail) || safeStr(inv.snapshot?.partnerEmail) || "";
 
   const partnerAddr =
-    safeStr(partnerObj?.address) ||
-    safeStr(inv.partnerAddr) ||
-    safeStr(inv.snapshot?.partnerAddr) ||
-    "";
+    safeStr(partnerObj?.address) || safeStr(inv.partnerAddr) || safeStr(inv.snapshot?.partnerAddr) || "";
 
   const issueDate = inv.issueDate || inv.date || inv.createdAt;
 
@@ -729,11 +750,9 @@ function InvoiceDetailView({ inv }: { inv: any }) {
   const lines: any[] = Array.isArray(inv.lines) ? inv.lines : [];
   const hasLines = lines.length > 0;
 
-  // invoice-level paidAmount = NORMAL paid (đã clamp theo collectible)
   const paidAmount = num(inv.paidAmount);
   const outstanding = Math.max(0, total - paidAmount);
 
-  // warranty display only
   const warrantyHoldAmount = num(inv.warrantyHoldAmount);
   const warrantyHoldPct = num(inv.warrantyHoldPct);
   const hasWarrantyHold = Boolean(inv.hasWarrantyHold);
@@ -751,8 +770,7 @@ function InvoiceDetailView({ inv }: { inv: any }) {
         <div>
           <div className="text-sm text-gray-500">Ngày: {fmtDateVN(issueDate)}</div>
           <div className="text-xs text-gray-400">
-            Trạng thái: {safeStr(inv.status || "")} • Thanh toán:{" "}
-            {safeStr(inv.paymentStatus || "")}
+            Trạng thái: {safeStr(inv.status || "")} • Thanh toán: {safeStr(inv.paymentStatus || "")}
           </div>
         </div>
 
@@ -794,12 +812,12 @@ function InvoiceDetailView({ inv }: { inv: any }) {
         <div className="border rounded p-3">
           <div className="text-xs text-gray-500 mb-1">Thanh toán</div>
           <div className="text-sm flex justify-between">
-            <span>Đã thu (NORMAL)</span>
+            <span>Đã thu </span>
             <span className="font-semibold">{money(paidAmount)}</span>
           </div>
 
           <div className="text-sm flex justify-between">
-            <span>Cần thu (nợ thường)</span>
+            <span>Nợ cần thu</span>
             <span className="font-semibold text-red-600">{money(normalOutstanding)}</span>
           </div>
 
@@ -814,12 +832,6 @@ function InvoiceDetailView({ inv }: { inv: any }) {
             <span>Tổng nợ</span>
             <span className="font-semibold">{money(outstanding)}</span>
           </div>
-
-          {safeStr(inv.paymentStatus).toUpperCase() === "PARTIAL" && (
-            <div className="inline-flex mt-2 text-xs px-2 py-1 rounded bg-amber-50 border border-amber-200 text-amber-700">
-              Thu 1 phần
-            </div>
-          )}
         </div>
       </div>
 
@@ -827,16 +839,14 @@ function InvoiceDetailView({ inv }: { inv: any }) {
         <div className="font-medium mb-2">Dòng hàng</div>
 
         {!hasLines ? (
-          <div className="text-sm text-gray-500">
-            Hoá đơn này chưa có dòng hàng (hoặc API đang không include lines).
-          </div>
+          <div className="text-sm text-gray-500">Hoá đơn này chưa có dòng hàng (hoặc API đang không include lines).</div>
         ) : (
           <div className="overflow-auto">
             <table className="w-full text-sm min-w-[900px]">
               <thead className="border-b bg-gray-50">
                 <tr>
                   <th className="text-left py-2 px-2">Sản phẩm</th>
-                  <th className="text-left px-2">ĐVT</th>
+                  
                   <th className="text-right px-2">SL</th>
                   <th className="text-right px-2">Đơn giá</th>
                   <th className="text-right px-2">Thành tiền</th>
@@ -845,7 +855,7 @@ function InvoiceDetailView({ inv }: { inv: any }) {
               <tbody>
                 {lines.map((l, idx) => {
                   const name = safeStr(l.itemName || l.item?.name || "");
-                  const unit = safeStr(l.unit || l.item?.unit || "");
+                  
                   const qty = num(l.qty);
                   const price = num(l.price);
                   const lineTotal = qty * price;
@@ -853,7 +863,7 @@ function InvoiceDetailView({ inv }: { inv: any }) {
                   return (
                     <tr key={safeStr(l.id || idx)} className="border-b last:border-0">
                       <td className="py-2 px-2 font-medium">{name || "(Không tên)"}</td>
-                      <td className="px-2">{unit}</td>
+                      
                       <td className="text-right px-2">{qty.toLocaleString("vi-VN")}</td>
                       <td className="text-right px-2">{money(price)}</td>
                       <td className="text-right px-2 font-semibold">{money(lineTotal)}</td>
@@ -882,8 +892,8 @@ function InvoiceDetailView({ inv }: { inv: any }) {
                   <th className="text-left px-2">Phương thức</th>
                   <th className="text-left px-2">Mã tham chiếu</th>
                   <th className="text-right px-2">Số tiền phiếu</th>
-                  <th className="text-right px-2">NORMAL</th>
-                  <th className="text-right px-2">HOLD</th>
+                  <th className="text-right px-2">Đã thu</th>
+                  <th className="text-right px-2">Tiền BH</th>
                 </tr>
               </thead>
               <tbody>
