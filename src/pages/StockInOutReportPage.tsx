@@ -10,6 +10,7 @@ type StockInOutRow = {
   sku: string;
   name: string;
   unitCode: string;
+  unitName?: string; // ✅ optional: nếu BE có trả
   openingQty: number;
   inQty: number;
   outQty: number;
@@ -22,6 +23,12 @@ type ReportData = {
   to: string; // yyyy-mm-dd
   rows: StockInOutRow[];
   totals: { openingQty: number; inQty: number; outQty: number; closingQty: number };
+};
+
+type UnitRow = {
+  id: string;
+  code: string;
+  name: string;
 };
 
 function pad2(n: number) {
@@ -41,6 +48,13 @@ function safeNum(v: any) {
   return Number.isFinite(n) ? n : 0;
 }
 
+// ✅ fallback nhanh theo DB unit của bạn
+const FALLBACK_UNIT_LABEL: Record<string, string> = {
+  pcs: "Cái",
+  pair: "Cặp",
+  m: "Mét",
+};
+
 const PAGE_SIZE = 30;
 
 const StockInOutReportPage: React.FC = () => {
@@ -59,6 +73,9 @@ const StockInOutReportPage: React.FC = () => {
 
   const [page, setPage] = useState(1);
 
+  // ✅ map unitCode -> unitName (lấy từ bảng Unit)
+  const [unitMap, setUnitMap] = useState<Record<string, string>>({});
+
   const rows = data?.rows ?? [];
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(rows.length / PAGE_SIZE)), [rows.length]);
@@ -71,6 +88,46 @@ const StockInOutReportPage: React.FC = () => {
   useEffect(() => {
     setPage(1);
   }, [from, to, q]);
+
+  // ✅ load units once (để đổi pcs -> Cái)
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const res = await api.get(`/units`);
+        const payload = res?.data?.data ?? res?.data;
+
+        const list: any[] =
+          Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
+
+        const map: Record<string, string> = {};
+        (list as UnitRow[]).forEach((u: any) => {
+          const code = String(u?.code ?? "").trim();
+          const name = String(u?.name ?? "").trim();
+          if (code) map[code] = name || code;
+        });
+
+        if (mounted && Object.keys(map).length) setUnitMap(map);
+      } catch {
+        // im lặng: vẫn có FALLBACK_UNIT_LABEL
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  function unitLabel(unitCode?: string, unitName?: string) {
+    const code = String(unitCode ?? "").trim();
+    const name = String(unitName ?? "").trim();
+    if (name) return name;
+
+    if (code && unitMap[code]) return unitMap[code];
+    if (code && FALLBACK_UNIT_LABEL[code]) return FALLBACK_UNIT_LABEL[code];
+
+    return code || "Cái";
+  }
 
   async function load() {
     try {
@@ -93,7 +150,8 @@ const StockInOutReportPage: React.FC = () => {
           itemId: String(r.itemId),
           sku: String(r.sku ?? ""),
           name: String(r.name ?? ""),
-          unitCode: String(r.unitCode ?? ""),
+          unitCode: String(r.unitCode ?? r.unit?.code ?? ""),
+          unitName: String(r.unitName ?? r.unit?.name ?? ""),
           openingQty: safeNum(r.openingQty),
           inQty: safeNum(r.inQty),
           outQty: safeNum(r.outQty),
@@ -142,7 +200,9 @@ const StockInOutReportPage: React.FC = () => {
       ws.getCell("A1").alignment = { vertical: "middle", horizontal: "center" };
 
       ws.mergeCells("A2:H2");
-      ws.getCell("A2").value = `Kho: ${data.warehouse?.name || ""}    Range: ${data.from} → ${data.to}    Số dòng: ${data.rows.length}`;
+      ws.getCell("A2").value = `Kho: ${data.warehouse?.name || ""}    Range: ${data.from} → ${
+        data.to
+      }    Số dòng: ${data.rows.length}`;
       ws.getCell("A2").font = { size: 11 };
       ws.getCell("A2").alignment = { vertical: "middle", horizontal: "center" };
 
@@ -184,7 +244,7 @@ const StockInOutReportPage: React.FC = () => {
         ws.addRow([
           r.sku || "",
           r.name || "",
-          r.unitCode || "",
+          unitLabel(r.unitCode, r.unitName), // ✅ đổi pcs -> Cái
           r.openingQty,
           r.inQty,
           r.outQty,
@@ -228,7 +288,16 @@ const StockInOutReportPage: React.FC = () => {
 
       // Totals row
       const totalRowIdx = lastDataRow + 1;
-      const tr = ws.addRow(["Tổng", "", "", data.totals.openingQty, data.totals.inQty, data.totals.outQty, data.totals.closingQty, ""]);
+      const tr = ws.addRow([
+        "Tổng",
+        "",
+        "",
+        data.totals.openingQty,
+        data.totals.inQty,
+        data.totals.outQty,
+        data.totals.closingQty,
+        "",
+      ]);
       ws.mergeCells(`A${totalRowIdx}:C${totalRowIdx}`);
       tr.font = { bold: true };
       tr.getCell(5).font = { bold: true, color: { argb: "FF16A34A" } };
@@ -253,7 +322,9 @@ const StockInOutReportPage: React.FC = () => {
       });
 
       const now = new Date();
-      const fileName = `nhap_xuat_${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}.xlsx`;
+      const fileName = `nhap_xuat_${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(
+        now.getDate()
+      )}.xlsx`;
       saveAs(blob, fileName);
 
       push({ type: "success", title: "OK", message: "Đã xuất Excel." });
@@ -357,7 +428,7 @@ const StockInOutReportPage: React.FC = () => {
                   <td className="px-4 py-3 border-b border-slate-100 whitespace-nowrap">{r.sku}</td>
                   <td className="px-4 py-3 border-b border-slate-100">{r.name}</td>
                   <td className="px-4 py-3 border-b border-slate-100 text-center whitespace-nowrap">
-                    {r.unitCode}
+                    {unitLabel(r.unitCode, r.unitName) /* ✅ pcs -> Cái */}
                   </td>
                   <td className="px-4 py-3 border-b border-slate-100 text-right">
                     {fmtQty(r.openingQty)}
