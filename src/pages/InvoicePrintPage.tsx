@@ -1,5 +1,5 @@
 // src/pages/InvoicePrintPage.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import api from "../api/client";
 
@@ -7,9 +7,7 @@ import api from "../api/client";
 function unwrap<T = any>(res: any): T {
   if (res && typeof res === "object" && "data" in res) {
     const body = (res as any).data;
-    if (body && typeof body === "object" && "data" in body) {
-      return body.data as T;
-    }
+    if (body && typeof body === "object" && "data" in body) return body.data as T;
     return body as T;
   }
   return res as T;
@@ -36,13 +34,11 @@ function formatMoney(n: number): string {
   return (Number.isFinite(n) ? n : 0).toLocaleString("vi-VN");
 }
 
-// Bỏ phần [ ... ] trong tên sản phẩm khi in
 function stripBracketPart(name: string): string {
   if (!name) return "";
   return name.replace(/\s*\[[^\]]*]/g, "");
 }
 
-// Đọc số tiền VND thành chữ tiếng Việt
 function numberToVietnamese(amount: number): string {
   if (isNaN(amount as any)) return "";
   const n = Math.round(amount);
@@ -57,11 +53,8 @@ function numberToVietnamese(amount: number): string {
     const one = num % 10;
     const parts: string[] = [];
 
-    if (hundred > 0) {
-      parts.push(digits[hundred], "trăm");
-    } else if (full && (ten > 0 || one > 0)) {
-      parts.push("không", "trăm");
-    }
+    if (hundred > 0) parts.push(digits[hundred], "trăm");
+    else if (full && (ten > 0 || one > 0)) parts.push("không", "trăm");
 
     if (ten > 1) {
       parts.push(digits[ten], "mươi");
@@ -106,7 +99,6 @@ function numberToVietnamese(amount: number): string {
   return result;
 }
 
-// ✅ lấy label đơn vị từ item response (chịu nhiều shape)
 function pickUnitLabel(item: any): string {
   if (!item) return "";
   const u =
@@ -121,72 +113,176 @@ function pickUnitLabel(item: any): string {
   return u ? String(u) : "";
 }
 
-// ✅ extract list items/units trong các kiểu wrapper thường gặp
 function extractArray(body: any): any[] {
   const b = body;
   if (!b) return [];
   if (Array.isArray(b)) return b;
-
-  // { items: [...] }
   if (Array.isArray(b.items)) return b.items;
-
-  // { data: [...] } hoặc { data: { items: [...] } }
   if (Array.isArray(b.data)) return b.data;
   if (b.data && Array.isArray(b.data.items)) return b.data.items;
-
-  // { ok:true, data:[...] }
-  if (Array.isArray(b.data)) return b.data;
-
   return [];
 }
 
 async function fetchItemLoose(itemId: string): Promise<any | null> {
   if (!itemId) return null;
 
-  // 1) /items/:id
   try {
     const r1 = await api.get(`/items/${itemId}`);
     const b1 = unwrap<any>(r1);
     if (b1 && (b1.id || b1.data?.id)) return b1.id ? b1 : b1.data;
-  } catch (e) {
-    // ignore
-  }
+  } catch {}
 
-  // 2) /items?ids=<id> (nhiều backend dùng kiểu này)
   try {
     const r2 = await api.get(`/items`, { params: { ids: itemId } });
     const b2 = unwrap<any>(r2);
     const arr = extractArray(b2);
     const found = arr.find((x: any) => String(x?.id || "") === String(itemId));
     if (found) return found;
-  } catch (e) {
-    // ignore
-  }
+  } catch {}
 
-  // 3) /items?id=<id>
   try {
     const r3 = await api.get(`/items`, { params: { id: itemId } });
     const b3 = unwrap<any>(r3);
     const arr = extractArray(b3);
     const found = arr.find((x: any) => String(x?.id || "") === String(itemId));
     if (found) return found;
-  } catch (e) {
-    // ignore
-  }
+  } catch {}
 
   return null;
+}
+
+// ================= print auto A4/A5 =================
+type PrintMode = "A4_PORTRAIT" | "A5_LANDSCAPE";
+
+const A5_MAX_LINES = 6;
+
+// A4 dọc
+const A4_PAGE = { w: 210, h: 297 };
+const A4_MARGIN = { top: 10, right: 12, bottom: 18, left: 12 };
+
+// A5 ngang
+const A5_PAGE = { w: 210, h: 148 };
+const A5_MARGIN = { top: 12, right: 12, bottom: 12, left: 12 };
+
+function ensurePrintStyleTag() {
+  let el = document.getElementById("print-page-style") as HTMLStyleElement | null;
+  if (!el) {
+    el = document.createElement("style");
+    el.id = "print-page-style";
+    document.head.appendChild(el);
+  }
+  return el;
+}
+
+/**
+ * ✅ Viền luôn là viền tờ giấy (page frame), full A4/A5
+ * - Screen: frame absolute theo .print-root (min-height = khổ giấy) => nhìn đẹp, không “ăn nửa trang”
+ * - Print : frame fixed => tự lặp trên từng trang khi paginate
+ */
+function applyPrintMode(mode: PrintMode) {
+  const styleEl = ensurePrintStyleTag();
+
+  const page = mode === "A5_LANDSCAPE" ? A5_PAGE : A4_PAGE;
+  const m = mode === "A5_LANDSCAPE" ? A5_PAGE : A4_PAGE; // just to keep ref, not used
+  const margin = mode === "A5_LANDSCAPE" ? A5_MARGIN : A4_MARGIN;
+
+  const pageSizeCss = mode === "A5_LANDSCAPE" ? `${page.w}mm ${page.h}mm` : `A4 portrait`;
+  const pageMarginCss = `${margin.top}mm ${margin.right}mm ${margin.bottom}mm ${margin.left}mm`;
+
+  styleEl.textContent = `
+@page { size: ${pageSizeCss}; margin: ${pageMarginCss}; }
+
+body {
+  margin: 0;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* ================= SCREEN ================= */
+@media screen {
+  .print-root{
+    width: ${page.w}mm;
+    min-height: ${page.h}mm;
+    height: auto;
+    margin: 16px auto;
+    background: #fff;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 8px 30px rgba(0,0,0,.08);
+    position: relative;
+    box-sizing: border-box;
+    overflow: visible;
+  }
+
+  /* ✅ viền full trang (theo khổ giấy) */
+  .page-frame{
+    display: block;
+    position: absolute;
+    inset: 0;
+    border: 0px solid #000;
+    pointer-events: none;
+    z-index: 0;
+    background: transparent;
+  }
+
+  /* nội dung nằm trên frame */
+  .border-box{
+    position: relative;
+    z-index: 1;
+    border: none !important;
+    min-height: ${page.h}mm;
+    box-shadow: none !important;
+  }
+}
+
+/* ================= PRINT ================= */
+@media print {
+  html, body { margin: 0; padding: 0; }
+
+  .print-root{
+    width: 100%;
+    height: auto;
+    background: transparent;
+    position: relative;
+    overflow: visible !important;
+  }
+
+  /* ✅ viền full từng trang */
+  .page-frame{
+    display: block !important;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    border: 1px solid #000;
+    pointer-events: none;
+    z-index: 0;
+    background: transparent;
+  }
+
+  .border-box{
+    position: relative;
+    z-index: 1;
+    border: none !important;
+    box-shadow: none !important;
+    min-height: 0 !important;
+  }
+
+  table.invoice-table thead { display: table-header-group; }
+  table.invoice-table tr { page-break-inside: avoid; break-inside: avoid; }
+  .signatures-wrapper { page-break-inside: avoid; break-inside: avoid; }
+}
+`;
+}
+
+function preferA5ByLines(lineCount: number) {
+  return lineCount <= A5_MAX_LINES;
 }
 
 // ================= types =================
 type ApiPartner = {
   id: string;
   name?: string | null;
-
   phone?: string | null;
   email?: string | null;
   address?: string | null;
   addr?: string | null;
-
   taxCode?: string | null;
   tax?: string | null;
   mst?: string | null;
@@ -201,11 +297,7 @@ type ApiInvoiceLine = {
   qty: any;
   price: any;
   amount: any;
-  item?: {
-    name: string;
-    sku?: string | null;
-    unit?: string | null;
-  } | null;
+  item?: { name: string; sku?: string | null; unit?: string | null } | null;
 };
 
 type ApiInvoice = {
@@ -213,15 +305,12 @@ type ApiInvoice = {
   code: string;
   issueDate: string;
   type: "SALES" | "PURCHASE" | "SALES_RETURN" | "PURCHASE_RETURN";
-
   partnerId?: string | null;
   partner?: ApiPartner | null;
-
   partnerName?: string | null;
   partnerPhone?: string | null;
   partnerAddr?: string | null;
   partnerTax?: string | null;
-
   subtotal?: any;
   tax?: any;
   total?: any;
@@ -239,21 +328,8 @@ type Line = {
 
 // ================= styles =================
 const styles: Record<string, React.CSSProperties> = {
-  root: {
-    width: "210mm",
-    minHeight: "297mm",
-    margin: "0 auto",
-    boxSizing: "border-box",
-    background: "#ffffff",
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "stretch",
-    padding: 0,
-  },
   borderBox: {
-    margin: "5mm",
     flex: 1,
-    border: "1px solid #000",
     boxSizing: "border-box",
     padding: "8mm 10mm 10mm",
     display: "flex",
@@ -262,24 +338,41 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "'Times New Roman', Arial, sans-serif",
     fontSize: 13,
     color: "#000",
+    background: "transparent",
   },
   topSection: { flexShrink: 0 },
+
   headerRow: {
     display: "flex",
     alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 8,
+    justifyContent: "center",
+    marginBottom: 6,
   },
-  logoBox: { display: "flex", alignItems: "center", gap: 8 },
+  logoBox: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    gap: 10,
+    width: "auto",
+    maxWidth: "100%",
+  },
   logoImg: { width: 85, height: 85, objectFit: "contain" },
-  companyInfo: { fontSize: 12, lineHeight: 1.4 },
+  companyInfo: { fontSize: 12, lineHeight: 1.4, textAlign: "left" },
   companyName: { fontWeight: 700, fontSize: 14, textTransform: "uppercase" },
-  invoiceTitle: {
+
+  invoiceTitle: { textAlign: "center", fontWeight: 700, fontSize: 18, margin: "3mm 0 1.5mm" },
+
+  invoiceMeta: {
     textAlign: "center",
-    fontWeight: 700,
-    fontSize: 18,
-    margin: "4mm 0 3mm",
+    fontSize: 12,
+    marginBottom: 6,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 2,
+    lineHeight: 1.2,
   },
+
   customerBox: {
     borderTop: "1px solid #000",
     borderBottom: "1px solid #000",
@@ -295,18 +388,9 @@ const styles: Record<string, React.CSSProperties> = {
     wordBreak: "break-word",
     whiteSpace: "normal",
   },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse",
-    marginTop: 6,
-    fontSize: 12.5,
-  },
-  th: {
-    border: "1px solid #000",
-    padding: "3px 4px",
-    textAlign: "center",
-    fontWeight: 600,
-  },
+
+  table: { width: "100%", borderCollapse: "collapse", marginTop: 6, fontSize: 12.5 },
+  th: { border: "1px solid #000", padding: "3px 4px", textAlign: "center", fontWeight: 600 },
   td: {
     border: "1px solid #000",
     padding: "3px 4px",
@@ -316,19 +400,15 @@ const styles: Record<string, React.CSSProperties> = {
   },
   tdCenter: { textAlign: "center" },
   tdRight: { textAlign: "right" },
+
   moneyRowLabel: { padding: "3px 6px", border: "1px solid #000" },
   moneyRowValue: { padding: "3px 6px", border: "1px solid #000", textAlign: "right" },
+
   textAmountRow: { fontSize: 12.5, marginTop: 6 },
   bold: { fontWeight: 600 },
-  signaturesWrapper: {
-    marginTop: "18mm",
-    marginBottom: "20mm",
-  },
-  signaturesRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    fontSize: 12,
-  },
+
+  signaturesWrapper: { marginTop: "18mm", marginBottom: "20mm" },
+  signaturesRow: { display: "flex", justifyContent: "space-between", fontSize: 12 },
   signatureCol: { textAlign: "center", width: "33%" },
   signatureLabel: { fontWeight: 600, marginBottom: 2 },
   signatureNote: { fontStyle: "italic", fontSize: 11 },
@@ -341,12 +421,21 @@ const InvoicePrintPage: React.FC = () => {
   const [partner, setPartner] = useState<ApiPartner | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // ✅ map itemId -> unit label (fallback khi invoice không trả unit)
   const [unitByItemId, setUnitByItemId] = useState<Record<string, string>>({});
+  const [printMode, setPrintMode] = useState<PrintMode>("A4_PORTRAIT");
+
+  const printRootRef = useRef<HTMLDivElement>(null);
+  const borderBoxRef = useRef<HTMLDivElement>(null);
+
+  const [layoutTick, setLayoutTick] = useState(0);
+
+  useEffect(() => {
+    applyPrintMode(printMode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!id) return;
-
     let alive = true;
 
     (async () => {
@@ -360,9 +449,7 @@ const InvoicePrintPage: React.FC = () => {
 
         setInvoice(inv);
 
-        // ✅ ƯU TIÊN LẤY THÔNG TIN KHÁCH TỪ PARTNER
         let p: ApiPartner | null = inv.partner ?? null;
-
         if (!p && inv.partnerId) {
           try {
             const pres = await api.get(`/partners/${inv.partnerId}`);
@@ -371,25 +458,18 @@ const InvoicePrintPage: React.FC = () => {
             console.warn("load partner for print failed, fallback invoice snapshot", e);
           }
         }
-
         if (alive) setPartner(p);
 
-        // ✅ FIX ĐƠN VỊ TÍNH:
-        // - ưu tiên line.unit / line.item.unit
-        // - nếu trống -> fetch item theo itemId + map unitId -> label từ /items/units
-        const lines = Array.isArray(inv?.lines) ? inv.lines : [];
-        const itemIds = Array.from(
-          new Set(lines.map((l) => String(l?.itemId || "").trim()).filter(Boolean))
-        );
+        const invLines = Array.isArray(inv?.lines) ? inv.lines : [];
+        const itemIds = Array.from(new Set(invLines.map((l) => String(l?.itemId || "").trim()).filter(Boolean)));
 
         const needFetch = itemIds.filter((itemId) => {
-          const l = lines.find((x) => String(x?.itemId || "") === itemId);
+          const l = invLines.find((x) => String(x?.itemId || "") === itemId);
           const u = String(l?.item?.unit ?? l?.unit ?? "").trim();
           return !u;
         });
 
         if (needFetch.length > 0) {
-          // load units map 1 lần
           let unitIdToLabel: Record<string, string> = {};
           try {
             const ures = await api.get(`/items/units`);
@@ -413,13 +493,10 @@ const InvoicePrintPage: React.FC = () => {
                 if (!item) return;
 
                 let label = String(pickUnitLabel(item) || "").trim();
-
-                // nếu item chỉ có unitId (không include relation)
                 if (!label) {
                   const unitId = String(item?.unitId ?? item?.unit?.id ?? "").trim();
                   if (unitId && unitIdToLabel[unitId]) label = unitIdToLabel[unitId];
                 }
-
                 if (label) map[itemId] = label;
               } catch (e) {
                 console.warn("load item for unit failed", itemId, e);
@@ -448,7 +525,7 @@ const InvoicePrintPage: React.FC = () => {
     return invoice.lines.map((l) => {
       const qty = toNum(l.qty);
       const price = toNum(l.price);
-      const amount = l.amount != null ? toNum(l.amount) : qty * price; // ✅ fallback
+      const amount = l.amount != null ? toNum(l.amount) : qty * price;
 
       const unitFromInvoice = String(l.item?.unit ?? l.unit ?? "").trim();
       const unitFromItem = String(unitByItemId[String(l.itemId || "")] ?? "").trim();
@@ -464,15 +541,61 @@ const InvoicePrintPage: React.FC = () => {
     });
   }, [invoice, unitByItemId]);
 
-  const computedSubtotal = useMemo(() => {
-    return lines.reduce((sum, l) => sum + toNum(l.amount), 0);
-  }, [lines]);
+  // ✅ Auto A5 nếu ngắn, tràn thì lên A4
+  useLayoutEffect(() => {
+    if (!invoice) return;
 
-  if (loading || !invoice) {
-    return <div style={{ padding: 20 }}>Đang tải hóa đơn...</div>;
-  }
+    const tryA5 = preferA5ByLines(lines.length);
+    if (!tryA5) {
+      setPrintMode("A4_PORTRAIT");
+      applyPrintMode("A4_PORTRAIT");
+      return;
+    }
 
-  // ✅ fallback tổng tiền nếu backend thiếu/khác
+    setPrintMode("A5_LANDSCAPE");
+    applyPrintMode("A5_LANDSCAPE");
+
+    const check = () => {
+      const root = printRootRef.current;
+      const box = borderBoxRef.current;
+      if (!root || !box) return;
+
+      // nếu nội dung vượt quá 1 trang A5 -> chuyển A4
+      const r = root.getBoundingClientRect();
+      const b = box.getBoundingClientRect();
+      const overflowPx = b.bottom - r.bottom;
+      if (overflowPx > 1) {
+        setPrintMode("A4_PORTRAIT");
+        applyPrintMode("A4_PORTRAIT");
+      }
+    };
+
+    const raf1 = requestAnimationFrame(() => {
+      const raf2 = requestAnimationFrame(check);
+      (check as any)._raf2 = raf2;
+    });
+
+    const t = window.setTimeout(check, 80);
+
+    return () => {
+      cancelAnimationFrame(raf1);
+      const raf2 = (check as any)._raf2 as number | undefined;
+      if (raf2) cancelAnimationFrame(raf2);
+      window.clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoice?.id, lines.length, layoutTick]);
+
+  useEffect(() => {
+    const onBeforePrint = () => applyPrintMode(printMode);
+    window.addEventListener("beforeprint", onBeforePrint);
+    return () => window.removeEventListener("beforeprint", onBeforePrint);
+  }, [printMode]);
+
+  const computedSubtotal = useMemo(() => lines.reduce((sum, l) => sum + toNum(l.amount), 0), [lines]);
+
+  if (loading || !invoice) return <div style={{ padding: 20 }}>Đang tải hóa đơn...</div>;
+
   const subtotalRaw = invoice.subtotal != null ? toNum(invoice.subtotal) : computedSubtotal;
   const taxRaw = invoice.tax != null ? toNum(invoice.tax) : 0;
   const totalRaw = invoice.total != null ? toNum(invoice.total) : toNum(subtotalRaw) + toNum(taxRaw);
@@ -486,7 +609,6 @@ const InvoicePrintPage: React.FC = () => {
   const taxPercentStr = hasTax ? taxPercent.toFixed(0) : "";
   const totalText = numberToVietnamese(total);
 
-  // ✅ Chọn thông tin khách: Partner > Snapshot trong Invoice
   const customerName = partner?.name ?? invoice.partnerName ?? "";
   const customerAddr = partner?.address ?? partner?.addr ?? invoice.partnerAddr ?? "";
   const customerPhone = partner?.phone ?? invoice.partnerPhone ?? "";
@@ -500,169 +622,169 @@ const InvoicePrintPage: React.FC = () => {
     return "HÓA ĐƠN";
   })();
 
+  const isA5 = printMode === "A5_LANDSCAPE";
+
+  const borderBoxStyle: React.CSSProperties = {
+    ...styles.borderBox,
+    padding: isA5 ? "6mm 8mm 7mm" : "8mm 10mm 10mm",
+    fontSize: isA5 ? 12.5 : 13,
+  };
+
+  const logoImgStyle: React.CSSProperties = {
+    ...styles.logoImg,
+    width: isA5 ? 70 : 85,
+    height: isA5 ? 70 : 85,
+  };
+
+  const invoiceTitleStyle: React.CSSProperties = {
+    ...styles.invoiceTitle,
+    fontSize: isA5 ? 16 : 18,
+    margin: isA5 ? "2mm 0 1mm" : "3mm 0 1.5mm",
+  };
+
+  const tableStyle: React.CSSProperties = {
+    ...styles.table,
+    fontSize: isA5 ? 12 : 12.5,
+  };
+
+  // ✅ A4: đẩy chữ ký xuống đáy trang (đẹp, không lộ “mảng trắng dưới khung”)
+  const signaturesWrapperStyle: React.CSSProperties = isA5
+    ? { ...styles.signaturesWrapper, marginTop: "7mm", marginBottom: "7mm" }
+    : { ...styles.signaturesWrapper, marginTop: "auto", marginBottom: "10mm" };
+
   return (
-    <>
-      <style>
-        {`
-@page {
-  size: A4;
-  margin: 10mm 12mm 18mm 12mm;
-}
+    <div className="print-root" ref={printRootRef}>
+      <div className="page-frame" aria-hidden="true" />
 
-@media print {
-  html, body {
-    width: 210mm;
-    height: 297mm;
-  }
-
-  /* ✅ Lặp header bảng khi sang trang */
-  table.invoice-table thead { display: table-header-group; }
-
-  /* ✅ Không cắt ngang dòng */
-  table.invoice-table tr { page-break-inside: avoid; break-inside: avoid; }
-
-  /* ✅ Không cắt khối chữ ký */
-  .signatures-wrapper { page-break-inside: avoid; break-inside: avoid; }
-}
-
-body {
-  margin: 0;
-  -webkit-print-color-adjust: exact;
-  print-color-adjust: exact;
-}
-        `}
-      </style>
-
-      <div style={styles.root}>
-        <div style={styles.borderBox}>
-          <div style={styles.topSection}>
-            <div style={styles.headerRow}>
-              <div style={styles.logoBox}>
-                <img src="/logo-mcbrother.png" alt="MCBROTHER logo" style={styles.logoImg} />
-                <div style={styles.companyInfo}>
-                  <div style={styles.companyName}>CÔNG TY CỔ PHẦN THIẾT BỊ MCBROTHER</div>
-                  <div>Địa chỉ: 33 Đường số 5, Kdc Vĩnh Lộc, Phường Bình Tân, TP. Hồ Chí Minh</div>
-                  <div>
-                    Điện thoại: 0834.551.888 &nbsp;–&nbsp; Mã số thuế: 0312345678
-                  </div>
-                  <div>Email: mcbrother2013@gmail.com</div>
-                </div>
-              </div>
-
-              <div style={{ textAlign: "right", fontSize: 12 }}>
+      <div style={borderBoxStyle} ref={borderBoxRef} className="border-box">
+        <div style={styles.topSection}>
+          <div style={styles.headerRow}>
+            <div style={styles.logoBox}>
+              <img
+                src="/logo-mcbrother.png"
+                alt="MCBROTHER logo"
+                style={logoImgStyle}
+                onLoad={() => setLayoutTick((t) => t + 1)}
+                onError={() => setLayoutTick((t) => t + 1)}
+              />
+              <div style={styles.companyInfo}>
+                <div style={styles.companyName}>CÔNG TY CỔ PHẦN THIẾT BỊ MCBROTHER</div>
+                <div>Địa chỉ: 33 Đường số 5, Khu dân cư Vĩnh Lộc, Phường Bình Tân, TP. Hồ Chí Minh</div>
                 <div>
-                  Số: <span style={styles.bold}>{invoice.code}</span>
+                  Điện thoại: 028.6273.2018 &nbsp;–&nbsp; Mã số thuế: 0312229437
                 </div>
-                <div>
-                  Ngày lập: <span style={styles.bold}>{issueDate}</span>
-                </div>
+                <div>Email: mcbrother2013@gmail.com</div>
               </div>
-            </div>
-
-            <div style={styles.invoiceTitle}>{title}</div>
-
-            {/* Khách hàng */}
-            <div style={styles.customerBox}>
-              <div style={styles.customerRow}>
-                <div style={styles.customerLabel}>Khách hàng:</div>
-                <div style={styles.customerValue}>{customerName}</div>
-              </div>
-              <div style={styles.customerRow}>
-                <div style={styles.customerLabel}>Địa chỉ:</div>
-                <div style={styles.customerValue}>{customerAddr}</div>
-              </div>
-              <div style={styles.customerRow}>
-                <div style={styles.customerLabel}>Điện thoại:</div>
-                <div style={styles.customerValue}>{customerPhone}</div>
-              </div>
-
-              {/* ✅ LUÔN HIỂN THỊ, DÙ TRỐNG */}
-              <div style={styles.customerRow}>
-                <div style={styles.customerLabel}>Mã số thuế:</div>
-                <div style={styles.customerValue}>{customerTax || ""}</div>
-              </div>
-            </div>
-
-            {/* Bảng hàng hóa */}
-            <table style={styles.table} className="invoice-table">
-              <thead>
-                <tr>
-                  <th style={{ ...styles.th, width: "6%" }}>STT</th>
-                  <th style={{ ...styles.th, width: "40%" }}>Tên hàng hóa</th>
-                  <th style={{ ...styles.th, width: "8%" }}>ĐVT</th>
-                  <th style={{ ...styles.th, width: "8%" }}>Số lượng</th>
-                  <th style={{ ...styles.th, width: "15%" }}>Đơn giá</th>
-                  <th style={{ ...styles.th, width: "15%" }}>Thành tiền</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lines.map((l, idx) => (
-                  <tr key={l.id}>
-                    <td style={{ ...styles.td, ...styles.tdCenter }}>{idx + 1}</td>
-                    <td style={styles.td}>{l.name}</td>
-                    <td style={{ ...styles.td, ...styles.tdCenter }}>{l.unit}</td>
-                    <td style={{ ...styles.td, ...styles.tdCenter }}>{l.qty}</td>
-                    <td style={{ ...styles.td, ...styles.tdRight }}>{formatMoney(l.price)}</td>
-                    <td style={{ ...styles.td, ...styles.tdRight }}>{formatMoney(l.amount)}</td>
-                  </tr>
-                ))}
-
-                {/* ✅ FIX colSpan: bảng có 6 cột => label span 5, value span 1 */}
-                <tr>
-                  <td colSpan={5} style={styles.moneyRowLabel}>
-                    Tạm tính
-                  </td>
-                  <td colSpan={1} style={styles.moneyRowValue}>
-                    {formatMoney(subtotal)} đ
-                  </td>
-                </tr>
-
-                {hasTax && (
-                  <tr>
-                    <td colSpan={5} style={styles.moneyRowLabel}>
-                      Thuế GTGT ({taxPercentStr}%)
-                    </td>
-                    <td colSpan={1} style={styles.moneyRowValue}>
-                      {formatMoney(tax)} đ
-                    </td>
-                  </tr>
-                )}
-
-                <tr>
-                  <td colSpan={5} style={styles.moneyRowLabel}>
-                    Tổng cộng
-                  </td>
-                  <td colSpan={1} style={styles.moneyRowValue}>
-                    {formatMoney(total)} đ
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-
-            <div style={styles.textAmountRow}>
-              Số tiền bằng chữ: <span style={styles.bold}>{totalText}</span>
             </div>
           </div>
 
-          <div style={styles.signaturesWrapper} className="signatures-wrapper">
-            <div style={styles.signaturesRow}>
-              <div style={styles.signatureCol}>
-                <div style={styles.signatureLabel}>Người lập phiếu</div>
-                <div style={styles.signatureNote}>(Ký, ghi rõ họ tên)</div>
-              </div>
-              <div style={styles.signatureCol}>
-                <div style={styles.signatureLabel}>Người giao hàng</div>
-                <div style={styles.signatureNote}>(Ký, ghi rõ họ tên)</div>
-              </div>
-              <div style={styles.signatureCol}>
-                <div style={styles.signatureLabel}>Khách hàng</div>
-                <div style={styles.signatureNote}>(Ký, ghi rõ họ tên)</div>
-              </div>
+          <div style={invoiceTitleStyle}>{title}</div>
+
+          <div style={styles.invoiceMeta}>
+            <div>
+              Số: <span style={styles.bold}>{invoice.code}</span>
+            </div>
+            <div>
+              Ngày lập: <span style={styles.bold}>{issueDate}</span>
+            </div>
+          </div>
+
+          <div style={styles.customerBox}>
+            <div style={styles.customerRow}>
+              <div style={styles.customerLabel}>Khách hàng:</div>
+              <div style={styles.customerValue}>{customerName}</div>
+            </div>
+            <div style={styles.customerRow}>
+              <div style={styles.customerLabel}>Địa chỉ:</div>
+              <div style={styles.customerValue}>{customerAddr}</div>
+            </div>
+            <div style={styles.customerRow}>
+              <div style={styles.customerLabel}>Điện thoại:</div>
+              <div style={styles.customerValue}>{customerPhone}</div>
+            </div>
+            <div style={styles.customerRow}>
+              <div style={styles.customerLabel}>Mã số thuế:</div>
+              <div style={styles.customerValue}>{customerTax || ""}</div>
+            </div>
+          </div>
+
+          <table style={tableStyle} className="invoice-table">
+            <thead>
+              <tr>
+                <th style={{ ...styles.th, width: "6%" }}>STT</th>
+                <th style={{ ...styles.th, width: "40%" }}>Tên hàng hóa</th>
+                <th style={{ ...styles.th, width: "8%" }}>ĐVT</th>
+                <th style={{ ...styles.th, width: "8%" }}>Số lượng</th>
+                <th style={{ ...styles.th, width: "15%" }}>Đơn giá</th>
+                <th style={{ ...styles.th, width: "15%" }}>Thành tiền</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((l, idx) => (
+                <tr key={l.id}>
+                  <td style={{ ...styles.td, ...styles.tdCenter }}>{idx + 1}</td>
+                  <td style={styles.td}>{l.name}</td>
+                  <td style={{ ...styles.td, ...styles.tdCenter }}>{l.unit}</td>
+                  <td style={{ ...styles.td, ...styles.tdCenter }}>{l.qty}</td>
+                  <td style={{ ...styles.td, ...styles.tdRight }}>{formatMoney(l.price)}</td>
+                  <td style={{ ...styles.td, ...styles.tdRight }}>{formatMoney(l.amount)}</td>
+                </tr>
+              ))}
+
+              <tr>
+                <td colSpan={5} style={styles.moneyRowLabel}>
+                  Tạm tính
+                </td>
+                <td colSpan={1} style={styles.moneyRowValue}>
+                  {formatMoney(subtotal)} đ
+                </td>
+              </tr>
+
+              {hasTax && (
+                <tr>
+                  <td colSpan={5} style={styles.moneyRowLabel}>
+                    Thuế GTGT ({taxPercentStr}%)
+                  </td>
+                  <td colSpan={1} style={styles.moneyRowValue}>
+                    {formatMoney(tax)} đ
+                  </td>
+                </tr>
+              )}
+
+              <tr>
+                <td colSpan={5} style={styles.moneyRowLabel}>
+                  Tổng cộng
+                </td>
+                <td colSpan={1} style={styles.moneyRowValue}>
+                  {formatMoney(total)} đ
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div style={styles.textAmountRow}>
+            Số tiền bằng chữ: <span style={styles.bold}>{totalText}</span>
+          </div>
+        </div>
+
+        <div style={signaturesWrapperStyle} className="signatures-wrapper">
+          <div style={styles.signaturesRow}>
+            <div style={styles.signatureCol}>
+              <div style={styles.signatureLabel}>Người lập phiếu</div>
+              <div style={styles.signatureNote}>(Ký, ghi rõ họ tên)</div>
+            </div>
+            <div style={styles.signatureCol}>
+              <div style={styles.signatureLabel}>Người giao hàng</div>
+              <div style={styles.signatureNote}>(Ký, ghi rõ họ tên)</div>
+            </div>
+            <div style={styles.signatureCol}>
+              <div style={styles.signatureLabel}>Khách hàng</div>
+              <div style={styles.signatureNote}>(Ký, ghi rõ họ tên)</div>
             </div>
           </div>
         </div>
       </div>
-    </>
+    </div>
   );
 };
 

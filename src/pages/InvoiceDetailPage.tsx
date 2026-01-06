@@ -170,20 +170,59 @@ const PaidAmountInput: React.FC<{
   }, [value]);
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-      <input
-        style={styleInput}
-        disabled={disabled}
-        value={text}
-        onChange={(e) => {
-          const raw = parseMoneyInput(e.target.value);
-          setText(fmtMoneyInput(raw));
-          onChange(raw);
+    <div style={{ width: "100%" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "stretch",
+          width: "100%",
+          border: "1px solid #d1d5db",
+          borderRadius: 4,
+          overflow: "hidden",
+          background: disabled ? "#f8fafc" : "#fff",
+          boxSizing: "border-box",
         }}
-        onBlur={() => setText(fmtMoneyInput(value))}
-        inputMode="numeric"
-      />
-      <span>đ</span>
+      >
+        <input
+          style={{
+            padding: "5px 8px",
+            fontSize: 13,
+            boxSizing: "border-box",
+            flex: 1,
+            minWidth: 0,
+            width: "100%",
+            border: "none",
+            outline: "none",
+            background: "transparent",
+            ...(styleInput || {}),
+            // ép đồng bộ theo group (không cho styleInput phá border)
+            borderColor: undefined,
+          }}
+          disabled={disabled}
+          value={text}
+          onChange={(e) => {
+            const raw = parseMoneyInput(e.target.value);
+            setText(fmtMoneyInput(raw));
+            onChange(raw);
+          }}
+          onBlur={() => setText(fmtMoneyInput(value))}
+          inputMode="numeric"
+        />
+        <span
+          style={{
+            padding: "0 10px",
+            display: "flex",
+            alignItems: "center",
+            borderLeft: "1px solid #e5e7eb",
+            background: "#f9fafb",
+            color: "#374151",
+            fontSize: 13,
+            whiteSpace: "nowrap",
+          }}
+        >
+          đ
+        </span>
+      </div>
     </div>
   );
 };
@@ -202,20 +241,58 @@ const WarrantyHoldInput: React.FC<{
   }, [value]);
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-      <input
-        style={styleInput}
-        disabled={disabled}
-        value={text}
-        onChange={(e) => {
-          const raw = Math.max(0, parseMoneyInput(e.target.value));
-          setText(fmtMoneyInput(raw));
-          onChange(raw);
+    <div style={{ width: "100%" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "stretch",
+          width: "100%",
+          border: "1px solid #d1d5db",
+          borderRadius: 4,
+          overflow: "hidden",
+          background: disabled ? "#f8fafc" : "#fff",
+          boxSizing: "border-box",
         }}
-        onBlur={() => setText(fmtMoneyInput(value))}
-        inputMode="numeric"
-      />
-      <span>đ</span>
+      >
+        <input
+          style={{
+            padding: "5px 8px",
+            fontSize: 13,
+            boxSizing: "border-box",
+            flex: 1,
+            minWidth: 0,
+            width: "100%",
+            border: "none",
+            outline: "none",
+            background: "transparent",
+            ...(styleInput || {}),
+            borderColor: undefined,
+          }}
+          disabled={disabled}
+          value={text}
+          onChange={(e) => {
+            const raw = Math.max(0, parseMoneyInput(e.target.value));
+            setText(fmtMoneyInput(raw));
+            onChange(raw);
+          }}
+          onBlur={() => setText(fmtMoneyInput(value))}
+          inputMode="numeric"
+        />
+        <span
+          style={{
+            padding: "0 10px",
+            display: "flex",
+            alignItems: "center",
+            borderLeft: "1px solid #e5e7eb",
+            background: "#f9fafb",
+            color: "#374151",
+            fontSize: 13,
+            whiteSpace: "nowrap",
+          }}
+        >
+          đ
+        </span>
+      </div>
     </div>
   );
 };
@@ -312,12 +389,6 @@ function calcCollectible(inv: Invoice) {
   const hold = inv.hasWarrantyHold ? Math.max(0, toNum(inv.warrantyHoldAmount)) : 0;
   return Math.max(0, total - hold);
 }
-
-// function calcDisplayNetTotal(inv: Invoice) {
-//   // ✅ tổng còn tính thu/chi sau trả hàng (NET) – ưu tiên returnMeta
-//   if (inv.type === "SALES" && inv.returnMeta) return Math.max(0, toNum(inv.returnMeta.netTotal));
-//   return Math.max(0, toNum(inv.totalAmount));
-// }
 
 // -------- styles (GIỮ NGUYÊN styles của bạn) ----------
 const styles: Record<string, React.CSSProperties> = {
@@ -459,16 +530,19 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: "right",
     whiteSpace: "nowrap",
   },
+
+  // ✅ SUMMARY: chuyển sang grid để cột tiền canh thẳng mép với cột input
   summaryRow: {
-    display: "flex",
-    justifyContent: "flex-start",
+    display: "grid",
+    gridTemplateColumns: "220px minmax(260px, 360px) 1fr",
+    columnGap: 12,
     alignItems: "center",
-    gap: 12,
     marginTop: 6,
     fontSize: 13,
   },
-  summaryLabel: { width: 220, textAlign: "left", fontWeight: 500 }, // ✅ widen label
-  summaryValue: { width: 220, textAlign: "right", fontWeight: 600 },
+  summaryLabel: { fontWeight: 500, textAlign: "left" },
+  // ✅ tiền hiển thị nằm ở CỘT 2, canh phải => thẳng mép phải với input/select
+  summaryValue: { width: "100%", textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" },
 
   formActions: { display: "flex", justifyContent: "space-between", marginTop: 12, gap: 8 },
   primaryBtn: {
@@ -1327,11 +1401,6 @@ const InvoiceDetailPage: React.FC = () => {
   async function handleSave() {
     if (!invoice) return;
 
-    // if (!invoice.code.trim()) {
-    //   toastError("Mã hóa đơn là bắt buộc.", "Thiếu thông tin");
-    //   return;
-    // }
-
     const status = invoice.status ?? "DRAFT";
     const lockedForStaff = !isAdmin && (status === "SUBMITTED" || status === "APPROVED" || status === "REJECTED");
 
@@ -1579,14 +1648,11 @@ const InvoiceDetailPage: React.FC = () => {
   // ✅ theo UI/BE: paidAmount là phần NORMAL (Gross - Hold). BH (hold) sẽ thu bằng phiếu riêng.
   const paidNormal = Math.max(0, toNum(invoice.paidAmount));
   const paidTotal = Math.max(0, paidByPayments);
-  const paidWarranty = Math.max(0, paidTotal - paidNormal); // best-effort (đủ để giải thích rõ như case bạn)
+  const paidWarranty = Math.max(0, paidTotal - paidNormal); // best-effort
 
-  // ✅ Tính theo returnMeta nếu có
-  // const totalGross = Math.max(0, toNum(invoice.totalAmount));
-  const vatAmount = Math.max(0, toNum(invoice.tax)); // ✅ show VAT rõ ràng
+  const vatAmount = Math.max(0, toNum(invoice.tax));
   const returnedTotal =
     invoice.type === "SALES" && invoice.returnMeta ? Math.max(0, toNum(invoice.returnMeta.returnedTotal)) : 0;
-  // const netTotal = calcDisplayNetTotal(invoice);
 
   const hold =
     invoice.type === "SALES" && invoice.returnMeta
@@ -1604,7 +1670,6 @@ const InvoiceDetailPage: React.FC = () => {
       : "0.00";
 
   const returnState = getReturnState(invoice);
-  const returnText = returnState === "FULL" ? "Trả full" : returnState === "PARTIAL" ? "Trả 1 phần" : "Không trả";
   const returnColor = returnState === "FULL" ? "#7c3aed" : returnState === "PARTIAL" ? "#6d28d9" : "#6b7280";
 
   return (
@@ -1637,16 +1702,16 @@ const InvoiceDetailPage: React.FC = () => {
               <div style={styles.sectionTitle}>Thông tin đơn hàng</div>
 
               <div style={styles.formRow}>
-                <label style={styles.label}>Mã hóa đơn *</label>
+                <label style={styles.label}>Số hóa đơn *</label>
                 <input
-                  style={styles.input}
-                  value={invoice.code}
-                  disabled={lockedForStaff}
-                  onChange={(e) => {
-                    markDirty();
-                    updateInvoice({ code: e.target.value.toUpperCase() });
+                  style={{
+                    ...styles.input,
+                    background: "#f8fafc",
+                    cursor: "not-allowed",
                   }}
-                  placeholder="VD: HD0001"
+                  value={invoice.code ?? ""}
+                  readOnly
+                  placeholder="số tự nhảy"
                 />
               </div>
 
@@ -1684,7 +1749,6 @@ const InvoiceDetailPage: React.FC = () => {
               {/* ✅ Trả hàng badge theo BE */}
               {invoice.type === "SALES" && (
                 <div style={{ marginTop: 6, fontSize: 13, color: returnColor }}>
-                  Trả hàng: <b>{returnText}</b>
                   {invoice.returnMeta?.debtIgnore ? (
                     <span style={{ marginLeft: 10, color: "#b91c1c" }}>(debtIgnore=true)</span>
                   ) : null}
@@ -1970,16 +2034,38 @@ const InvoiceDetailPage: React.FC = () => {
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>VAT (thuế):</span>
                   <span style={styles.summaryValue}>{formatMoney(vatAmount)} đ</span>
-                  <span style={{ fontSize: 12, color: "#6b7280" }}>
-                    (VAT đã nằm trong khoản thu NORMAL)
-                  </span>
+                  <span style={{ fontSize: 12, color: "#6b7280" }}>(VAT đã nằm trong khoản thu NORMAL)</span>
                 </div>
 
+                {/* ✅ Thuế %: làm thành 1 group box width chuẩn, % nằm trong suffix */}
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Thuế (%)</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "stretch",
+                      width: "100%",
+                      border: "1px solid #d1d5db",
+                      borderRadius: 4,
+                      overflow: "hidden",
+                      background: lockedForStaff ? "#f8fafc" : "#fff",
+                      boxSizing: "border-box",
+                    }}
+                  >
                     <input
-                      style={{ ...styles.smallInput, width: 70, textAlign: "right" }}
+                      style={{
+                        padding: "5px 8px",
+                        fontSize: 13,
+                        boxSizing: "border-box",
+                        flex: 1,
+                        minWidth: 0,
+                        width: "100%",
+                        border: "none",
+                        outline: "none",
+                        background: "transparent",
+                        textAlign: "right",
+                      }}
                       type="number"
                       min={0}
                       value={invoice.taxPercent ?? 0}
@@ -1994,13 +2080,28 @@ const InvoiceDetailPage: React.FC = () => {
                         });
                       }}
                     />
-                    <span>%</span>
-                    <span style={{ marginLeft: 12 }}>= {formatMoney(invoice.tax ?? 0)} đ</span>
+                    <span
+                      style={{
+                        padding: "0 10px",
+                        display: "flex",
+                        alignItems: "center",
+                        borderLeft: "1px solid #e5e7eb",
+                        background: "#f9fafb",
+                        color: "#374151",
+                        fontSize: 13,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      %
+                    </span>
                   </div>
+
+                  <span style={{ whiteSpace: "nowrap" }}>= {formatMoney(invoice.tax ?? 0)} đ</span>
                 </div>
 
                 {/* ✅ BẢO HÀNH */}
                 <div style={styles.summaryRow}>
+                  <span style={styles.summaryLabel}>Bảo hành:</span>
                   <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <input
                       type="checkbox"
@@ -2024,6 +2125,7 @@ const InvoiceDetailPage: React.FC = () => {
                 {!!invoice.hasWarrantyHold && (
                   <div style={styles.summaryRow}>
                     <span style={styles.summaryLabel}>Số tiền treo bảo hành:</span>
+
                     <WarrantyHoldInput
                       value={Number(invoice.warrantyHoldAmount || 0)}
                       disabled={lockedForStaff}
@@ -2038,57 +2140,46 @@ const InvoiceDetailPage: React.FC = () => {
                           return { ...prev, warrantyHoldAmount: clamped };
                         });
                       }}
-                      styleInput={{ ...styles.smallInput, width: 140, textAlign: "right" }}
-                    />
-                    <span style={{ color: "#6b7280", fontSize: 12 }}>(≈ {derivedHoldPct}% của tạm tính)</span>
-                    <button
-                      type="button"
-                      style={styles.secondarySmallBtn}
-                      disabled={lockedForStaff}
-                      title="Đặt về mặc định 5% theo tạm tính"
-                      onClick={() => {
-                        markDirty();
-                        setWarrantyHoldManual(false);
-                        setInvoice((prev) => {
-                          if (!prev) return prev;
-                          const sub = Number(prev.subtotal || 0);
-                          return { ...prev, warrantyHoldAmount: defaultHoldAmountFromSubtotal(sub) };
-                        });
+                      styleInput={{
+                        textAlign: "right",
                       }}
-                    >
-                      Reset 5%
-                    </button>
+                    />
+
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span style={{ color: "#6b7280", fontSize: 12 }}>(≈ {derivedHoldPct}% của tạm tính)</span>
+                      <button
+                        type="button"
+                        style={styles.secondarySmallBtn}
+                        disabled={lockedForStaff}
+                        title="Đặt về mặc định 5% theo tạm tính"
+                        onClick={() => {
+                          markDirty();
+                          setWarrantyHoldManual(false);
+                          setInvoice((prev) => {
+                            if (!prev) return prev;
+                            const sub = Number(prev.subtotal || 0);
+                            return { ...prev, warrantyHoldAmount: defaultHoldAmountFromSubtotal(sub) };
+                          });
+                        }}
+                      >
+                        Reset 5%
+                      </button>
+                    </div>
                   </div>
                 )}
 
                 {/* ✅ Hiển thị breakdown trả hàng theo BE */}
-                {invoice.type === "SALES" && (
-                  <>
-                    {/* <div style={styles.summaryRow}>
-                      <span style={styles.summaryLabel}>Tổng gốc (Gross):</span>
-                      <span style={styles.summaryValue}>{formatMoney(totalGross)} đ</span>
-                    </div> */}
-
-                    {returnedTotal > 0 && (
-                      <div style={styles.summaryRow}>
-                        <span style={styles.summaryLabel}>Đã trả hàng:</span>
-                        <span style={{ ...styles.summaryValue, color: "#7c3aed" }}>
-                          {formatMoney(returnedTotal)} đ
-                        </span>
-                      </div>
-                    )}
-
-                    {/* <div style={styles.summaryRow}>
-                      <span style={styles.summaryLabel}>Còn tính thu (NET):</span>
-                      <span style={styles.summaryValue}>{formatMoney(netTotal)} đ</span>
-                    </div> */}
-                  </>
+                {invoice.type === "SALES" && returnedTotal > 0 && (
+                  <div style={styles.summaryRow}>
+                    <span style={styles.summaryLabel}>Đã trả hàng:</span>
+                    <span style={{ ...styles.summaryValue, color: "#7c3aed" }}>{formatMoney(returnedTotal)} đ</span>
+                  </div>
                 )}
 
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Trạng thái thanh toán:</span>
                   <select
-                    style={{ ...styles.select, maxWidth: 220 }}
+                    style={styles.select}
                     value={invoice.paymentStatus || "UNPAID"}
                     disabled={lockedForStaff}
                     onChange={(e) => {
@@ -2102,17 +2193,6 @@ const InvoiceDetailPage: React.FC = () => {
                   </select>
                 </div>
 
-                
-                {/*<div style={styles.summaryRow}>
-                  <span style={styles.summaryLabel}>Đã thu (BH):</span>
-                  <span style={styles.summaryValue}>{formatMoney(paidWarranty)} đ</span>
-                </div>
-
-                <div style={styles.summaryRow}>
-                  <span style={styles.summaryLabel}>Đã thu (TỔNG theo phiếu):</span>
-                  <span style={styles.summaryValue}>{formatMoney(paidTotal)} đ</span>
-                </div> */}
-
                 {/* giữ input PARTIAL như cũ */}
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Nhập số tiền đã thu:</span>
@@ -2124,8 +2204,6 @@ const InvoiceDetailPage: React.FC = () => {
                       applyPaymentStatus("PARTIAL", raw);
                     }}
                     styleInput={{
-                      ...styles.smallInput,
-                      width: 140,
                       textAlign: "right",
                       opacity: showPaidInput ? 1 : 0.7,
                     }}
@@ -2135,7 +2213,7 @@ const InvoiceDetailPage: React.FC = () => {
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Tài khoản nhận tiền:</span>
                   <select
-                    style={{ ...styles.select, maxWidth: 320 }}
+                    style={styles.select}
                     value={invoice.receiveAccountId || ""}
                     disabled={lockedForStaff}
                     onChange={(e) => {
@@ -2154,14 +2232,12 @@ const InvoiceDetailPage: React.FC = () => {
 
                 {accountLoadError && <div style={{ ...styles.notice, ...styles.noticeError }}>{accountLoadError}</div>}
 
-                {/* <div style={styles.summaryRow}>
-                  <span style={styles.summaryLabel}>Collectible (NORMAL = Gross - BH):</span>
-                  <span style={styles.summaryValue}>{formatMoney(collectible)} đ</span>
-                </div> */}
+                {/* ✅ Các số tiền: đưa về cột 2 + canh phải => thẳng mép input */}
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Tổng cộng:</span>
                   <span style={styles.summaryValue}>{formatMoney(invoice.totalAmount)} đ</span>
                 </div>
+
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Đã thu:</span>
                   <span style={styles.summaryValue}>{formatMoney(paidNormal)} đ</span>
@@ -2173,8 +2249,6 @@ const InvoiceDetailPage: React.FC = () => {
                     {formatMoney(debtNow)} đ
                   </span>
                 </div>
-
-                
 
                 <div style={{ ...styles.formRow, marginTop: 10 }}>
                   <label style={styles.label}>Ghi chú</label>

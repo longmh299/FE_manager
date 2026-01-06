@@ -908,9 +908,9 @@ const InvoicesPage: React.FC = () => {
             {loading && <span className="text-xs text-gray-500">Đang tải dữ liệu...</span>}
           </div>
 
-          <div className="text-xs text-gray-500">
+          {/* <div className="text-xs text-gray-500">
             * Trang này chỉ hiển thị <b>Hóa đơn Bán</b> và <b>Hóa đơn Nhập</b>. Phiếu trả hàng nằm ở menu riêng.
-          </div>
+          </div> */}
         </form>
 
         <div className="mt-4 border border-gray-200 rounded-md overflow-hidden">

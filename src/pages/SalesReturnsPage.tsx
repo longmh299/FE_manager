@@ -1025,10 +1025,8 @@ export default function SalesReturnsPage() {
       {/* Header */}
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
         <div>
-          <h2 style={{ margin: 0 }}>Khách trả hàng</h2>
-          <div style={{ color: "#6b7280", marginTop: 6 }}>
-            Phiếu hoàn trả từ khách → duyệt để nhập kho → hoàn tiền bằng phiếu chi (Option A, cấn vào HĐ SALES gốc)
-          </div>
+          <h1  style={{ margin: 0, fontSize:26, fontWeight: "bold" }}>Khách trả hàng</h1>
+          
         </div>
 
         <button style={primaryBtnStyle()} onClick={() => nav("/sales-returns/new")}>

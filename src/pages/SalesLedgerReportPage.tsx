@@ -149,6 +149,56 @@ const PAGE_SIZE = 20;
 
 type LoadOpts = { silent?: boolean };
 
+// ===== helpers for staff list / fallback filtering =====
+function isNameId(v: string) {
+  return typeof v === "string" && v.startsWith("name:");
+}
+function nameFromId(v: string) {
+  return isNameId(v) ? v.slice("name:".length) : "";
+}
+function normName(s: string) {
+  return String(s || "")
+    .trim()
+    .toLowerCase();
+}
+
+function computeTotalsFromRows(rr: SalesLedgerRow[]): Totals {
+  let totalRevenue = 0;
+  let totalCost = 0;
+  let totalPaid = 0;
+  let totalDebt = 0;
+  for (const r of rr) {
+    totalRevenue += safeNum(r.lineAmount);
+    totalCost += safeNum(r.costTotal);
+    totalPaid += safeNum(r.paid);
+    totalDebt += safeNum(r.debt);
+  }
+  return { totalRevenue, totalCost, totalPaid, totalDebt };
+}
+
+function extractUserList(payload: any): StaffUser[] {
+  // payload đã là res.data.data ?? res.data
+  const candidates = [
+    payload,
+    payload?.rows,
+    payload?.users,
+    payload?.items,
+    payload?.data,
+    payload?.data?.rows,
+    payload?.data?.users,
+    payload?.data?.items,
+    payload?.data?.data,
+    payload?.result,
+    payload?.result?.rows,
+    payload?.result?.users,
+  ];
+
+  for (const c of candidates) {
+    if (Array.isArray(c)) return c as StaffUser[];
+  }
+  return [];
+}
+
 const SalesLedgerReportPage: React.FC = () => {
   const { toasts, push, remove } = useToast();
 
@@ -188,17 +238,46 @@ const SalesLedgerReportPage: React.FC = () => {
   const [retLoading, setRetLoading] = useState(false);
   const [retAgg, setRetAgg] = useState<ReturnAgg | null>(null);
 
+  // ✅ load staffs robustly (nhiều dự án /users trả shape khác nhau hoặc paginate)
   useEffect(() => {
     (async () => {
-      try {
-        const res = await api.get("/users");
-        const payload = res?.data?.data ?? res?.data;
-        const list: StaffUser[] = Array.isArray(payload) ? payload : payload?.rows ?? payload?.users ?? [];
-        setStaffs(Array.isArray(list) ? list : []);
-      } catch {
-        // ignore
+      const urls = ["/users", "/users?take=200", "/users?limit=200", "/users/all", "/users/list"];
+
+      for (const url of urls) {
+        try {
+          const res = await api.get(url);
+          const payload = res?.data?.data ?? res?.data;
+
+          const list = extractUserList(payload);
+          if (!Array.isArray(list) || list.length === 0) continue;
+
+          // normalize + dedupe by id
+          const map = new Map<string, StaffUser>();
+          for (const u of list) {
+            const id = String((u as any)?.id ?? "").trim();
+            if (!id) continue;
+            map.set(id, { ...(u as any), id });
+          }
+          const arr = Array.from(map.values());
+
+          if (arr.length > 0) {
+            setStaffs(arr);
+            return;
+          }
+        } catch {
+          // next url
+        }
       }
+
+      // nếu fail thì vẫn dùng fallback từ rows (staffOptions bên dưới)
+      // nhưng báo nhẹ để user biết vì sao dropdown có thể không đủ nhân sự
+      pushRef.current({
+        type: "warning",
+        title: "Không tải được danh sách NV",
+        message: "Không lấy được danh sách nhân sự từ API /users. Dropdown sẽ lấy tạm theo dữ liệu đang hiển thị.",
+      });
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const rows = data.rows || [];
@@ -214,12 +293,22 @@ const SalesLedgerReportPage: React.FC = () => {
   async function load(opts?: LoadOpts) {
     try {
       setLoading(true);
+
+      const saleNameFilter = nameFromId(saleUserId);
+      const techNameFilter = nameFromId(techUserId);
+
       const params = new URLSearchParams();
       if (from) params.set("from", from);
       if (to) params.set("to", to);
       if (q.trim()) params.set("q", q.trim());
-      if (saleUserId) params.set("saleUserId", saleUserId);
-      if (techUserId) params.set("techUserId", techUserId);
+
+      // ✅ nếu chọn theo id thật => gửi saleUserId/techUserId
+      // ✅ nếu fallback theo tên (name:xxx) => gửi saleUserName/techUserName (nếu BE có hỗ trợ)
+      if (saleUserId && !saleNameFilter) params.set("saleUserId", saleUserId);
+      if (techUserId && !techNameFilter) params.set("techUserId", techUserId);
+      if (saleNameFilter) params.set("saleUserName", saleNameFilter);
+      if (techNameFilter) params.set("techUserName", techNameFilter);
+
       if (paymentStatus) params.set("paymentStatus", paymentStatus);
 
       const res = await api.get(`/reports/sales-ledger?${params.toString()}`);
@@ -228,7 +317,7 @@ const SalesLedgerReportPage: React.FC = () => {
       const rawRows = payload?.rows ?? payload?.data?.rows ?? [];
       const rawTotals = payload?.totals ?? payload?.data?.totals ?? {};
 
-      const normalizedRows: SalesLedgerRow[] = (rawRows as any[]).map((r: any) => {
+      const normalizedRowsAll: SalesLedgerRow[] = (rawRows as any[]).map((r: any) => {
         // ✅ lấy field mới từ BE, fallback field cũ nếu có
         const unitCostMonthAvg = safeNum(
           r.unitCostMonthAvg ?? r.unitCostPeriodAvg ?? r.unitCostMonth ?? r.unitCostAvg ?? 0
@@ -266,12 +355,37 @@ const SalesLedgerReportPage: React.FC = () => {
         };
       });
 
-      const normalizedTotals: Totals = {
+      // ✅ fallback lọc theo tên ở FE (để trường hợp không tải được /users vẫn lọc được)
+      const saleNeedFilter = !!saleNameFilter;
+      const techNeedFilter = !!techNameFilter;
+      let normalizedRows = normalizedRowsAll;
+
+      if (saleNeedFilter) {
+        const target = normName(saleNameFilter);
+        normalizedRows = normalizedRows.filter((r) => normName(r.saleUserName) === target);
+      }
+      if (techNeedFilter) {
+        const target = normName(techNameFilter);
+        normalizedRows = normalizedRows.filter((r) => normName(r.techUserName) === target);
+      }
+
+      let normalizedTotals: Totals = {
         totalRevenue: safeNum(rawTotals.totalRevenue),
         totalCost: safeNum(rawTotals.totalCost),
         totalPaid: safeNum(rawTotals.totalPaid),
         totalDebt: safeNum(rawTotals.totalDebt),
       };
+
+      // nếu BE không trả totals hoặc đang lọc client-side theo tên => tính lại cho đúng KPI
+      const totalsLooksEmpty =
+        normalizedTotals.totalRevenue === 0 &&
+        normalizedTotals.totalCost === 0 &&
+        normalizedTotals.totalPaid === 0 &&
+        normalizedTotals.totalDebt === 0;
+
+      if (totalsLooksEmpty || saleNeedFilter || techNeedFilter) {
+        normalizedTotals = computeTotalsFromRows(normalizedRows);
+      }
 
       setData({ rows: normalizedRows, totals: normalizedTotals });
 
@@ -303,12 +417,19 @@ const SalesLedgerReportPage: React.FC = () => {
 
   async function exportExcel() {
     try {
+      const saleNameFilter = nameFromId(saleUserId);
+      const techNameFilter = nameFromId(techUserId);
+
       const params = new URLSearchParams();
       if (from) params.set("from", from);
       if (to) params.set("to", to);
       if (q.trim()) params.set("q", q.trim());
-      if (saleUserId) params.set("saleUserId", saleUserId);
-      if (techUserId) params.set("techUserId", techUserId);
+
+      if (saleUserId && !saleNameFilter) params.set("saleUserId", saleUserId);
+      if (techUserId && !techNameFilter) params.set("techUserId", techUserId);
+      if (saleNameFilter) params.set("saleUserName", saleNameFilter);
+      if (techNameFilter) params.set("techUserName", techNameFilter);
+
       if (paymentStatus) params.set("paymentStatus", paymentStatus);
 
       const res = await api.get(`/reports/sales-ledger/excel?${params.toString()}`, {
@@ -546,15 +667,40 @@ const SalesLedgerReportPage: React.FC = () => {
     };
   }, [openInv, invId]);
 
+  // ✅ staffOptions:
+  // - ưu tiên lấy từ /users (id thật)
+  // - nếu /users fail/empty => fallback lấy từ rows (id dạng name:xxx) để vẫn lọc được
   const staffOptions = useMemo(() => {
     const arr = staffs || [];
-    return arr
+
+    const fromUsers = arr
       .map((u) => ({
         id: String(u.id),
-        label: (u.fullName || u.name || u.username || u.id || "").toString(),
+        label: (u.fullName || u.name || u.username || u.id || "").toString().trim(),
       }))
       .filter((x) => x.id && x.label);
-  }, [staffs]);
+
+    if (fromUsers.length > 0) {
+      // sort theo label cho dễ chọn
+      return fromUsers.sort((a, b) => a.label.localeCompare(b.label, "vi"));
+    }
+
+    // fallback từ rows
+    const names = new Map<string, string>();
+    for (const r of rows) {
+      const s = String(r.saleUserName || "").trim();
+      const t = String(r.techUserName || "").trim();
+      if (s) names.set(normName(s), s);
+      if (t) names.set(normName(t), t);
+    }
+
+    const fallback = Array.from(names.values())
+      .filter(Boolean)
+      .map((name) => ({ id: `name:${name}`, label: name }))
+      .sort((a, b) => a.label.localeCompare(b.label, "vi"));
+
+    return fallback;
+  }, [staffs, rows]);
 
   const kpi = useMemo(() => {
     const revenue = data.totals.totalRevenue || 0;
@@ -689,10 +835,6 @@ const SalesLedgerReportPage: React.FC = () => {
             >
               Export Excel
             </button>
-
-            <div className="ml-auto text-xs text-slate-500 self-center">
-              Highlight: đỏ nhạt = bán lỗ, cam nhạt = còn nợ. Phân trang: {PAGE_SIZE} dòng/trang.
-            </div>
           </div>
         </div>
       </div>
@@ -740,13 +882,13 @@ const SalesLedgerReportPage: React.FC = () => {
                 <th className="px-4 py-3 border-b border-slate-200">Tên sản phẩm</th>
 
                 <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đơn giá</th>
+                <th className="px-4 py-3 border-b border-slate-200 text-center whitespace-nowrap">Số lượng bán</th>
+                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Thành tiền</th>
                 <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đơn giá vốn</th>
                 <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Giá vốn TB (kỳ)</th>
 
-                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Tiền vốn</th>
-                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Thành tiền</th>
+                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Thành tiền vốn</th>
 
-                <th className="px-4 py-3 border-b border-slate-200 text-center whitespace-nowrap">Số lượng bán</th>
                 <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đã thanh toán</th>
                 <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Còn nợ</th>
                 <th className="px-4 py-3 border-b border-slate-200 whitespace-nowrap">NV sale</th>
@@ -795,12 +937,13 @@ const SalesLedgerReportPage: React.FC = () => {
 
                     <td className="px-4 py-3 border-b border-slate-100">
                       <div className="font-semibold">{r.itemName}</div>
-                      <div className="text-xs text-slate-500">
-                        SL: {fmtQty(r.qty)} {r.itemSku ? `• ${r.itemSku}` : ""}
-                      </div>
                     </td>
 
                     <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">{fmtMoney(r.unitPrice)}</td>
+                    <td className="px-4 py-3 border-b border-slate-100 text-center whitespace-nowrap">{fmtQty(r.qty)}</td>
+                    <td className="px-4 py-3 border-b border-slate-100 text-right font-semibold whitespace-nowrap">
+                      {fmtMoney(r.lineAmount)}
+                    </td>
                     <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">{fmtMoney(r.unitCost)}</td>
 
                     {/* ✅ render đúng field mới */}
@@ -809,12 +952,13 @@ const SalesLedgerReportPage: React.FC = () => {
                     </td>
 
                     <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">{fmtMoney(r.costTotal)}</td>
-                    <td className="px-4 py-3 border-b border-slate-100 text-right font-semibold whitespace-nowrap">{fmtMoney(r.lineAmount)}</td>
 
-                    <td className="px-4 py-3 border-b border-slate-100 text-center whitespace-nowrap">{fmtQty(r.qty)}</td>
-
-                    <td className="px-4 py-3 border-b border-slate-100 text-right text-green-700 font-semibold whitespace-nowrap">{fmtMoney(r.paid)}</td>
-                    <td className="px-4 py-3 border-b border-slate-100 text-right text-red-700 font-semibold whitespace-nowrap">{fmtMoney(r.debt)}</td>
+                    <td className="px-4 py-3 border-b border-slate-100 text-right text-green-700 font-semibold whitespace-nowrap">
+                      {fmtMoney(r.paid)}
+                    </td>
+                    <td className="px-4 py-3 border-b border-slate-100 text-right text-red-700 font-semibold whitespace-nowrap">
+                      {fmtMoney(r.debt)}
+                    </td>
 
                     <td className="px-4 py-3 border-b border-slate-100 whitespace-nowrap">{r.saleUserName}</td>
                     <td className="px-4 py-3 border-b border-slate-100 whitespace-nowrap">{r.techUserName}</td>
@@ -916,7 +1060,7 @@ const SalesLedgerReportPage: React.FC = () => {
                       </div>
                       {invSummary ? (
                         <div className="text-xs text-slate-500 mt-1">
-                          NV sale: <span className="text-slate-700 font-medium">{invSummary.saleName || "-"}</span> • KT:{" "}
+                          Sale: <span className="text-slate-700 font-medium">{invSummary.saleName || "-"}</span> • K.Thuat:{" "}
                           <span className="text-slate-700 font-medium">{invSummary.techName || "-"}</span>
                         </div>
                       ) : null}
@@ -943,7 +1087,7 @@ const SalesLedgerReportPage: React.FC = () => {
                       </div>
                       <div className="rounded-xl border border-slate-200 p-3">
                         <div className="text-xs text-slate-500">Còn nợ</div>
-                        <div className="font-semibold">{fmtMoney(invSummary.debt)}</div>
+                        <div className="font-semibold text-red-700">{fmtMoney(invSummary.debt)}</div>
                       </div>
                     </div>
                   ) : null}

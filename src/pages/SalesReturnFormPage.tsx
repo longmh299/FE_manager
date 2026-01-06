@@ -992,9 +992,9 @@ export default function SalesReturnFormPage() {
                   </div>
                 ) : null}
 
-                <div style={{ marginTop: 8, fontSize: 12, color: "#92400e", fontWeight: 800 }}>
+                {/* <div style={{ marginTop: 8, fontSize: 12, color: "#92400e", fontWeight: 800 }}>
                   * Chưa hiển thị “đã trả trước đó / còn lại” vì backend listInvoices chưa lọc theo refInvoiceId. Khi bạn thêm filter đó, mình nối tiếp ngay.
-                </div>
+                </div> */}
               </div>
             ) : null}
           </div>
@@ -1016,9 +1016,9 @@ export default function SalesReturnFormPage() {
             ) : (
               <input value={String(clampPct(taxPercent))} readOnly style={{ ...readOnlyInputStyle, textAlign: "right" }} />
             )}
-            <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280", fontWeight: 700 }}>
+            {/* <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280", fontWeight: 700 }}>
               * Mặc định lấy theo HĐ gốc. Trả full mà thiếu VAT sẽ lệch số ở danh sách.
-            </div>
+            </div> */}
           </div>
 
           <div>

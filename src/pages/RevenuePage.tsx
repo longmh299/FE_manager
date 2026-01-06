@@ -670,10 +670,10 @@ export default function RevenuePage() {
         <div style={styles.panel}>
           <div style={styles.panelTitle}>Doanh số theo nhân viên </div>
 
-          <div style={{ marginTop: 6, fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
+          {/* <div style={{ marginTop: 6, fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
             Quy tắc: NV chỉ tính <b>NET (không VAT)</b>. Nếu hoá đơn có hold bảo hành thì chỉ cần thu đủ phần có thể thu (
             <b>need = gross - hold</b>) là được tính doanh số. (Ẩn toàn bộ breakdown “bonus”.)
-          </div>
+          </div> */}
 
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10 }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -761,10 +761,10 @@ export default function RevenuePage() {
         {/* TOP PRODUCTS */}
         <div style={styles.panel}>
           <div style={styles.panelTitle}>Top sản phẩm bán chạy</div>
-          <div style={{ marginTop: 6, fontSize: 12, color: "#64748b" }}>
+          {/* <div style={{ marginTop: 6, fontSize: 12, color: "#64748b" }}>
             Hiển thị theo doanh thu (NET theo InvoiceLine.amount). <b>Giá bán</b> = doanh thu/qty, giá vốn TB = giá vốn/qty
             (nếu có qty).
-          </div>
+          </div> */}
 
           <div style={{ ...styles.stickyHeaderWrap, marginTop: 10 }}>
             <div style={styles.stickyHeaderTableWrap}>
@@ -774,11 +774,11 @@ export default function RevenuePage() {
                     <th style={{ ...styles.th, ...styles.stickyTh }}>Sản phẩm</th>
                     <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>Số lượng</th>
                     <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>Giá bán</th>
-                    <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>Giá vốn TB</th>
+                    <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>Đơn giá vốn TB</th>
                     <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>Doanh thu</th>
                     <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>Giá vốn</th>
-                    <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>Lợi nhuận gộp</th>
-                    <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>% LN</th>
+                    {/* <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>Lợi nhuận gộp</th>
+                    <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>% LN</th> */}
                   </tr>
                 </thead>
                 <tbody>
@@ -792,7 +792,7 @@ export default function RevenuePage() {
                       <td style={{ ...styles.td, ...styles.right }}>{fmtVnd((r as any).avgCost || 0)}</td>
                       <td style={{ ...styles.td, ...styles.right, fontWeight: 900 }}>{fmtVnd(r.revenue)}</td>
                       <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.cogs)}</td>
-                      <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.profit)}</td>
+                      {/* <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.profit)}</td>
                       <td
                         style={{
                           ...styles.td,
@@ -802,7 +802,7 @@ export default function RevenuePage() {
                         }}
                       >
                         {Number(r.marginPct || 0).toFixed(1)}%
-                      </td>
+                      </td> */}
                     </tr>
                   ))}
 
@@ -842,9 +842,9 @@ export default function RevenuePage() {
               </div>
 
               <div style={styles.modalBody}>
-                <div style={{ ...styles.pillPrimary, marginBottom: 10 }}>
+                {/* <div style={{ ...styles.pillPrimary, marginBottom: 10 }}>
                   Đã ẩn breakdown <b>bonus/hold</b> theo yêu cầu. Cột <b>Need</b> = phần cần thu để được tính doanh số.
-                </div>
+                </div> */}
 
                 {staffInvErr && (
                   <div
@@ -871,13 +871,13 @@ export default function RevenuePage() {
                           <th style={{ ...styles.th, ...styles.stickyTh }}>Mã HĐ</th>
                           <th style={{ ...styles.th, ...styles.stickyTh }}>Ngày</th>
                           <th style={{ ...styles.th, ...styles.stickyTh }}>Khách</th>
-                          <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>NET</th>
-                          <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>VAT</th>
-                          <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>GROSS</th>
-                          <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>Need</th>
-                          <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>Đã thu NORMAL</th>
+                          <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>Tiền hàng</th>
+                          <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>Thuế</th>
+                          <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>Tổng hóa đơn</th>
+                          {/* <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>Còn phải thu</th> */}
+                          <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>Đã thu</th>
                           <th style={{ ...styles.th, ...styles.stickyTh }}>Ngày tính DS</th>
-                          <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>DS (NET)</th>
+                          <th style={{ ...styles.th, ...styles.right, ...styles.stickyTh }}>Doanh số</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -897,7 +897,7 @@ export default function RevenuePage() {
                                 <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.net || 0)}</td>
                                 <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.vat || 0)}</td>
                                 <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.gross || 0)}</td>
-                                <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.need || 0)}</td>
+                                {/* <td style={{ ...styles.td, ...styles.right }}>{fmtVnd(r.need || 0)}</td> */}
                                 <td style={{ ...styles.td, ...styles.right, fontWeight: 900 }}>{fmtVnd(r.collectedNormal || 0)}</td>
                                 <td style={styles.td}>{r.dsDate ? String(r.dsDate) : "-"}</td>
                                 <td style={{ ...styles.td, ...styles.right, fontWeight: 900 }}>{fmtVnd(r.dsNet || 0)}</td>

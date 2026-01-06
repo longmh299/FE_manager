@@ -1,5 +1,5 @@
 // src/pages/StockInOutReportPage.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import api from "../api/client";
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
@@ -57,8 +57,16 @@ const FALLBACK_UNIT_LABEL: Record<string, string> = {
 
 const PAGE_SIZE = 30;
 
+type LoadOpts = { silent?: boolean };
+
 const StockInOutReportPage: React.FC = () => {
   const { toasts, push, remove } = useToast();
+
+  // ✅ tránh stale push + dễ dùng trong effect
+  const pushRef = useRef(push);
+  useEffect(() => {
+    pushRef.current = push;
+  }, [push]);
 
   const [from, setFrom] = useState(() => {
     const now = new Date();
@@ -97,8 +105,11 @@ const StockInOutReportPage: React.FC = () => {
         const res = await api.get(`/units`);
         const payload = res?.data?.data ?? res?.data;
 
-        const list: any[] =
-          Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
+        const list: any[] = Array.isArray(payload)
+          ? payload
+          : Array.isArray(payload?.items)
+          ? payload.items
+          : [];
 
         const map: Record<string, string> = {};
         (list as UnitRow[]).forEach((u: any) => {
@@ -129,7 +140,7 @@ const StockInOutReportPage: React.FC = () => {
     return code || "Cái";
   }
 
-  async function load() {
+  async function load(opts?: LoadOpts) {
     try {
       setLoading(true);
       const params = new URLSearchParams();
@@ -166,9 +177,12 @@ const StockInOutReportPage: React.FC = () => {
       };
 
       setData(normalized);
-      push({ type: "success", title: "OK", message: `Đã tải ${normalized.rows.length} dòng.` });
+
+      if (!opts?.silent) {
+        pushRef.current({ type: "success", title: "OK", message: `Đã tải ${normalized.rows.length} dòng.` });
+      }
     } catch (e: any) {
-      push({
+      pushRef.current({
         type: "error",
         title: "Lỗi tải báo cáo",
         message: e?.response?.data?.message || e?.message || "Không tải được báo cáo",
@@ -178,10 +192,21 @@ const StockInOutReportPage: React.FC = () => {
     }
   }
 
+  // ✅ Vào trang tự load dữ liệu tháng hiện tại (from/to đã default sẵn)
+  // ✅ chặn StrictMode dev gọi effect 2 lần
+  const didInitialLoadRef = useRef(false);
+  useEffect(() => {
+    if (didInitialLoadRef.current) return;
+    didInitialLoadRef.current = true;
+
+    load({ silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function exportExcel() {
     try {
       if (!data) {
-        push({ type: "warning", title: "Chưa có dữ liệu", message: "Bấm Tải báo cáo trước." });
+        pushRef.current({ type: "warning", title: "Chưa có dữ liệu", message: "Bấm Tải báo cáo trước." });
         return;
       }
 
@@ -322,14 +347,12 @@ const StockInOutReportPage: React.FC = () => {
       });
 
       const now = new Date();
-      const fileName = `nhap_xuat_${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(
-        now.getDate()
-      )}.xlsx`;
+      const fileName = `nhap_xuat_${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}.xlsx`;
       saveAs(blob, fileName);
 
-      push({ type: "success", title: "OK", message: "Đã xuất Excel." });
+      pushRef.current({ type: "success", title: "OK", message: "Đã xuất Excel." });
     } catch (e: any) {
-      push({ type: "error", title: "Lỗi xuất Excel", message: e?.message || "Xuất Excel thất bại" });
+      pushRef.current({ type: "error", title: "Lỗi xuất Excel", message: e?.message || "Xuất Excel thất bại" });
     }
   }
 
@@ -370,7 +393,7 @@ const StockInOutReportPage: React.FC = () => {
           </div>
 
           <button
-            onClick={load}
+            onClick={() => load()} // ✅ tránh React truyền event vào load()
             disabled={loading}
             className={`px-4 py-2 rounded bg-slate-900 text-white hover:bg-slate-800 ${
               loading ? "opacity-60 cursor-not-allowed" : ""
@@ -428,20 +451,16 @@ const StockInOutReportPage: React.FC = () => {
                   <td className="px-4 py-3 border-b border-slate-100 whitespace-nowrap">{r.sku}</td>
                   <td className="px-4 py-3 border-b border-slate-100">{r.name}</td>
                   <td className="px-4 py-3 border-b border-slate-100 text-center whitespace-nowrap">
-                    {unitLabel(r.unitCode, r.unitName) /* ✅ pcs -> Cái */}
+                    {unitLabel(r.unitCode, r.unitName)}
                   </td>
-                  <td className="px-4 py-3 border-b border-slate-100 text-right">
-                    {fmtQty(r.openingQty)}
-                  </td>
+                  <td className="px-4 py-3 border-b border-slate-100 text-right">{fmtQty(r.openingQty)}</td>
                   <td className="px-4 py-3 border-b border-slate-100 text-right text-green-600 font-medium">
                     {fmtQty(r.inQty)}
                   </td>
                   <td className="px-4 py-3 border-b border-slate-100 text-right text-red-600 font-medium">
                     {fmtQty(r.outQty)}
                   </td>
-                  <td className="px-4 py-3 border-b border-slate-100 text-right">
-                    {fmtQty(r.closingQty)}
-                  </td>
+                  <td className="px-4 py-3 border-b border-slate-100 text-right">{fmtQty(r.closingQty)}</td>
                 </tr>
               ))}
 
@@ -460,7 +479,7 @@ const StockInOutReportPage: React.FC = () => {
               {!loading && !data ? (
                 <tr>
                   <td className="px-4 py-8 text-slate-500" colSpan={7}>
-                    Chưa có dữ liệu. Bấm <b>Tải báo cáo</b>.
+                    Chưa có dữ liệu.
                   </td>
                 </tr>
               ) : null}
