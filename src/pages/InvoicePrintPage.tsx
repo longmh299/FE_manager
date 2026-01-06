@@ -183,7 +183,7 @@ function applyPrintMode(mode: PrintMode) {
   const styleEl = ensurePrintStyleTag();
 
   const page = mode === "A5_LANDSCAPE" ? A5_PAGE : A4_PAGE;
-  const m = mode === "A5_LANDSCAPE" ? A5_PAGE : A4_PAGE; // just to keep ref, not used
+  // const m = mode === "A5_LANDSCAPE" ? A5_PAGE : A4_PAGE; // just to keep ref, not used
   const margin = mode === "A5_LANDSCAPE" ? A5_MARGIN : A4_MARGIN;
 
   const pageSizeCss = mode === "A5_LANDSCAPE" ? `${page.w}mm ${page.h}mm` : `A4 portrait`;
