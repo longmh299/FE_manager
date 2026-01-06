@@ -2034,7 +2034,7 @@ const InvoiceDetailPage: React.FC = () => {
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>VAT (thuế):</span>
                   <span style={styles.summaryValue}>{formatMoney(vatAmount)} đ</span>
-                  <span style={{ fontSize: 12, color: "#6b7280" }}>(VAT đã nằm trong khoản thu NORMAL)</span>
+                  {/* <span style={{ fontSize: 12, color: "#6b7280" }}>(VAT đã nằm trong khoản thu NORMAL)</span> */}
                 </div>
 
                 {/* ✅ Thuế %: làm thành 1 group box width chuẩn, % nằm trong suffix */}

@@ -40,6 +40,7 @@ type EditState =
       unitId: string;
       sellPrice: string; // input string
 
+      originalSku: string;
       originalName: string;
       originalUnitId: string;
       originalSellPrice: string;
@@ -171,8 +172,7 @@ const PartStocksPage: React.FC = () => {
         unit: r.unit ?? "",
         unitName: r.unitName ?? "",
         totalQty: Number(r.totalQty ?? 0),
-        sellPrice:
-          r.sellPrice === null || r.sellPrice === undefined ? null : Number(r.sellPrice),
+        sellPrice: r.sellPrice === null || r.sellPrice === undefined ? null : Number(r.sellPrice),
 
         avgCost: r.avgCost != null ? Number(r.avgCost) : 0,
         stockValue: r.stockValue != null ? Number(r.stockValue) : 0,
@@ -215,10 +215,7 @@ const PartStocksPage: React.FC = () => {
 
   const handleExport = () => {
     const base = getApiBaseUrl();
-    const url =
-      base +
-      "/api/stocks/summary-by-item/export?kind=PART" +
-      (q ? `&q=${encodeURIComponent(q)}` : "");
+    const url = base + "/api/stocks/summary-by-item/export?kind=PART" + (q ? `&q=${encodeURIComponent(q)}` : "");
     window.open(url, "_blank");
   };
 
@@ -243,8 +240,7 @@ const PartStocksPage: React.FC = () => {
       return;
     }
 
-    const sp =
-      newSellPrice.trim() === "" ? null : Number(newSellPrice.replace(/,/g, ""));
+    const sp = newSellPrice.trim() === "" ? null : Number(newSellPrice.replace(/,/g, ""));
     if (sp !== null && Number.isNaN(sp)) {
       showToast("error", "Giá bán không hợp lệ.");
       return;
@@ -296,18 +292,22 @@ const PartStocksPage: React.FC = () => {
     const code = String(row.unit || "").trim().toLowerCase();
     const guessedUnitId = (code && unitIdByCode.get(code)) || defaultUnitId;
 
+    const skuStr = String(row.sku || "");
+    const spStr = row.sellPrice != null ? String(row.sellPrice) : "";
+
     setEdit({
       open: true,
       loading: false,
       itemId: row.itemId,
-      sku: row.sku,
+      sku: skuStr,
       name: row.name,
       unitId: guessedUnitId,
-      sellPrice: row.sellPrice != null ? String(row.sellPrice) : "",
+      sellPrice: spStr,
 
+      originalSku: skuStr,
       originalName: row.name,
       originalUnitId: guessedUnitId,
-      originalSellPrice: row.sellPrice != null ? String(row.sellPrice) : "",
+      originalSellPrice: spStr,
     });
 
     setTimeout(() => dialogRef.current?.focus(), 50);
@@ -320,7 +320,9 @@ const PartStocksPage: React.FC = () => {
     if (!edit.open) return;
     if (edit.loading) return;
 
+    const skuTrim = String(edit.sku || "").trim();
     const name = edit.name.trim();
+
     if (!name) {
       showToast("error", "Tên linh kiện không được rỗng.");
       return;
@@ -330,8 +332,13 @@ const PartStocksPage: React.FC = () => {
       return;
     }
 
-    const sellPriceNumber =
-      edit.sellPrice.trim() === "" ? null : Number(edit.sellPrice.replace(/,/g, ""));
+    // SKU: không cho “xóa sku” nếu trước đó có sku
+    if (!skuTrim && String(edit.originalSku || "").trim()) {
+      showToast("error", "Mã linh kiện (SKU) không được rỗng.");
+      return;
+    }
+
+    const sellPriceNumber = edit.sellPrice.trim() === "" ? null : Number(edit.sellPrice.replace(/,/g, ""));
     if (sellPriceNumber !== null && Number.isNaN(sellPriceNumber)) {
       showToast("error", "Giá bán không hợp lệ.");
       return;
@@ -340,23 +347,21 @@ const PartStocksPage: React.FC = () => {
     try {
       setEdit({ ...edit, loading: true });
 
-      // ✅ dùng master endpoint: chỉ sửa name + unit
+      // ✅ sửa master: sku + name + unit
+      // (sku chỉ gửi nếu có giá trị; tránh bị BE reject khi để trống)
       await api.patch(`/items/${edit.itemId}/master`, {
+        ...(skuTrim ? { sku: skuTrim } : {}),
         name,
         unitId: edit.unitId,
       });
 
       // ✅ sellPrice: cập nhật qua PUT /items/:id (accountant|admin)
-      // (route items của bạn dùng PUT; giữ tối thiểu đụng chạm BE)
       await api.put(`/items/${edit.itemId}`, {
         sellPrice: sellPriceNumber ?? 0,
       });
 
       const u = unitById.get(edit.unitId);
-      showToast(
-        "success",
-        `Đã cập nhật. ĐVT: ${u ? `${u.name} (${u.code})` : "OK"}`
-      );
+      showToast("success", `Đã cập nhật. SKU: ${skuTrim || "(trống)"} – ĐVT: ${u ? `${u.name} (${u.code})` : "OK"}`);
 
       closeEdit();
       fetchStocks(q);
@@ -428,14 +433,9 @@ const PartStocksPage: React.FC = () => {
             <span style={{ fontSize: 11, color: "#6b7280" }}>(Chỉ dành cho Admin)</span>
           </div>
 
-          <form
-            onSubmit={handleCreatePart}
-            style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}
-          >
+          <form onSubmit={handleCreatePart} style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
             <div style={{ minWidth: 140, flex: "0 0 auto" }}>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
-                Mã linh kiện
-              </label>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>Mã linh kiện</label>
               <input
                 type="text"
                 value={newSku}
@@ -453,9 +453,7 @@ const PartStocksPage: React.FC = () => {
             </div>
 
             <div style={{ minWidth: 220, flex: 1 }}>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
-                Tên linh kiện *
-              </label>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>Tên linh kiện *</label>
               <input
                 type="text"
                 value={newName}
@@ -473,9 +471,7 @@ const PartStocksPage: React.FC = () => {
             </div>
 
             <div style={{ minWidth: 180, flex: "0 0 auto" }}>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
-                ĐVT
-              </label>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>ĐVT</label>
               <select
                 value={newUnitId}
                 onChange={(e) => setNewUnitId(e.target.value)}
@@ -503,9 +499,7 @@ const PartStocksPage: React.FC = () => {
             </div>
 
             <div style={{ minWidth: 140, flex: "0 0 auto" }}>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
-                Giá bán (VND)
-              </label>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>Giá bán (VND)</label>
               <input
                 type="number"
                 min={0}
@@ -547,15 +541,7 @@ const PartStocksPage: React.FC = () => {
         </div>
       )}
 
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 12,
-          gap: 16,
-        }}
-      >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 16 }}>
         <form onSubmit={handleSearchSubmit} style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <input
             type="text"
@@ -610,81 +596,61 @@ const PartStocksPage: React.FC = () => {
 
       {error && <div style={{ marginBottom: 8, color: "#b91c1c", fontSize: 14 }}>Lỗi: {error}</div>}
 
-      <div
-        style={{
-          border: "1px solid #e5e7eb",
-          borderRadius: 8,
-          overflow: "hidden",
-          backgroundColor: "#fff",
-        }}
-      >
+      <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, overflow: "hidden", backgroundColor: "#fff" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
           <thead style={{ backgroundColor: "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
             <tr>
-              <th style={{ textAlign: "left", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 160 }}>
-                Mã
-              </th>
-              <th style={{ textAlign: "left", padding: "8px 10px", borderRight: "1px solid #e5e7eb" }}>
-                Tên linh kiện
-              </th>
-              <th style={{ textAlign: "center", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 110 }}>
-                ĐVT
-              </th>
+              <th style={{ textAlign: "left", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 160 }}>Mã</th>
+              <th style={{ textAlign: "left", padding: "8px 10px", borderRight: "1px solid #e5e7eb" }}>Tên linh kiện</th>
+              <th style={{ textAlign: "center", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 110 }}>ĐVT</th>
+              <th style={{ textAlign: "right", padding: "8px 10px", width: 120 }}>Tồn kho</th>
 
-            
-               <th style={{ textAlign: "right", padding: "8px 10px", width: 120 }}>
-                Tồn kho
-              </th>
               {isAdmin && (
                 <>
-                  <th style={{ textAlign: "right", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 140 }}>
-                    Giá vốn TB
-                  </th>
-                  <th style={{ textAlign: "right", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 160 }}>
-                    Giá trị tồn
-                  </th>
-                  <th style={{ textAlign: "center", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 120 }}>
-                    Cập nhật
-                  </th>
+                  <th style={{ textAlign: "right", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 140 }}>Giá vốn TB</th>
+                  <th style={{ textAlign: "right", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 160 }}>Giá trị tồn</th>
+                  <th style={{ textAlign: "center", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 120 }}>Cập nhật</th>
                 </>
               )}
-
-             
             </tr>
           </thead>
 
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={isAdmin ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
+                <td colSpan={isAdmin ? 7 : 4} style={{ padding: 12, textAlign: "center" }}>
                   Đang tải dữ liệu...
                 </td>
               </tr>
             ) : pagedRows.length === 0 ? (
               <tr>
-                <td colSpan={isAdmin ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
+                <td colSpan={isAdmin ? 7 : 4} style={{ padding: 12, textAlign: "center" }}>
                   Không có linh kiện nào thỏa điều kiện.
                 </td>
               </tr>
             ) : (
               pagedRows.map((row) => (
                 <tr key={row.itemId || row.sku || row.name}>
-                  <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9" }}>
-                    {row.sku}
-                  </td>
+                  <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9" }}>{row.sku}</td>
 
-                  <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9" }}>
-                    {row.name}
-                  </td>
+                  <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9" }}>{row.name}</td>
 
-                  <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9", textAlign: "center", whiteSpace: "nowrap" }}>
+                  <td
+                    style={{
+                      padding: "8px 10px",
+                      borderTop: "1px solid #f1f5f9",
+                      borderRight: "1px solid #f1f5f9",
+                      textAlign: "center",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
                     {renderUnitCell(row)}
                   </td>
 
-                  
                   <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", textAlign: "right", whiteSpace: "nowrap", fontWeight: 600 }}>
                     {fmtQty(row.totalQty)}
                   </td>
+
                   {isAdmin && (
                     <>
                       <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9", textAlign: "right", whiteSpace: "nowrap" }}>
@@ -713,8 +679,6 @@ const PartStocksPage: React.FC = () => {
                       </td>
                     </>
                   )}
-
-                  
                 </tr>
               ))
             )}
@@ -831,7 +795,7 @@ const PartStocksPage: React.FC = () => {
               <div>
                 <div style={{ fontSize: 15, fontWeight: 900 }}>Cập nhật linh kiện</div>
                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-                  SKU: <b>{edit.sku || "(trống)"}</b>
+                  SKU: <b>{String(edit.sku || "").trim() || "(trống)"}</b>
                 </div>
               </div>
 
@@ -865,16 +829,37 @@ const PartStocksPage: React.FC = () => {
               >
                 <div style={{ fontWeight: 800, marginBottom: 4 }}>Phạm vi cập nhật</div>
                 <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
-                  <li>Chỉ đổi <b>Tên</b>, <b>ĐVT</b>, <b>Giá bán</b> trên master Item.</li>
+                  <li>Đổi <b>Mã (SKU)</b>, <b>Tên</b>, <b>ĐVT</b>, <b>Giá bán</b> trên master Item.</li>
                   <li>Không đụng tồn / giá vốn / movement / invoice nên an toàn.</li>
                 </ul>
               </div>
 
               <div style={{ display: "grid", gap: 12 }}>
+                {/* ✅ NEW: editable SKU */}
                 <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
-                    Tên linh kiện *
-                  </label>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Mã linh kiện (SKU) *</label>
+                  <input
+                    type="text"
+                    value={edit.sku}
+                    onChange={(e) => setEdit({ ...edit, sku: e.target.value })}
+                    disabled={edit.loading}
+                    placeholder="VD: KP-001"
+                    style={{
+                      width: "100%",
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      border: "1px solid #cbd5e1",
+                      fontSize: 14,
+                      outline: "none",
+                    }}
+                  />
+                  <div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>
+                    Lưu ý: nếu <b>trùng SKU</b> sẽ báo lỗi.
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Tên linh kiện *</label>
                   <input
                     type="text"
                     value={edit.name}
@@ -895,9 +880,7 @@ const PartStocksPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
-                    Đơn vị tính (Unit) *
-                  </label>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Đơn vị tính (Unit) *</label>
                   <select
                     value={edit.unitId}
                     onChange={(e) => setEdit({ ...edit, unitId: e.target.value })}
@@ -933,9 +916,7 @@ const PartStocksPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
-                    Giá bán (VND)
-                  </label>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Giá bán (VND)</label>
                   <input
                     type="number"
                     min={0}

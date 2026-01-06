@@ -8,7 +8,7 @@ type MachineStockRow = {
   sku: string;
   name: string;
 
-  unit?: string;     // unitCode (pcs, pair, m...)
+  unit?: string; // unitCode (pcs, pair, m...)
   unitName?: string; // unitName (Cái, Cặp, Mét...)
   totalQty: number;
 
@@ -24,20 +24,19 @@ type UnitOption = {
   note?: string | null;
 };
 
-type ToastState =
-  | { type: "success" | "error"; message: string }
-  | null;
+type ToastState = { type: "success" | "error"; message: string } | null;
 
 type EditState =
   | {
       open: true;
       loading: boolean;
       itemId: string; // ✅ must have
-      sku: string;
 
+      sku: string;
       name: string;
       unitId: string;
 
+      originalSku: string;
       originalName: string;
       originalUnitId: string;
     }
@@ -290,9 +289,12 @@ const MachineStocksPage: React.FC = () => {
       open: true,
       loading: false,
       itemId: row.itemId,
-      sku: row.sku,
+
+      sku: row.sku || "",
       name: row.name,
       unitId: guessedUnitId,
+
+      originalSku: row.sku || "",
       originalName: row.name,
       originalUnitId: guessedUnitId,
     });
@@ -307,7 +309,9 @@ const MachineStocksPage: React.FC = () => {
     if (!edit.open) return;
     if (edit.loading) return;
 
-    const name = edit.name.trim();
+    const sku = String(edit.sku || "").trim();
+    const name = String(edit.name || "").trim();
+
     if (!name) {
       showToast("error", "Tên máy không được rỗng.");
       return;
@@ -320,13 +324,18 @@ const MachineStocksPage: React.FC = () => {
     try {
       setEdit({ ...edit, loading: true });
 
+      // ✅ thêm sku vào payload để sửa được mã máy
       await api.patch(`/items/${edit.itemId}/master`, {
+        sku: sku || undefined, // để trống thì không update (an toàn hơn)
         name,
         unitId: edit.unitId,
       });
 
       const u = unitById.get(edit.unitId);
-      showToast("success", `Đã cập nhật. ĐVT: ${u ? `${u.name} (${u.code})` : "OK"}`);
+      showToast(
+        "success",
+        `Đã cập nhật. SKU: ${sku || "(trống)"} – ĐVT: ${u ? `${u.name} (${u.code})` : "OK"}`
+      );
 
       closeEdit();
       fetchStocks(q);
@@ -578,7 +587,7 @@ const MachineStocksPage: React.FC = () => {
               <th style={{ textAlign: "center", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 110 }}>
                 ĐVT
               </th>
-               <th style={{ textAlign: "right", padding: "8px 10px", width: 120 }}>Tồn kho</th>
+              <th style={{ textAlign: "right", padding: "8px 10px", width: 120 }}>Tồn kho</th>
               {isAdmin && (
                 <>
                   <th style={{ textAlign: "right", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 140 }}>
@@ -592,8 +601,6 @@ const MachineStocksPage: React.FC = () => {
                   </th>
                 </>
               )}
-
-             
             </tr>
           </thead>
 
@@ -613,18 +620,34 @@ const MachineStocksPage: React.FC = () => {
             ) : (
               pagedRows.map((row) => (
                 <tr key={row.itemId || row.sku || row.name}>
-                  <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                  <td
+                    style={{
+                      padding: "8px 10px",
+                      borderTop: "1px solid #f1f5f9",
+                      borderRight: "1px solid #f1f5f9",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
                     {row.sku}
                   </td>
                   <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9" }}>
                     {row.name}
                   </td>
-                  <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9", textAlign: "center", whiteSpace: "nowrap" }}>
+                  <td
+                    style={{
+                      padding: "8px 10px",
+                      borderTop: "1px solid #f1f5f9",
+                      borderRight: "1px solid #f1f5f9",
+                      textAlign: "center",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
                     {renderUnitCell(row)}
                   </td>
                   <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", textAlign: "right", whiteSpace: "nowrap", fontWeight: 600 }}>
                     {fmtQty(row.totalQty)}
                   </td>
+
                   {isAdmin && (
                     <>
                       <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9", textAlign: "right", whiteSpace: "nowrap" }}>
@@ -653,7 +676,6 @@ const MachineStocksPage: React.FC = () => {
                       </td>
                     </>
                   )}
-
                 </tr>
               ))
             )}
@@ -661,7 +683,17 @@ const MachineStocksPage: React.FC = () => {
         </table>
       </div>
 
-      <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, flexWrap: "wrap", gap: 8 }}>
+      <div
+        style={{
+          marginTop: 10,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          fontSize: 13,
+          flexWrap: "wrap",
+          gap: 8,
+        }}
+      >
         <div>
           Trang {page}/{totalPages} – Tổng {totalItems} dòng máy
         </div>
@@ -770,7 +802,7 @@ const MachineStocksPage: React.FC = () => {
               <div>
                 <div style={{ fontSize: 15, fontWeight: 800 }}>Cập nhật máy</div>
                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-                  SKU: <b>{edit.sku || "(trống)"}</b>
+                  SKU: <b>{(edit.sku || "").trim() || "(trống)"}</b>
                 </div>
               </div>
 
@@ -792,6 +824,34 @@ const MachineStocksPage: React.FC = () => {
 
             <div style={{ padding: 14, overflow: "auto", flex: 1 }}>
               <div style={{ display: "grid", gap: 12 }}>
+                {/* ✅ NEW: editable SKU */}
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6 }}>
+                    Mã máy (SKU)
+                  </label>
+                  <input
+                    type="text"
+                    value={edit.open ? edit.sku : ""}
+                    onChange={(e) => {
+                      if (!edit.open) return;
+                      setEdit({ ...edit, sku: e.target.value });
+                    }}
+                    disabled={edit.loading}
+                    placeholder="VD: ST-608"
+                    style={{
+                      width: "100%",
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      border: "1px solid #cbd5e1",
+                      fontSize: 14,
+                      outline: "none",
+                    }}
+                  />
+                  <div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>
+                    Lưu ý: nếu hệ thống đang <b>unique SKU</b> mà trùng thì sẽ báo lỗi.
+                  </div>
+                </div>
+
                 <div>
                   <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6 }}>
                     Tên máy *

@@ -1,5 +1,5 @@
 // src/pages/StockCountDetailPage.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../api/client";
 
@@ -41,20 +41,28 @@ type StockCountDetail = {
 type TabKind = "PART" | "MACHINE";
 
 function getApiErrorMessage(err: any, fallback: string) {
-  return (
-    err?.response?.data?.message ||
-    err?.message ||
-    fallback
-  );
+  return err?.response?.data?.message || err?.message || fallback;
 }
 
 function isPeriodLockMessage(msg: string) {
   const s = String(msg || "").toLowerCase();
   // match các message BE bạn đang dùng
   return (
-    s.includes("kỳ sổ") && s.includes("khoá")
-  ) || s.includes("kỳ đã khoá") || s.includes("thuộc kỳ đã khoá");
+    (s.includes("kỳ sổ") && s.includes("khoá")) ||
+    s.includes("kỳ đã khoá") ||
+    s.includes("thuộc kỳ đã khoá")
+  );
 }
+
+/** ========================= Confirm Modal (no browser confirm) ========================= */
+type ConfirmTone = "primary" | "danger";
+type ConfirmConfig = {
+  title?: string;
+  message: string;
+  confirmText?: string;
+  cancelText?: string;
+  tone?: ConfirmTone;
+};
 
 const StockCountDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -71,12 +79,38 @@ const StockCountDetailPage: React.FC = () => {
   const [lockedMsg, setLockedMsg] = useState<string>("");
 
   // giá trị đang gõ trên input, key = lineId
-  const [editingValues, setEditingValues] = useState<Record<string, string>>(
-    {}
-  );
+  const [editingValues, setEditingValues] = useState<Record<string, string>>({});
 
   // tab hiện tại: Linh kiện (PART) / Máy (MACHINE)
   const [activeTab, setActiveTab] = useState<TabKind>("PART");
+
+  // ✅ custom confirm modal (replace window.confirm)
+  const [confirmModal, setConfirmModal] = useState<ConfirmConfig | null>(null);
+  const confirmResolverRef = useRef<((v: boolean) => void) | null>(null);
+
+  const confirmDialog = (cfg: ConfirmConfig) => {
+    return new Promise<boolean>((resolve) => {
+      confirmResolverRef.current = resolve;
+      setConfirmModal(cfg);
+    });
+  };
+
+  const closeConfirm = (result: boolean) => {
+    const resolve = confirmResolverRef.current;
+    confirmResolverRef.current = null;
+    setConfirmModal(null);
+    resolve?.(result);
+  };
+
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (!confirmModal) return;
+      if (ev.key === "Escape") closeConfirm(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [confirmModal]);
 
   const loadDetail = async () => {
     if (!id) return;
@@ -87,14 +121,12 @@ const StockCountDetailPage: React.FC = () => {
       setData(detail);
 
       // reset lock banner mỗi lần reload (nếu vẫn bị lock thì sẽ bật lại khi thao tác)
-      // (giữ logic nhẹ, không cần gọi thêm API /period-lock)
       setLocked(false);
       setLockedMsg("");
 
       const init: Record<string, string> = {};
       (detail.lines || []).forEach((l) => {
-        init[l.id] =
-          (l.countedQty as any)?.toString?.() ?? l.countedQty ?? "0";
+        init[l.id] = (l.countedQty as any)?.toString?.() ?? l.countedQty ?? "0";
       });
       setEditingValues(init);
     } catch (err) {
@@ -119,8 +151,7 @@ const StockCountDetailPage: React.FC = () => {
   const isPosted = data?.status === "posted";
   const isReadOnly = isPosted || locked;
 
-  const visibleLines =
-    data?.lines.filter((l) => l.item?.kind === activeTab) ?? [];
+  const visibleLines = data?.lines.filter((l) => l.item?.kind === activeTab) ?? [];
 
   const totals = useMemo(() => {
     const lines = visibleLines || [];
@@ -130,7 +161,10 @@ const StockCountDetailPage: React.FC = () => {
     for (const l of lines) {
       const b = parseNumber(l.bookQty ?? "0");
       const c = parseNumber(
-        (editingValues[l.id] ?? (l.countedQty as any)?.toString?.() ?? l.countedQty ?? "0") as string
+        (editingValues[l.id] ??
+          (l.countedQty as any)?.toString?.() ??
+          l.countedQty ??
+          "0") as string
       );
       book += b;
       counted += c;
@@ -151,9 +185,7 @@ const StockCountDetailPage: React.FC = () => {
     if (isReadOnly) return;
 
     const value =
-      editingValues[line.id] ??
-      (line.countedQty as any)?.toString?.() ??
-      "0";
+      editingValues[line.id] ?? (line.countedQty as any)?.toString?.() ?? "0";
 
     try {
       setSavingLineId(line.id);
@@ -199,10 +231,14 @@ const StockCountDetailPage: React.FC = () => {
       return;
     }
 
-    const confirm = window.confirm(
-      "Post kiểm kê sẽ điều chỉnh tồn kho theo số thực đếm. Bạn chắc chắn?"
-    );
-    if (!confirm) return;
+    const ok = await confirmDialog({
+      title: "Xác nhận Post kiểm kê",
+      message: "Post kiểm kê sẽ điều chỉnh tồn kho theo số thực đếm.\nBạn chắc chắn muốn thực hiện?",
+      confirmText: "Post kiểm kê",
+      cancelText: "Hủy",
+      tone: "danger",
+    });
+    if (!ok) return;
 
     try {
       setPosting(true);
@@ -256,10 +292,14 @@ const StockCountDetailPage: React.FC = () => {
       return;
     }
 
-    const confirm = window.confirm(
-      "Bạn chắc chắn muốn xoá phiếu kiểm kê này? (Chỉ nên xoá phiếu test/demo)"
-    );
-    if (!confirm) return;
+    const ok = await confirmDialog({
+      title: "Xác nhận xoá phiếu",
+      message: "Bạn chắc chắn muốn xoá phiếu kiểm kê này?\n(Chỉ nên xoá phiếu test/demo)",
+      confirmText: "Xoá phiếu",
+      cancelText: "Hủy",
+      tone: "danger",
+    });
+    if (!ok) return;
 
     try {
       setDeleting(true);
@@ -375,11 +415,11 @@ const StockCountDetailPage: React.FC = () => {
                   </div>
                 )}
                 <div style={{ fontSize: 12, color: "#718096", marginTop: 4 }}>
-                  Tạo lúc: {new Date(data.createdAt).toLocaleString("vi-VN")} | Cập
-                  nhật: {new Date(data.updatedAt).toLocaleString("vi-VN")}
+                  Tạo lúc: {new Date(data.createdAt).toLocaleString("vi-VN")} | Cập nhật:{" "}
+                  {new Date(data.updatedAt).toLocaleString("vi-VN")}
                 </div>
 
-                {/* ✅ mini summary theo tab (không phá layout, chỉ thêm 1 dòng) */}
+                {/* ✅ mini summary theo tab */}
                 <div style={{ fontSize: 12, color: "#4a5568", marginTop: 6 }}>
                   Tổng tab {activeTab === "PART" ? "Linh kiện" : "Máy"} • Tồn sổ:{" "}
                   <b>{totals.book}</b> • Thực đếm: <b>{totals.counted}</b> • Chênh:{" "}
@@ -453,18 +493,17 @@ const StockCountDetailPage: React.FC = () => {
                       padding: "6px 12px",
                       borderRadius: 4,
                       border: "1px solid #2f855a",
-                      backgroundColor:
-                        isReadOnly || posting ? "#9ae6b4" : "#38a169",
+                      backgroundColor: isReadOnly || posting ? "#9ae6b4" : "#38a169",
                       color: "#fff",
                       cursor: isReadOnly || posting ? "default" : "pointer",
                       fontSize: 13,
                     }}
                     title={
                       locked
-                        ? (lockedMsg || "Phiếu thuộc kỳ đã khoá")
+                        ? lockedMsg || "Phiếu thuộc kỳ đã khoá"
                         : isPosted
-                          ? "Phiếu đã post"
-                          : ""
+                        ? "Phiếu đã post"
+                        : ""
                     }
                   >
                     {posting ? "Đang post..." : "Post kiểm kê"}
@@ -478,18 +517,17 @@ const StockCountDetailPage: React.FC = () => {
                       padding: "6px 12px",
                       borderRadius: 4,
                       border: "1px solid #e53e3e",
-                      backgroundColor:
-                        isReadOnly || deleting ? "#fed7d7" : "#fff5f5",
+                      backgroundColor: isReadOnly || deleting ? "#fed7d7" : "#fff5f5",
                       color: "#e53e3e",
                       cursor: isReadOnly || deleting ? "default" : "pointer",
                       fontSize: 13,
                     }}
                     title={
                       locked
-                        ? (lockedMsg || "Phiếu thuộc kỳ đã khoá")
+                        ? lockedMsg || "Phiếu thuộc kỳ đã khoá"
                         : isPosted
-                          ? "Phiếu đã post"
-                          : ""
+                        ? "Phiếu đã post"
+                        : ""
                     }
                   >
                     {deleting ? "Đang xoá..." : "Xoá phiếu"}
@@ -500,23 +538,14 @@ const StockCountDetailPage: React.FC = () => {
           </div>
 
           {/* Tabs PART / MACHINE */}
-          <div
-            style={{
-              display: "flex",
-              gap: 8,
-              marginBottom: 8,
-            }}
-          >
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
             <button
               type="button"
               onClick={() => setActiveTab("PART")}
               style={{
                 padding: "6px 12px",
                 borderRadius: 999,
-                border:
-                  activeTab === "PART"
-                    ? "1px solid #3182ce"
-                    : "1px solid #cbd5e0",
+                border: activeTab === "PART" ? "1px solid #3182ce" : "1px solid #cbd5e0",
                 backgroundColor: activeTab === "PART" ? "#ebf8ff" : "#fff",
                 fontSize: 13,
                 cursor: "pointer",
@@ -531,9 +560,7 @@ const StockCountDetailPage: React.FC = () => {
                 padding: "6px 12px",
                 borderRadius: 999,
                 border:
-                  activeTab === "MACHINE"
-                    ? "1px solid #3182ce"
-                    : "1px solid #cbd5e0",
+                  activeTab === "MACHINE" ? "1px solid #3182ce" : "1px solid #cbd5e0",
                 backgroundColor: activeTab === "MACHINE" ? "#ebf8ff" : "#fff",
                 fontSize: 13,
                 cursor: "pointer",
@@ -566,17 +593,14 @@ const StockCountDetailPage: React.FC = () => {
                 {visibleLines.length === 0 && (
                   <tr>
                     <td colSpan={6} style={{ padding: 12, textAlign: "center" }}>
-                      Không có dòng nào trong tab{" "}
-                      {activeTab === "PART" ? "Linh kiện" : "Máy"}.
+                      Không có dòng nào trong tab {activeTab === "PART" ? "Linh kiện" : "Máy"}.
                     </td>
                   </tr>
                 )}
 
                 {visibleLines.map((line) => {
                   const inputValue =
-                    editingValues[line.id] ??
-                    (line.countedQty as any)?.toString?.() ??
-                    "0";
+                    editingValues[line.id] ?? (line.countedQty as any)?.toString?.() ?? "0";
 
                   return (
                     <tr key={line.id} style={{ borderTop: "1px solid #edf2f7" }}>
@@ -604,9 +628,7 @@ const StockCountDetailPage: React.FC = () => {
                             padding: "2px 4px",
                             borderRadius: 4,
                             border:
-                              savingLineId === line.id
-                                ? "1px solid #3182ce"
-                                : "1px solid #cbd5e0",
+                              savingLineId === line.id ? "1px solid #3182ce" : "1px solid #cbd5e0",
                             fontSize: 13,
                             backgroundColor: isReadOnly ? "#f7fafc" : "#fff",
                             color: isReadOnly ? "#718096" : "#111827",
@@ -614,10 +636,10 @@ const StockCountDetailPage: React.FC = () => {
                           }}
                           title={
                             locked
-                              ? (lockedMsg || "Phiếu thuộc kỳ đã khoá")
+                              ? lockedMsg || "Phiếu thuộc kỳ đã khoá"
                               : isPosted
-                                ? "Phiếu đã post"
-                                : ""
+                              ? "Phiếu đã post"
+                              : ""
                           }
                         />
                       </td>
@@ -630,6 +652,118 @@ const StockCountDetailPage: React.FC = () => {
           </div>
         </>
       )}
+
+      {/* ========================= CUSTOM CONFIRM MODAL ========================= */}
+      {confirmModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) closeConfirm(false);
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            backgroundColor: "rgba(0,0,0,0.45)",
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: "min(560px, 96vw)",
+              backgroundColor: "#fff",
+              borderRadius: 12,
+              border: "1px solid #e5e7eb",
+              overflow: "hidden",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <div
+              style={{
+                padding: "12px 14px",
+                borderBottom: "1px solid #e5e7eb",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+              }}
+            >
+              <div style={{ fontSize: 15, fontWeight: 900 }}>
+                {confirmModal.title || "Xác nhận"}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => closeConfirm(false)}
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 8,
+                  border: "1px solid #e5e7eb",
+                  backgroundColor: "#fff",
+                  cursor: "pointer",
+                  fontWeight: 900,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ padding: 14, fontSize: 14, lineHeight: 1.55, whiteSpace: "pre-line" }}>
+              {confirmModal.message}
+            </div>
+
+            <div
+              style={{
+                padding: 12,
+                borderTop: "1px solid #e5e7eb",
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+                backgroundColor: "#fff",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => closeConfirm(false)}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #e5e7eb",
+                  backgroundColor: "#fff",
+                  cursor: "pointer",
+                  fontWeight: 800,
+                }}
+              >
+                {confirmModal.cancelText || "Hủy"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => closeConfirm(true)}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  border: "1px solid",
+                  borderColor: confirmModal.tone === "danger" ? "#dc2626" : "#16a34a",
+                  backgroundColor: confirmModal.tone === "danger" ? "#dc2626" : "#16a34a",
+                  color: "#fff",
+                  cursor: "pointer",
+                  fontWeight: 900,
+                }}
+              >
+                {confirmModal.confirmText || "OK"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ========================= END CONFIRM MODAL ========================= */}
     </div>
   );
 };

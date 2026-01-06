@@ -151,18 +151,30 @@ async function fetchItemLoose(itemId: string): Promise<any | null> {
   return null;
 }
 
-// ================= print auto A4/A5 =================
-type PrintMode = "A4_PORTRAIT" | "A5_LANDSCAPE";
+// ================= print modes =================
+type PrintMode = "A4_FULL" | "A5_SLOT_ON_A4";
 
-const A5_MAX_LINES = 6;
+const A5_PREFER_MAX_LINES = 2;
 
-// A4 dọc
+// A4 portrait thật sự
 const A4_PAGE = { w: 210, h: 297 };
-const A4_MARGIN = { top: 10, right: 12, bottom: 18, left: 12 };
 
-// A5 ngang
-const A5_PAGE = { w: 210, h: 148 };
-const A5_MARGIN = { top: 12, right: 12, bottom: 12, left: 12 };
+// ✅ A5 slot NGANG trên A4 (an toàn hơn A5 chuẩn 210x148)
+const A5_SLOT = { w: 200, h: 140 }; // mm
+const A5_SLOT_POS = {
+  top: 10,
+  left: (A4_PAGE.w - A5_SLOT.w) / 2, // căn giữa
+};
+
+// Viền khung
+const FRAME_INSET_A4 = 8;
+const FRAME_INSET_SLOT = 5;
+
+// Padding nội dung
+const CONTENT_PAD_A4 = { top: 14, right: 16, bottom: 14, left: 16 };
+const CONTENT_PAD_SLOT = { top: 9, right: 12, bottom: 9, left: 12 };
+
+const SAFE_PX = 2;
 
 function ensurePrintStyleTag() {
   let el = document.getElementById("print-page-style") as HTMLStyleElement | null;
@@ -174,36 +186,35 @@ function ensurePrintStyleTag() {
   return el;
 }
 
-/**
- * ✅ Viền luôn là viền tờ giấy (page frame), full A4/A5
- * - Screen: frame absolute theo .print-root (min-height = khổ giấy) => nhìn đẹp, không “ăn nửa trang”
- * - Print : frame fixed => tự lặp trên từng trang khi paginate
- */
 function applyPrintMode(mode: PrintMode) {
   const styleEl = ensurePrintStyleTag();
-
-  const page = mode === "A5_LANDSCAPE" ? A5_PAGE : A4_PAGE;
-  // const m = mode === "A5_LANDSCAPE" ? A5_PAGE : A4_PAGE; // just to keep ref, not used
-  const margin = mode === "A5_LANDSCAPE" ? A5_MARGIN : A4_MARGIN;
-
-  const pageSizeCss = mode === "A5_LANDSCAPE" ? `${page.w}mm ${page.h}mm` : `A4 portrait`;
-  const pageMarginCss = `${margin.top}mm ${margin.right}mm ${margin.bottom}mm ${margin.left}mm`;
+  const isSlot = mode === "A5_SLOT_ON_A4";
 
   styleEl.textContent = `
-@page { size: ${pageSizeCss}; margin: ${pageMarginCss}; }
+/* print-mode: ${mode} */
+@page { size: A4 portrait; margin: 0; }
 
-body {
+html, body {
   margin: 0;
+  padding: 0;
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
 }
 
-/* ================= SCREEN ================= */
+.mm-ruler{
+  position: fixed;
+  left: -1000mm;
+  top: 0;
+  width: 1mm;
+  height: 1mm;
+  pointer-events: none;
+  opacity: 0;
+}
+
 @media screen {
   .print-root{
-    width: ${page.w}mm;
-    min-height: ${page.h}mm;
-    height: auto;
+    width: ${A4_PAGE.w}mm;
+    min-height: ${A4_PAGE.h}mm;
     margin: 16px auto;
     background: #fff;
     box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 8px 30px rgba(0,0,0,.08);
@@ -211,68 +222,71 @@ body {
     box-sizing: border-box;
     overflow: visible;
   }
-
-  /* ✅ viền full trang (theo khổ giấy) */
-  .page-frame{
-    display: block;
-    position: absolute;
-    inset: 0;
-    border: 0px solid #000;
-    pointer-events: none;
-    z-index: 0;
-    background: transparent;
-  }
-
-  /* nội dung nằm trên frame */
-  .border-box{
-    position: relative;
-    z-index: 1;
-    border: none !important;
-    min-height: ${page.h}mm;
-    box-shadow: none !important;
-  }
 }
 
-/* ================= PRINT ================= */
 @media print {
-  html, body { margin: 0; padding: 0; }
-
   .print-root{
-    width: 100%;
-    height: auto;
+    width: ${A4_PAGE.w}mm;
+    height: ${A4_PAGE.h}mm;
     background: transparent;
     position: relative;
     overflow: visible !important;
   }
+}
 
-  /* ✅ viền full từng trang */
-  .page-frame{
-    display: block !important;
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    border: 1px solid #000;
-    pointer-events: none;
-    z-index: 0;
-    background: transparent;
-  }
+table.invoice-table thead { display: table-header-group; }
+table.invoice-table tr { page-break-inside: avoid; break-inside: avoid; }
+.signatures-wrapper { page-break-inside: avoid; break-inside: avoid; }
 
-  .border-box{
-    position: relative;
-    z-index: 1;
-    border: none !important;
-    box-shadow: none !important;
-    min-height: 0 !important;
-  }
+/* ====== Frame A4 full ====== */
+.a4-frame{
+  position: absolute;
+  inset: ${FRAME_INSET_A4}mm;
+  border: 1px solid #000;
+  pointer-events: none;
+  z-index: 0;
+  display: ${isSlot ? "none" : "block"};
+}
 
-  table.invoice-table thead { display: table-header-group; }
-  table.invoice-table tr { page-break-inside: avoid; break-inside: avoid; }
-  .signatures-wrapper { page-break-inside: avoid; break-inside: avoid; }
+.border-box{
+  position: relative;
+  z-index: 1;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* ====== Slot A5 ngang trên A4 ====== */
+.a5-slot{
+  position: absolute;
+  top: ${A5_SLOT_POS.top}mm;
+  left: ${A5_SLOT_POS.left}mm;
+  width: ${A5_SLOT.w}mm;
+  height: ${A5_SLOT.h}mm;
+  box-sizing: border-box;
+  display: ${isSlot ? "block" : "none"};
+}
+.a5-frame{
+  position: absolute;
+  inset: ${FRAME_INSET_SLOT}mm;
+  border: 1px solid #000;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* border-box chỉ nằm TRONG slot */
+.a5-slot .border-box{
+  position: absolute;
+  inset: ${FRAME_INSET_SLOT}mm;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 `;
 }
 
-function preferA5ByLines(lineCount: number) {
-  return lineCount <= A5_MAX_LINES;
+function preferSlotByLines(lineCount: number) {
+  return lineCount <= A5_PREFER_MAX_LINES;
 }
 
 // ================= types =================
@@ -329,7 +343,6 @@ type Line = {
 // ================= styles =================
 const styles: Record<string, React.CSSProperties> = {
   borderBox: {
-    flex: 1,
     boxSizing: "border-box",
     padding: "8mm 10mm 10mm",
     display: "flex",
@@ -362,14 +375,17 @@ const styles: Record<string, React.CSSProperties> = {
 
   invoiceTitle: { textAlign: "center", fontWeight: 700, fontSize: 18, margin: "3mm 0 1.5mm" },
 
+  // ✅ meta luôn căn giữa và nằm đúng dưới title
   invoiceMeta: {
+    width: "100%",
     textAlign: "center",
     fontSize: 12,
     marginBottom: 6,
     display: "flex",
-    flexDirection: "column",
+    flexDirection: "row",
+    justifyContent: "center",
     alignItems: "center",
-    gap: 2,
+    gap: 18,
     lineHeight: 1.2,
   },
 
@@ -407,7 +423,7 @@ const styles: Record<string, React.CSSProperties> = {
   textAmountRow: { fontSize: 12.5, marginTop: 6 },
   bold: { fontWeight: 600 },
 
-  signaturesWrapper: { marginTop: "18mm", marginBottom: "20mm" },
+  signaturesWrapper: { marginTop: "auto", marginBottom: "10mm" },
   signaturesRow: { display: "flex", justifyContent: "space-between", fontSize: 12 },
   signatureCol: { textAlign: "center", width: "33%" },
   signatureLabel: { fontWeight: 600, marginBottom: 2 },
@@ -422,17 +438,20 @@ const InvoicePrintPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
 
   const [unitByItemId, setUnitByItemId] = useState<Record<string, string>>({});
-  const [printMode, setPrintMode] = useState<PrintMode>("A4_PORTRAIT");
+  const [printMode, setPrintMode] = useState<PrintMode>("A4_FULL");
 
-  const printRootRef = useRef<HTMLDivElement>(null);
+  const printModeRef = useRef<PrintMode>("A4_FULL");
+  useEffect(() => {
+    printModeRef.current = printMode;
+  }, [printMode]);
+
   const borderBoxRef = useRef<HTMLDivElement>(null);
-
+  const mmRef = useRef<HTMLDivElement>(null);
   const [layoutTick, setLayoutTick] = useState(0);
 
   useEffect(() => {
     applyPrintMode(printMode);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [printMode]);
 
   useEffect(() => {
     if (!id) return;
@@ -541,68 +560,56 @@ const InvoicePrintPage: React.FC = () => {
     });
   }, [invoice, unitByItemId]);
 
-  // ✅ Auto A5 nếu ngắn, tràn thì lên A4
+  const linesKey = useMemo(() => lines.map((x) => `${x.id}|${x.qty}|${x.price}|${x.amount}`).join("||"), [lines]);
+
+  // ✅ Auto: ít dòng => thử slot A5 ngang; nếu tràn => A4 full
   useLayoutEffect(() => {
     if (!invoice) return;
 
-    const tryA5 = preferA5ByLines(lines.length);
-    if (!tryA5) {
-      setPrintMode("A4_PORTRAIT");
-      applyPrintMode("A4_PORTRAIT");
-      return;
-    }
+    const preferSlot = preferSlotByLines(lines.length);
+    const first: PrintMode = preferSlot ? "A5_SLOT_ON_A4" : "A4_FULL";
 
-    setPrintMode("A5_LANDSCAPE");
-    applyPrintMode("A5_LANDSCAPE");
+    if (printModeRef.current !== first) setPrintMode(first);
+    applyPrintMode(first);
 
-    const check = () => {
-      const root = printRootRef.current;
+    if (!preferSlot) return;
+
+    let cancelled = false;
+
+    const checkOverflow = () => {
+      if (cancelled) return;
       const box = borderBoxRef.current;
-      if (!root || !box) return;
+      if (!box) return;
 
-      // nếu nội dung vượt quá 1 trang A5 -> chuyển A4
-      const r = root.getBoundingClientRect();
-      const b = box.getBoundingClientRect();
-      const overflowPx = b.bottom - r.bottom;
-      if (overflowPx > 1) {
-        setPrintMode("A4_PORTRAIT");
-        applyPrintMode("A4_PORTRAIT");
+      if (box.scrollHeight > box.clientHeight + SAFE_PX) {
+        if (printModeRef.current !== "A4_FULL") setPrintMode("A4_FULL");
+        applyPrintMode("A4_FULL");
       }
     };
 
-    const raf1 = requestAnimationFrame(() => {
-      const raf2 = requestAnimationFrame(check);
-      (check as any)._raf2 = raf2;
-    });
-
-    const t = window.setTimeout(check, 80);
+    const raf1 = requestAnimationFrame(() => requestAnimationFrame(checkOverflow));
+    const t = window.setTimeout(checkOverflow, 160);
 
     return () => {
+      cancelled = true;
       cancelAnimationFrame(raf1);
-      const raf2 = (check as any)._raf2 as number | undefined;
-      if (raf2) cancelAnimationFrame(raf2);
       window.clearTimeout(t);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [invoice?.id, lines.length, layoutTick]);
+  }, [invoice?.id, linesKey, layoutTick, lines.length]);
 
   useEffect(() => {
-    const onBeforePrint = () => applyPrintMode(printMode);
+    const onBeforePrint = () => applyPrintMode(printModeRef.current);
     window.addEventListener("beforeprint", onBeforePrint);
     return () => window.removeEventListener("beforeprint", onBeforePrint);
-  }, [printMode]);
+  }, []);
 
   const computedSubtotal = useMemo(() => lines.reduce((sum, l) => sum + toNum(l.amount), 0), [lines]);
 
   if (loading || !invoice) return <div style={{ padding: 20 }}>Đang tải hóa đơn...</div>;
 
-  const subtotalRaw = invoice.subtotal != null ? toNum(invoice.subtotal) : computedSubtotal;
-  const taxRaw = invoice.tax != null ? toNum(invoice.tax) : 0;
-  const totalRaw = invoice.total != null ? toNum(invoice.total) : toNum(subtotalRaw) + toNum(taxRaw);
-
-  const subtotal = subtotalRaw;
-  const tax = taxRaw;
-  const total = totalRaw;
+  const subtotal = invoice.subtotal != null ? toNum(invoice.subtotal) : computedSubtotal;
+  const tax = invoice.tax != null ? toNum(invoice.tax) : 0;
+  const total = invoice.total != null ? toNum(invoice.total) : subtotal + tax;
 
   const hasTax = tax > 0.0001;
   const taxPercent = subtotal > 0 ? (tax / subtotal) * 100 : 0;
@@ -622,168 +629,237 @@ const InvoicePrintPage: React.FC = () => {
     return "HÓA ĐƠN";
   })();
 
-  const isA5 = printMode === "A5_LANDSCAPE";
+  const isSlot = printMode === "A5_SLOT_ON_A4";
+  const pad = isSlot ? CONTENT_PAD_SLOT : CONTENT_PAD_A4;
 
   const borderBoxStyle: React.CSSProperties = {
     ...styles.borderBox,
-    padding: isA5 ? "6mm 8mm 7mm" : "8mm 10mm 10mm",
-    fontSize: isA5 ? 12.5 : 13,
+    padding: `${pad.top}mm ${pad.right}mm ${pad.bottom}mm ${pad.left}mm`,
+    fontSize: isSlot ? 12.5 : 13,
   };
 
   const logoImgStyle: React.CSSProperties = {
     ...styles.logoImg,
-    width: isA5 ? 70 : 85,
-    height: isA5 ? 70 : 85,
+    width: isSlot ? 70 : 85,
+    height: isSlot ? 70 : 85,
+  };
+
+  const companyInfoStyle: React.CSSProperties = {
+    ...styles.companyInfo,
+    fontSize: isSlot ? 11.2 : 12,
+    lineHeight: isSlot ? 1.25 : 1.4,
+  };
+
+  const companyNameStyle: React.CSSProperties = {
+    ...styles.companyName,
+    fontSize: isSlot ? 12.8 : 14,
   };
 
   const invoiceTitleStyle: React.CSSProperties = {
     ...styles.invoiceTitle,
-    fontSize: isA5 ? 16 : 18,
-    margin: isA5 ? "2mm 0 1mm" : "3mm 0 1.5mm",
+    fontSize: isSlot ? 16.5 : 18,
+    margin: isSlot ? "2mm 0 1mm" : "3mm 0 1.5mm",
+  };
+
+  const customerBoxStyle: React.CSSProperties = {
+    ...styles.customerBox,
+    padding: isSlot ? "2px 0" : styles.customerBox.padding,
+    marginBottom: isSlot ? 4 : 6,
+    fontSize: isSlot ? 12.3 : 13,
+  };
+
+  const customerLabelStyle: React.CSSProperties = {
+    ...styles.customerLabel,
+    width: isSlot ? 78 : 85,
+  };
+
+  const customerRowStyle: React.CSSProperties = {
+    ...styles.customerRow,
+    marginBottom: isSlot ? 2 : 3,
   };
 
   const tableStyle: React.CSSProperties = {
     ...styles.table,
-    fontSize: isA5 ? 12 : 12.5,
+    marginTop: isSlot ? 4 : 6,
+    fontSize: isSlot ? 11.7 : 12.5,
   };
 
-  // ✅ A4: đẩy chữ ký xuống đáy trang (đẹp, không lộ “mảng trắng dưới khung”)
-  const signaturesWrapperStyle: React.CSSProperties = isA5
-    ? { ...styles.signaturesWrapper, marginTop: "7mm", marginBottom: "7mm" }
+  const thStyle: React.CSSProperties = { ...styles.th, padding: isSlot ? "2px 3px" : styles.th.padding };
+  const tdStyle: React.CSSProperties = { ...styles.td, padding: isSlot ? "2px 3px" : styles.td.padding };
+
+  const moneyRowLabelStyle: React.CSSProperties = {
+    ...styles.moneyRowLabel,
+    padding: isSlot ? "2px 5px" : styles.moneyRowLabel.padding,
+  };
+  const moneyRowValueStyle: React.CSSProperties = {
+    ...styles.moneyRowValue,
+    padding: isSlot ? "2px 5px" : styles.moneyRowValue.padding,
+  };
+
+  const signaturesWrapperStyle: React.CSSProperties = isSlot
+    ? { ...styles.signaturesWrapper, marginTop: "auto", marginBottom: "2mm" }
     : { ...styles.signaturesWrapper, marginTop: "auto", marginBottom: "10mm" };
 
-  return (
-    <div className="print-root" ref={printRootRef}>
-      <div className="page-frame" aria-hidden="true" />
+  const signaturesRowStyle: React.CSSProperties = {
+    ...styles.signaturesRow,
+    fontSize: isSlot ? 11 : 12,
+  };
 
-      <div style={borderBoxStyle} ref={borderBoxRef} className="border-box">
-        <div style={styles.topSection}>
-          <div style={styles.headerRow}>
-            <div style={styles.logoBox}>
-              <img
-                src="/logo-mcbrother.png"
-                alt="MCBROTHER logo"
-                style={logoImgStyle}
-                onLoad={() => setLayoutTick((t) => t + 1)}
-                onError={() => setLayoutTick((t) => t + 1)}
-              />
-              <div style={styles.companyInfo}>
-                <div style={styles.companyName}>CÔNG TY CỔ PHẦN THIẾT BỊ MCBROTHER</div>
-                <div>Địa chỉ: 33 Đường số 5, Khu dân cư Vĩnh Lộc, Phường Bình Tân, TP. Hồ Chí Minh</div>
-                <div>
-                  Điện thoại: 028.6273.2018 &nbsp;–&nbsp; Mã số thuế: 0312229437
-                </div>
-                <div>Email: mcbrother2013@gmail.com</div>
+  const signatureNoteStyle: React.CSSProperties = {
+    ...styles.signatureNote,
+    fontSize: isSlot ? 10 : 11,
+  };
+
+  const InvoiceContent = (
+    <>
+      <div style={styles.topSection}>
+        <div style={{ ...styles.headerRow, marginBottom: isSlot ? 4 : 6 }}>
+          <div style={{ ...styles.logoBox, gap: isSlot ? 8 : 10 }}>
+            <img
+              src="/logo-mcbrother.png"
+              alt="MCBROTHER logo"
+              style={logoImgStyle}
+              onLoad={() => setLayoutTick((t) => t + 1)}
+              onError={() => setLayoutTick((t) => t + 1)}
+            />
+            <div style={companyInfoStyle}>
+              <div style={companyNameStyle}>CÔNG TY CỔ PHẦN THIẾT BỊ MCBROTHER</div>
+              <div>Địa chỉ: 33 Đường số 5, Khu dân cư Vĩnh Lộc, Phường Bình Tân, TP. Hồ Chí Minh</div>
+              <div>
+                Điện thoại: 028.6273.2018 &nbsp;–&nbsp; Mã số thuế: 0312229437
               </div>
+              <div>Email: mcbrother2013@gmail.com</div>
             </div>
-          </div>
-
-          <div style={invoiceTitleStyle}>{title}</div>
-
-          <div style={styles.invoiceMeta}>
-            <div>
-              Số: <span style={styles.bold}>{invoice.code}</span>
-            </div>
-            <div>
-              Ngày lập: <span style={styles.bold}>{issueDate}</span>
-            </div>
-          </div>
-
-          <div style={styles.customerBox}>
-            <div style={styles.customerRow}>
-              <div style={styles.customerLabel}>Khách hàng:</div>
-              <div style={styles.customerValue}>{customerName}</div>
-            </div>
-            <div style={styles.customerRow}>
-              <div style={styles.customerLabel}>Địa chỉ:</div>
-              <div style={styles.customerValue}>{customerAddr}</div>
-            </div>
-            <div style={styles.customerRow}>
-              <div style={styles.customerLabel}>Điện thoại:</div>
-              <div style={styles.customerValue}>{customerPhone}</div>
-            </div>
-            <div style={styles.customerRow}>
-              <div style={styles.customerLabel}>Mã số thuế:</div>
-              <div style={styles.customerValue}>{customerTax || ""}</div>
-            </div>
-          </div>
-
-          <table style={tableStyle} className="invoice-table">
-            <thead>
-              <tr>
-                <th style={{ ...styles.th, width: "6%" }}>STT</th>
-                <th style={{ ...styles.th, width: "40%" }}>Tên hàng hóa</th>
-                <th style={{ ...styles.th, width: "8%" }}>ĐVT</th>
-                <th style={{ ...styles.th, width: "8%" }}>Số lượng</th>
-                <th style={{ ...styles.th, width: "15%" }}>Đơn giá</th>
-                <th style={{ ...styles.th, width: "15%" }}>Thành tiền</th>
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map((l, idx) => (
-                <tr key={l.id}>
-                  <td style={{ ...styles.td, ...styles.tdCenter }}>{idx + 1}</td>
-                  <td style={styles.td}>{l.name}</td>
-                  <td style={{ ...styles.td, ...styles.tdCenter }}>{l.unit}</td>
-                  <td style={{ ...styles.td, ...styles.tdCenter }}>{l.qty}</td>
-                  <td style={{ ...styles.td, ...styles.tdRight }}>{formatMoney(l.price)}</td>
-                  <td style={{ ...styles.td, ...styles.tdRight }}>{formatMoney(l.amount)}</td>
-                </tr>
-              ))}
-
-              <tr>
-                <td colSpan={5} style={styles.moneyRowLabel}>
-                  Tạm tính
-                </td>
-                <td colSpan={1} style={styles.moneyRowValue}>
-                  {formatMoney(subtotal)} đ
-                </td>
-              </tr>
-
-              {hasTax && (
-                <tr>
-                  <td colSpan={5} style={styles.moneyRowLabel}>
-                    Thuế GTGT ({taxPercentStr}%)
-                  </td>
-                  <td colSpan={1} style={styles.moneyRowValue}>
-                    {formatMoney(tax)} đ
-                  </td>
-                </tr>
-              )}
-
-              <tr>
-                <td colSpan={5} style={styles.moneyRowLabel}>
-                  Tổng cộng
-                </td>
-                <td colSpan={1} style={styles.moneyRowValue}>
-                  {formatMoney(total)} đ
-                </td>
-              </tr>
-            </tbody>
-          </table>
-
-          <div style={styles.textAmountRow}>
-            Số tiền bằng chữ: <span style={styles.bold}>{totalText}</span>
           </div>
         </div>
 
-        <div style={signaturesWrapperStyle} className="signatures-wrapper">
-          <div style={styles.signaturesRow}>
-            <div style={styles.signatureCol}>
-              <div style={styles.signatureLabel}>Người lập phiếu</div>
-              <div style={styles.signatureNote}>(Ký, ghi rõ họ tên)</div>
-            </div>
-            <div style={styles.signatureCol}>
-              <div style={styles.signatureLabel}>Người giao hàng</div>
-              <div style={styles.signatureNote}>(Ký, ghi rõ họ tên)</div>
-            </div>
-            <div style={styles.signatureCol}>
-              <div style={styles.signatureLabel}>Khách hàng</div>
-              <div style={styles.signatureNote}>(Ký, ghi rõ họ tên)</div>
-            </div>
+        <div style={invoiceTitleStyle}>{title}</div>
+
+        <div style={{ ...styles.invoiceMeta, marginBottom: isSlot ? 4 : 6 }}>
+          <div>
+            Số: <span style={styles.bold}>{invoice.code}</span>
+          </div>
+          <div>
+            Ngày lập: <span style={styles.bold}>{issueDate}</span>
+          </div>
+        </div>
+
+        <div style={customerBoxStyle}>
+          <div style={customerRowStyle}>
+            <div style={customerLabelStyle}>Khách hàng:</div>
+            <div style={styles.customerValue}>{customerName}</div>
+          </div>
+          <div style={customerRowStyle}>
+            <div style={customerLabelStyle}>Địa chỉ:</div>
+            <div style={styles.customerValue}>{customerAddr}</div>
+          </div>
+          <div style={customerRowStyle}>
+            <div style={customerLabelStyle}>Điện thoại:</div>
+            <div style={styles.customerValue}>{customerPhone}</div>
+          </div>
+          <div style={{ ...customerRowStyle, marginBottom: 0 }}>
+            <div style={customerLabelStyle}>Mã số thuế:</div>
+            <div style={styles.customerValue}>{customerTax || ""}</div>
+          </div>
+        </div>
+
+        <table style={tableStyle} className="invoice-table">
+          <thead>
+            <tr>
+              <th style={{ ...thStyle, width: "6%" }}>STT</th>
+              <th style={{ ...thStyle, width: "40%" }}>Tên hàng hóa</th>
+              <th style={{ ...thStyle, width: "8%" }}>ĐVT</th>
+              <th style={{ ...thStyle, width: "8%" }}>Số lượng</th>
+              <th style={{ ...thStyle, width: "15%" }}>Đơn giá</th>
+              <th style={{ ...thStyle, width: "15%" }}>Thành tiền</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((l, idx) => (
+              <tr key={l.id}>
+                <td style={{ ...tdStyle, ...styles.tdCenter }}>{idx + 1}</td>
+                <td style={tdStyle}>{l.name}</td>
+                <td style={{ ...tdStyle, ...styles.tdCenter }}>{l.unit}</td>
+                <td style={{ ...tdStyle, ...styles.tdCenter }}>{l.qty}</td>
+                <td style={{ ...tdStyle, ...styles.tdRight }}>{formatMoney(l.price)}</td>
+                <td style={{ ...tdStyle, ...styles.tdRight }}>{formatMoney(l.amount)}</td>
+              </tr>
+            ))}
+
+            <tr>
+              <td colSpan={5} style={moneyRowLabelStyle}>
+                Tạm tính
+              </td>
+              <td colSpan={1} style={moneyRowValueStyle}>
+                {formatMoney(subtotal)} đ
+              </td>
+            </tr>
+
+            {hasTax && (
+              <tr>
+                <td colSpan={5} style={moneyRowLabelStyle}>
+                  Thuế GTGT ({taxPercentStr}%)
+                </td>
+                <td colSpan={1} style={moneyRowValueStyle}>
+                  {formatMoney(tax)} đ
+                </td>
+              </tr>
+            )}
+
+            <tr>
+              <td colSpan={5} style={moneyRowLabelStyle}>
+                Tổng cộng
+              </td>
+              <td colSpan={1} style={moneyRowValueStyle}>
+                {formatMoney(total)} đ
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div style={{ ...styles.textAmountRow, marginTop: isSlot ? 4 : 6, fontSize: isSlot ? 11.7 : 12.5 }}>
+          Số tiền bằng chữ: <span style={styles.bold}>{totalText}</span>
+        </div>
+      </div>
+
+      <div style={signaturesWrapperStyle} className="signatures-wrapper">
+        <div style={signaturesRowStyle}>
+          <div style={styles.signatureCol}>
+            <div style={styles.signatureLabel}>Người lập phiếu</div>
+            <div style={signatureNoteStyle}>(Ký, ghi rõ họ tên)</div>
+          </div>
+          <div style={styles.signatureCol}>
+            <div style={styles.signatureLabel}>Người giao hàng</div>
+            <div style={signatureNoteStyle}>(Ký, ghi rõ họ tên)</div>
+          </div>
+          <div style={styles.signatureCol}>
+            <div style={styles.signatureLabel}>Khách hàng</div>
+            <div style={signatureNoteStyle}>(Ký, ghi rõ họ tên)</div>
           </div>
         </div>
       </div>
+    </>
+  );
+
+  return (
+    <div className="print-root" data-mode={printMode}>
+      <div ref={mmRef} className="mm-ruler" />
+
+      {isSlot ? (
+        <div className="a5-slot" aria-hidden={false}>
+          <div className="a5-frame" aria-hidden="true" />
+          <div style={borderBoxStyle} ref={borderBoxRef} className="border-box">
+            {InvoiceContent}
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="a4-frame" aria-hidden="true" />
+          <div style={borderBoxStyle} ref={borderBoxRef} className="border-box">
+            {InvoiceContent}
+          </div>
+        </>
+      )}
     </div>
   );
 };
