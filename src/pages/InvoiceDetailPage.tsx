@@ -1671,6 +1671,7 @@ const InvoiceDetailPage: React.FC = () => {
 
   const returnState = getReturnState(invoice);
   const returnColor = returnState === "FULL" ? "#7c3aed" : returnState === "PARTIAL" ? "#6d28d9" : "#6b7280";
+  const canEditInvoiceCode = status === "DRAFT" && !lockedForStaff;
 
   return (
     <div style={styles.page}>
@@ -1704,15 +1705,21 @@ const InvoiceDetailPage: React.FC = () => {
               <div style={styles.formRow}>
                 <label style={styles.label}>Số hóa đơn *</label>
                 <input
-                  style={{
-                    ...styles.input,
-                    background: "#f8fafc",
-                    cursor: "not-allowed",
-                  }}
-                  value={invoice.code ?? ""}
-                  readOnly
-                  placeholder="số tự nhảy"
-                />
+                style={{
+                  ...styles.input,
+                  background: canEditInvoiceCode ? "#fff" : "#f8fafc",
+                  cursor: canEditInvoiceCode ? "text" : "not-allowed",
+                }}
+                value={invoice.code ?? ""}
+                disabled={!canEditInvoiceCode}
+                placeholder={canEditInvoiceCode ? "Nhập mã hóa đơn (để trống thì hệ thống tự nhảy)" : "số tự nhảy"}
+                onChange={(e) => {
+                  if (!canEditInvoiceCode) return;
+                  markDirty();
+                  updateInvoice({ code: e.target.value });
+                }}
+              />
+
               </div>
 
               <div style={{ ...styles.formRow, ...styles.rowInline }}>
