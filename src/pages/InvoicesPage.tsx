@@ -73,7 +73,6 @@ function formatDateDisplay(raw?: string) {
   return `${day}/${month}/${year}`;
 }
 
-
 function ymLocalNow() {
   const d = new Date();
   const yyyy = d.getFullYear();
@@ -84,7 +83,6 @@ function ymLocalNow() {
 function ymFromYmd(dateStr?: string) {
   if (!dateStr) return "";
   const s = String(dateStr).trim();
-  // Expect yyyy-mm-dd; nếu BE trả ISO full thì vẫn slice được yyyy-mm
   return s.length >= 7 ? s.slice(0, 7) : "";
 }
 
@@ -93,7 +91,6 @@ function isInCurrentMonth(issueDate?: string) {
   if (!ym) return false;
   return ym === ymLocalNow();
 }
-
 
 function unwrapList(res: any): any[] {
   const body = res?.data ?? {};
@@ -124,7 +121,6 @@ function clamp0(n: any) {
   return Math.max(0, toNum(n));
 }
 
-// ✅ parse input tiền: nhận cả "." "," " " -> số
 function parseMoneyInputToNumber(raw: string): number {
   const digits = String(raw || "").replace(/[^\d]/g, "");
   if (!digits) return 0;
@@ -146,14 +142,6 @@ function getReturnedTotal(inv: InvoiceListItem) {
   return 0;
 }
 
-/**
- * ✅ Tính "tổng còn tính thu/chi" sau trả hàng (Gross sau trả, chưa trừ hold):
- * ƯU TIÊN:
- * - returnMeta.netTotal
- * - netTotal
- * - total - returnedTotal
- * - total
- */
 function calcSalesNetTotal(inv: InvoiceListItem) {
   const total = clamp0(inv.totalAmount);
 
@@ -168,24 +156,12 @@ function calcSalesNetTotal(inv: InvoiceListItem) {
   return total;
 }
 
-/**
- * ✅ Hold amount:
- * ƯU TIÊN:
- * - returnMeta.holdAmount (nếu BE đã tính riêng cho sales)
- * - warrantyHoldAmount (khi hasWarrantyHold)
- */
 function getHoldAmount(inv: InvoiceListItem) {
   if (inv.type === "SALES" && inv.returnMeta?.holdAmount != null) return clamp0(inv.returnMeta.holdAmount);
   if (inv.hasWarrantyHold === true) return clamp0(inv.warrantyHoldAmount);
   return 0;
 }
 
-/**
- * ✅ Collectible total (NORMAL) = (Gross sau trả) - hold
- * ƯU TIÊN:
- * - returnMeta.collectible (BE đã tính chuẩn)
- * - tự tính: baseNet - hold
- */
 function getCollectibleTotal(inv: InvoiceListItem) {
   if (inv.type === "SALES" && inv.returnMeta?.collectible != null) return clamp0(inv.returnMeta.collectible);
 
@@ -194,13 +170,6 @@ function getCollectibleTotal(inv: InvoiceListItem) {
   return Math.max(0, baseNet - hold);
 }
 
-/**
- * ✅ Full return (tất toán về mặt công nợ):
- * ƯU TIÊN:
- * - returnMeta.state === FULL
- * - collectible <= 0 và returnedTotal > 0
- * - returnedTotal >= total (fallback)
- */
 function isFullyReturned(inv: InvoiceListItem) {
   if (inv.type !== "SALES") return false;
 
@@ -226,11 +195,6 @@ function isPartialReturned(inv: InvoiceListItem) {
   return returned > 0.0001 && !isFullyReturned(inv);
 }
 
-/**
- * ✅ remaining NORMAL (collectible) based on:
- * - collectibleTotal (from BE if possible)
- * - paidNormal (from BE)
- */
 function calcCollectibleRemaining(params: { collectibleTotal: number; paidNormal: number }) {
   const collectibleTotal = clamp0(params.collectibleTotal);
   const paidNormal = clamp0(params.paidNormal);
@@ -239,14 +203,13 @@ function calcCollectibleRemaining(params: { collectibleTotal: number; paidNormal
 }
 
 function derivePaymentStatus(inv: InvoiceListItem): PaymentStatus {
-  if (isFullyReturned(inv)) return "PAID"; // sẽ bị override badge ở UI (đã trả hàng full)
+  if (isFullyReturned(inv)) return "PAID";
 
   const collectibleTotal = getCollectibleTotal(inv);
   const paid = clamp0(inv.paidAmount);
 
   if (paid <= 0.0001) return "UNPAID";
   if (paid + 0.0001 >= collectibleTotal && collectibleTotal > 0) return "PAID";
-  // collectibleTotal = 0 (hiếm) => coi như PAID
   if (collectibleTotal <= 0.0001) return "PAID";
   return "PARTIAL";
 }
@@ -257,6 +220,28 @@ function hasAnyReturnData(inv: InvoiceListItem) {
   if (inv.netTotal != null) return true;
   if (inv.returnedTotal != null && clamp0(inv.returnedTotal) > 0) return true;
   return false;
+}
+
+/** ✅ Sort key for invoice code: numeric trailing digits if possible */
+function invoiceCodeToSortParts(code: string) {
+  const s = String(code ?? "").trim();
+
+  const m1 = s.match(/^(.*?)(\d+)\s*$/);
+  if (m1) {
+    const prefix = (m1[1] || "").trim();
+    const num = Number(m1[2]);
+    return { prefix, num: Number.isFinite(num) ? num : Number.POSITIVE_INFINITY, raw: s };
+  }
+
+  const m2 = s.match(/(\d+)(?!.*\d)/);
+  if (m2) {
+    const num = Number(m2[1]);
+    const idx = s.lastIndexOf(m2[1]);
+    const prefix = idx >= 0 ? s.slice(0, idx).trim() : s;
+    return { prefix, num: Number.isFinite(num) ? num : Number.POSITIVE_INFINITY, raw: s };
+  }
+
+  return { prefix: s, num: Number.POSITIVE_INFINITY, raw: s };
 }
 
 /** ========================= UI: Modal ========================= **/
@@ -300,7 +285,10 @@ const InvoicesPage: React.FC = () => {
   const [search, setSearch] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [typeFilter, setTypeFilter] = useState<InvoiceTypeFilter>("");
+
+  // ✅ mặc định chỉ xem hóa đơn BÁN
+  const [typeFilter, setTypeFilter] = useState<InvoiceTypeFilter>("SALES");
+
   const [loading, setLoading] = useState(false);
   const [invoices, setInvoices] = useState<InvoiceListItem[]>([]);
 
@@ -440,11 +428,9 @@ const InvoicesPage: React.FC = () => {
 
           totalAmount: total,
 
-          // legacy fields
           netTotal: x.netTotal != null ? toNum(x.netTotal) : undefined,
           returnedTotal: x.returnedTotal != null ? toNum(x.returnedTotal) : undefined,
 
-          // ✅ ưu tiên returnMeta nếu có
           returnMeta: rm,
 
           paidAmount: x.paidAmount != null ? toNum(x.paidAmount) : 0,
@@ -455,6 +441,19 @@ const InvoicesPage: React.FC = () => {
           paymentStatus: (x.paymentStatus as PaymentStatus) ?? "UNPAID",
           status: (x.status as InvoiceStatus) ?? "DRAFT",
         };
+      });
+
+      // ✅ SORT mã hóa đơn từ LỚN -> BÉ (00099, 00098, ... 00002, 00001)
+      mapped.sort((a, b) => {
+        const pa = invoiceCodeToSortParts(a.code);
+        const pb = invoiceCodeToSortParts(b.code);
+
+        const pfx = pa.prefix.localeCompare(pb.prefix, "vi", { sensitivity: "base" });
+        if (pfx !== 0) return pfx;
+
+        if (pa.num !== pb.num) return pb.num - pa.num; // ✅ DESC (lớn -> bé)
+
+        return pb.raw.localeCompare(pa.raw, "vi", { numeric: true, sensitivity: "base" }); // tie-break DESC
       });
 
       setInvoices(mapped);
@@ -472,7 +471,7 @@ const InvoicesPage: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchInvoices("", "", "", "");
+    fetchInvoices("", "", "", "SALES");
     loadAccounts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -511,8 +510,9 @@ const InvoicesPage: React.FC = () => {
     const emptyTo = "";
     setFrom(emptyFrom);
     setTo(emptyTo);
-    setTypeFilter("");
-    fetchInvoices(search.trim(), emptyFrom, emptyTo, "");
+
+    setTypeFilter("SALES");
+    fetchInvoices(search.trim(), emptyFrom, emptyTo, "SALES");
   };
 
   const handleDelete = async (inv: InvoiceListItem) => {
@@ -763,7 +763,6 @@ const InvoicesPage: React.FC = () => {
       );
     }
 
-    // ✅ UI hiển thị theo số liệu (paidAmount vs collectible) để tránh lệch status do BE/FE
     const st = derivePaymentStatus(inv);
     let label = "";
     let className = "inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border whitespace-nowrap ";
@@ -907,10 +906,6 @@ const InvoicesPage: React.FC = () => {
 
             {loading && <span className="text-xs text-gray-500">Đang tải dữ liệu...</span>}
           </div>
-
-          {/* <div className="text-xs text-gray-500">
-            * Trang này chỉ hiển thị <b>Hóa đơn Bán</b> và <b>Hóa đơn Nhập</b>. Phiếu trả hàng nằm ở menu riêng.
-          </div> */}
         </form>
 
         <div className="mt-4 border border-gray-200 rounded-md overflow-hidden">
@@ -1002,13 +997,10 @@ const InvoicesPage: React.FC = () => {
                         {formatDateDisplay(inv.date)}
                       </td>
 
-                      <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap truncate">
-                        {inv.partnerName}
-                      </td>
+                      <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap truncate">{inv.partnerName}</td>
 
                       <td className="px-3 py-2 border-t border-gray-200 text-right whitespace-nowrap">
                         <div className="flex flex-col items-end leading-tight gap-0.5">
-                          {/* ✅ luôn show Gross total để tránh hiểu nhầm "hóa đơn thành 6tr" */}
                           <div className="font-medium">{formatMoney(grossTotal)} đ</div>
                         </div>
                       </td>
@@ -1109,7 +1101,8 @@ const InvoicesPage: React.FC = () => {
                           <button
                             type="button"
                             className={
-                              "hover:underline " + (inv.status === "DRAFT" ? "text-blue-600" : "text-gray-400 cursor-not-allowed")
+                              "hover:underline " +
+                              (inv.status === "DRAFT" ? "text-blue-600" : "text-gray-400 cursor-not-allowed")
                             }
                             disabled={inv.status !== "DRAFT"}
                             onClick={() => navigate(`/invoices/${inv.id}`)}
@@ -1139,7 +1132,10 @@ const InvoicesPage: React.FC = () => {
                           <button
                             type="button"
                             disabled={!canDelete(inv)}
-                            className={"hover:underline " + (canDelete(inv) ? "text-red-600" : "text-gray-400 cursor-not-allowed")}
+                            className={
+                              "hover:underline " +
+                              (canDelete(inv) ? "text-red-600" : "text-gray-400 cursor-not-allowed")
+                            }
                             onClick={() => handleDelete(inv)}
                           >
                             Xóa
@@ -1315,7 +1311,6 @@ const InvoicesPage: React.FC = () => {
           (() => {
             const grossTotal = clamp0(payTarget.totalAmount);
 
-            // gross after return
             const netAfterReturn = payTarget.type === "SALES" ? calcSalesNetTotal(payTarget) : grossTotal;
             const returnedGross = payTarget.type === "SALES" ? getReturnedTotal(payTarget) : 0;
 
@@ -1383,7 +1378,6 @@ const InvoicesPage: React.FC = () => {
                   </div>
                 )}
 
-                {/* luôn show collectible summary */}
                 <div className="grid grid-cols-3 gap-2">
                   <div className="p-2 rounded-md border bg-gray-50">
                     <div className="text-xs text-gray-500">Collectible (NORMAL)</div>
