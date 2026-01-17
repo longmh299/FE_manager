@@ -128,6 +128,13 @@ function parseMoneyInputToNumber(raw: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function normalizePaymentStatus(v: any): PaymentStatus | undefined {
+  if (v == null) return undefined;
+  const s = String(v).trim().toUpperCase();
+  if (s === "PAID" || s === "UNPAID" || s === "PARTIAL") return s as PaymentStatus;
+  return undefined;
+}
+
 function getReturnState(inv: InvoiceListItem): "NONE" | "PARTIAL" | "FULL" {
   if (inv.type !== "SALES") return "NONE";
   const st = inv.returnMeta?.state;
@@ -202,16 +209,45 @@ function calcCollectibleRemaining(params: { collectibleTotal: number; paidNormal
   return { collectibleTotal, remainingNormal };
 }
 
+/**
+ * ✅ Fallback derive (khi BE không trả paymentStatus)
+ * BUG cũ: invoice total=0 => paid=0 bị UNPAID do check paid trước.
+ * Fix: check collectibleTotal <= 0 trước.
+ */
 function derivePaymentStatus(inv: InvoiceListItem): PaymentStatus {
   if (isFullyReturned(inv)) return "PAID";
 
   const collectibleTotal = getCollectibleTotal(inv);
+
+  // ✅ nếu không có gì để thu/chi => coi như PAID
+  if (collectibleTotal <= 0.0001) return "PAID";
+
   const paid = clamp0(inv.paidAmount);
 
   if (paid <= 0.0001) return "UNPAID";
-  if (paid + 0.0001 >= collectibleTotal && collectibleTotal > 0) return "PAID";
-  if (collectibleTotal <= 0.0001) return "PAID";
+  if (paid + 0.0001 >= collectibleTotal) return "PAID";
   return "PARTIAL";
+}
+
+/**
+ * ✅ Ưu tiên BE paymentStatus nếu có, nhưng vẫn "chốt" PAID khi collectibleTotal <= 0.
+ */
+function resolvePaymentStatus(inv: InvoiceListItem): PaymentStatus {
+  if (isFullyReturned(inv)) return "PAID";
+
+  const collectibleTotal = getCollectibleTotal(inv);
+  if (collectibleTotal <= 0.0001) return "PAID";
+
+  const be = inv.paymentStatus;
+  if (be === "PAID" || be === "UNPAID" || be === "PARTIAL") {
+    // sanity nhẹ: nếu BE nói UNPAID nhưng paidAmount > 0 thì hiển thị PARTIAL
+    const paid = clamp0(inv.paidAmount);
+    if (be === "UNPAID" && paid > 0.0001) return "PARTIAL";
+    if (be === "PARTIAL" && paid + 0.0001 >= collectibleTotal) return "PAID";
+    return be;
+  }
+
+  return derivePaymentStatus(inv);
 }
 
 function hasAnyReturnData(inv: InvoiceListItem) {
@@ -438,7 +474,7 @@ const InvoicesPage: React.FC = () => {
           hasWarrantyHold: x.hasWarrantyHold === true,
           warrantyHoldAmount: x.warrantyHoldAmount != null ? toNum(x.warrantyHoldAmount) : 0,
 
-          paymentStatus: (x.paymentStatus as PaymentStatus) ?? "UNPAID",
+          paymentStatus: normalizePaymentStatus(x.paymentStatus),
           status: (x.status as InvoiceStatus) ?? "DRAFT",
         };
       });
@@ -763,7 +799,7 @@ const InvoicesPage: React.FC = () => {
       );
     }
 
-    const st = derivePaymentStatus(inv);
+    const st = resolvePaymentStatus(inv);
     let label = "";
     let className = "inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border whitespace-nowrap ";
 
@@ -966,10 +1002,12 @@ const InvoicesPage: React.FC = () => {
                   const paidNormal = clamp0(inv.paidAmount);
                   const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal, paidNormal });
 
+                  const paySt = resolvePaymentStatus(inv);
+
                   const canPayBase =
                     inv.status === "APPROVED" &&
                     !isFullyReturned(inv) &&
-                    (derivePaymentStatus(inv) === "UNPAID" || derivePaymentStatus(inv) === "PARTIAL") &&
+                    (paySt === "UNPAID" || paySt === "PARTIAL") &&
                     remainingNormal > 0;
 
                   const canPay = isAdmin && canPayBase && isInCurrentMonth(inv.date);
