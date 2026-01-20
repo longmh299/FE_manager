@@ -379,39 +379,38 @@ const InvoicesPage: React.FC = () => {
     setConfirmOpen(true);
   };
 
-  const loadAccounts = async () => {
-    try {
-      setAccountsLoading(true);
-      const res = await api.get("/payment-accounts", { params: { active: 1, _ts: Date.now() } });
-      const arr: any[] = Array.isArray(res?.data) ? res.data : Array.isArray(res?.data?.data) ? res.data.data : [];
-      const mapped: PaymentAccount[] = arr
-        .map((a: any) => ({
-          id: String(a.id),
-          code: String(a.code || ""),
-          name: String(a.name || ""),
-        }))
-        .filter((a) => a.id && a.id !== "undefined" && a.id !== "null");
+const loadAccounts = async () => {
+  try {
+    setAccountsLoading(true);
 
-      setAccounts(mapped);
+    const res = await api.get("/payment-accounts", {
+      params: { active: 1, _ts: Date.now() },
+    });
 
-      let last = "";
-      try {
-        last = String(localStorage.getItem(LS_LAST_PAY_ACCOUNT) || "");
-      } catch {}
-      const canUseLast = last && mapped.some((x) => x.id === last);
+    const arr: any[] = Array.isArray(res?.data)
+      ? res.data
+      : Array.isArray(res?.data?.data)
+      ? res.data.data
+      : [];
 
-      if (canUseLast) {
-        setPayAccountId(last);
-      } else if (!payAccountId && mapped.length > 0) {
-        setPayAccountId(mapped[0].id);
-      }
-    } catch (err) {
-      console.error("load payment accounts error", err);
-      setAccounts([]);
-    } finally {
-      setAccountsLoading(false);
-    }
-  };
+    const mapped: PaymentAccount[] = arr
+      .map((a: any) => ({
+        id: String(a.id),
+        code: String(a.code || ""),
+        name: String(a.name || ""),
+      }))
+      .filter((a) => a.id && a.id !== "undefined" && a.id !== "null");
+
+    // ✅ Chỉ load danh sách tài khoản, KHÔNG auto chọn tài khoản nào
+    setAccounts(mapped);
+  } catch (err) {
+    console.error("load payment accounts error", err);
+    setAccounts([]);
+  } finally {
+    setAccountsLoading(false);
+  }
+};
+
 
   const fetchInvoices = async (q: string, fromVal: string, toVal: string, typeVal: InvoiceTypeFilter) => {
     try {
@@ -693,7 +692,8 @@ const InvoicesPage: React.FC = () => {
     setPayTarget(inv);
     setPayAmount(remainingNormal);
     setPayAmountText(formatMoney(remainingNormal));
-    if (!payAccountId && accounts.length > 0) setPayAccountId(accounts[0].id);
+    // if (!payAccountId && accounts.length > 0) setPayAccountId(accounts[0].id);
+    setPayAccountId("");
     setPayOpen(true);
   };
 
@@ -1453,27 +1453,39 @@ const InvoicesPage: React.FC = () => {
                   <div>
                     <label className="block text-xs font-semibold mb-1">Tài khoản thanh toán</label>
                     <select
-                      value={payAccountId}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setPayAccountId(v);
-                        try {
-                          localStorage.setItem(LS_LAST_PAY_ACCOUNT, String(v));
-                        } catch {}
-                      }}
-                      className="w-full border border-gray-300 rounded-md px-2 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
-                      disabled={!isAdmin || accountsLoading || paySubmitting}
-                    >
-                      {accounts.length === 0 ? (
-                        <option value="">Chưa có tài khoản</option>
-                      ) : (
-                        accounts.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.code} - {a.name}
+                        value={payAccountId}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setPayAccountId(v);
+
+                          // ✅ chỉ lưu khi user chọn tài khoản thật
+                          if (v) {
+                            try {
+                              localStorage.setItem(LS_LAST_PAY_ACCOUNT, String(v));
+                            } catch {}
+                          }
+                        }}
+                        className="w-full border border-gray-300 rounded-md px-2 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                        disabled={!isAdmin || accountsLoading || paySubmitting}
+                      >
+                        {/* ✅ placeholder bắt buộc chọn */}
+                        <option value="" disabled>
+                          -- Chọn tài khoản --
+                        </option>
+
+                        {accounts.length === 0 ? (
+                          <option value="" disabled>
+                            Chưa có tài khoản
                           </option>
-                        ))
-                      )}
-                    </select>
+                        ) : (
+                          accounts.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.code} - {a.name}
+                            </option>
+                          ))
+                        )}
+                      </select>
+
                   </div>
                 </div>
 
