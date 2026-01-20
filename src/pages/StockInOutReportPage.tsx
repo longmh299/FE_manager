@@ -369,6 +369,7 @@ const StockInOutReportPage: React.FC = () => {
               value={from}
               onChange={(e) => setFrom(e.target.value)}
               className="border border-slate-300 rounded px-3 py-2"
+
             />
           </div>
 
@@ -387,6 +388,12 @@ const StockInOutReportPage: React.FC = () => {
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                if (!loading) load();
+              }
+            }}
               placeholder="Nhập tên hàng hoặc SKU..."
               className="w-full border border-slate-300 rounded px-3 py-2"
             />
