@@ -118,6 +118,7 @@ function actionVi(action: string) {
     INVOICE_APPROVE: "Duyệt hóa đơn",
     INVOICE_REJECT: "Từ chối hóa đơn",
     INVOICE_CANCEL: "Hủy hóa đơn",
+    INVOICE_STATUS_CHANGE: "Đổi trạng thái hóa đơn (admin)",
 
     PAYMENT_CREATE: "Tạo phiếu thu/chi",
     PAYMENT_UPDATE: "Cập nhật phiếu thu/chi",
@@ -421,9 +422,16 @@ function buildBusinessNarrative(detail: any, diffs: DiffRow[]) {
   const meta = detail?.meta;
 
   const lines: string[] = [];
-
+  // ✅ show reason/toStatus nếu có
+  const reason = meta?.reason;
+  const toStatus = meta?.toStatus;
   // 1) Diễn giải theo action quen thuộc
   const A = action.toUpperCase();
+  if (A === "INVOICE_STATUS_CHANGE") {
+  lines.push("Admin đã đổi trạng thái hóa đơn.");
+  if (toStatus) lines.push(`• Chuyển sang: ${String(toStatus)}`);
+  if (reason) lines.push(`• Lý do: ${String(reason)}`);
+}
 
   if (A === "PAYMENT_APPLY_ALLOCATIONS") {
     lines.push("Hệ thống đã phân bổ số tiền từ phiếu thu/chi vào các hóa đơn liên quan.");
@@ -821,6 +829,16 @@ const AuditLogsPage: React.FC = () => {
                           </span>
                           <span className="text-[11px] text-slate-500 font-mono">{String(r.action || "")}</span>
                         </div>
+                        {(r as any)?.meta?.reason ? (
+                          <div className="text-[12px] text-slate-700 mt-1">
+                            <span className="text-slate-500">Lý do:</span>{" "}
+                            <span className="font-medium">
+                              {String((r as any).meta.reason).slice(0, 80)}
+                              {String((r as any).meta.reason).length > 80 ? "…" : ""}
+                            </span>
+                          </div>
+                        ) : null}
+
                       </td>
 
                       <td className="px-4 py-3 border-b border-slate-100">

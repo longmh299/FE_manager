@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation, Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { LowStockBell } from "./LowStockBell";
+
 
 type GroupKey =
   | "inventory"
@@ -108,6 +110,7 @@ const Layout: React.FC = () => {
     if (canSeeAuditLogs) {
       list.push({ to: "audit-logs", label: "Lịch sử thao tác" });
     }
+    if (isAdmin) list.push({ to: "invoice-status", label: "Sửa trạng thái hóa đơn" });
 
     return list;
   }, [isAdmin, canSeeAuditLogs]);
@@ -293,13 +296,18 @@ const Layout: React.FC = () => {
           <h2 className="font-semibold text-slate-800 text-lg">
             Hệ thống quản lý kho
           </h2>
+          <div className="flex items-center gap-2">
+            <LowStockBell />
+            {/* avatar, menu khác */}
+          </div>
         </header>
-
+        
         <div className="flex-1 p-4 overflow-auto">
           <Outlet />
         </div>
       </main>
     </div>
+    
   );
 };
 

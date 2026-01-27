@@ -30,8 +30,11 @@ import MySalesDashboardPage from "./pages/MySalesDashboardPage";
 import AuditLogsPage from "./pages/AuditLogsPage";
 import StockInOutReportPage from "./pages/StockInOutReportPage";
 
+import InvoiceStatusAdminPage from "./pages/InvoiceStatusAdminPage";
+
 const App: React.FC = () => {
   return (
+    <>
     <Routes>
       <Route path="/login" element={<LoginPage />} />
 
@@ -55,7 +58,7 @@ const App: React.FC = () => {
         <Route path="invoices" element={<InvoicesPage />} />
         <Route path="invoices/new" element={<InvoiceDetailPage />} />
         <Route path="invoices/:id" element={<InvoiceDetailPage />} />
-
+        <Route path="invoice-status" element={<InvoiceStatusAdminPage />} />
         {/* returns */}
         <Route path="sales-returns" element={<SalesReturnsPage />} />
         <Route path="sales-returns/new" element={<SalesReturnFormPage />} />
@@ -84,10 +87,15 @@ const App: React.FC = () => {
         <Route path="/me/sales" element={<MySalesDashboardPage />} />
         <Route path="audit-logs" element={<AuditLogsPage />} />
         <Route path="reports/stock-inout" element={<StockInOutReportPage />} />
+        
       </Route>
       <Route path="invoices/:id/print" element={<InvoicePrintPage />} />
       <Route path="*" element={<div className="p-4">404 Not Found</div>} />
+      
     </Routes>
+    
+    </>
+
   );
 };
 export default App;
