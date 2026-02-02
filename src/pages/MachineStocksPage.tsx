@@ -196,14 +196,38 @@ const MachineStocksPage: React.FC = () => {
     setQ(searchText);
   };
 
-  const handleExport = () => {
-    const base = getApiBaseUrl();
-    const url =
-      base +
-      "/api/stocks/summary-by-item/export?kind=MACHINE" +
-      (q ? `&q=${encodeURIComponent(q)}` : "");
-    window.open(url, "_blank");
-  };
+ const handleExport = async () => {
+  try {
+    // gọi qua axios instance (api) để có Authorization header
+    const res = await api.get("/stocks/summary-by-item/export", {
+      params: { kind: "MACHINE", q: q?.trim() || undefined },
+      responseType: "blob",
+    });
+
+    // tạo file name gọn gàng
+    const suffix = q?.trim() ? `_${q.trim().replace(/\s+/g, "_")}` : "";
+    const filename = `ton-kho-may${suffix}.xlsx`;
+
+    const blob = new Blob([res.data], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+
+    showToast("success", "Đã xuất Excel tồn máy.");
+  } catch (e: any) {
+    console.error("export error", e);
+    const msg = e?.response?.data?.message || e?.message || "Xuất Excel thất bại.";
+    showToast("error", msg);
+  }
+};
 
   const goToPage = (p: number) => {
     if (p < 1 || p > totalPages) return;

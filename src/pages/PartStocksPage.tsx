@@ -251,12 +251,40 @@ const PartStocksPage: React.FC = () => {
     setQ(searchText);
   };
 
-  const handleExport = () => {
-    const base = getApiBaseUrl();
-    const url =
-      base + "/api/stocks/summary-by-item/export?kind=PART" + (q ? `&q=${encodeURIComponent(q)}` : "");
-    window.open(url, "_blank");
-  };
+  const handleExport = async () => {
+  try {
+    const res = await api.get("/stocks/summary-by-item/export", {
+      params: {
+        kind: "PART",
+        q: q?.trim() || undefined,
+      },
+      responseType: "blob",
+    });
+
+    const suffix = q?.trim() ? `_${q.trim().replace(/\s+/g, "_")}` : "";
+    const filename = `ton-kho-linh-kien${suffix}.xlsx`;
+
+    const blob = new Blob([res.data], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+
+    showToast("success", "Đã xuất Excel tồn linh kiện.");
+  } catch (e: any) {
+    console.error("export part stock error", e);
+    const msg = e?.response?.data?.message || e?.message || "Xuất Excel thất bại.";
+    showToast("error", msg);
+  }
+};
+
 
   const goToPage = (p: number) => {
     if (p < 1 || p > totalPages) return;
