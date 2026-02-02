@@ -77,24 +77,25 @@ function safeStr(v: any) {
 function hasVal(v: any) {
   return v !== undefined && v !== null;
 }
-
 function unwrapData<T = any>(resData: any): T {
   if (resData && typeof resData === "object" && "ok" in resData && "data" in resData) {
     return resData.data as T;
   }
   return resData as T;
 }
+function monthLabelVN(m: number) {
+  return `Tháng ${m}`;
+}
 
-// pick common helpers
+/* ===== pick common helpers ===== */
 function pickTotal(d: any): number {
   return num(d?.invoiceTotal ?? d?.totalAmount ?? d?.total ?? d?.grandTotal ?? 0);
 }
 function pickPaidGross(d: any): number {
-  // ưu tiên paid/paidAmount; ưu tiên collectedGross nếu có; fallback collected
   return num(d?.paid ?? d?.paidAmount ?? d?.paidTotal ?? d?.collectedGross ?? d?.collected ?? 0);
 }
 
-// invoice-history helpers
+/* ===== invoice-history helpers ===== */
 function pickInvId(d: any): string {
   return safeStr(d?.id ?? d?.invoiceId ?? "");
 }
@@ -124,7 +125,6 @@ function pickInvHoldOutstanding(d: any): number {
     return num(d?.holdOutstanding ?? d?.warrantyOutstanding ?? 0);
   }
 
-  // fallback theo invoice warranty fields
   const total = pickTotal(d);
   const hasHold = Boolean(d?.hasWarrantyHold);
   if (!hasHold) return 0;
@@ -136,12 +136,10 @@ function pickInvHoldOutstanding(d: any): number {
 }
 
 function pickInvNormalOutstanding(d: any): number {
-  // ✅ nếu BE có field (dù = 0) thì dùng, không fallback
   if (hasVal(d?.normalOutstanding) || hasVal(d?.outstandingNormal)) {
     return num(d?.normalOutstanding ?? d?.outstandingNormal ?? 0);
   }
 
-  // fallback: total - paid - hold
   const total = pickTotal(d);
   const paidGross = pickPaidGross(d);
   const outstanding = Math.max(0, total - paidGross);
@@ -153,7 +151,6 @@ function pickInvTotalOutstanding(d: any): number {
   if (hasVal(d?.totalOutstanding)) return num(d?.totalOutstanding);
   if (hasVal(d?.outstanding)) return num(d?.outstanding);
 
-  // fallback: total - paid (gross)
   const total = pickTotal(d);
   const paidGross = pickPaidGross(d);
   return Math.max(0, total - paidGross);
@@ -184,21 +181,21 @@ function Modal({
   return (
     <div className="fixed inset-0 z-50">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
-      <div className="absolute inset-0 flex items-center justify-center p-4">
-        <div className="w-full max-w-5xl bg-white rounded-lg shadow-lg border">
-          <div className="flex items-start justify-between gap-4 p-4 border-b">
+      <div className="absolute inset-0 flex items-center justify-center p-3 sm:p-4">
+        <div className="w-full max-w-5xl bg-white rounded-xl shadow-lg border overflow-hidden">
+          <div className="flex items-start justify-between gap-3 p-3 sm:p-4 border-b">
             <div className="min-w-0">
-              <div className="font-semibold text-lg truncate">{title || "Chi tiết"}</div>
+              <div className="font-semibold text-base sm:text-lg truncate">{title || "Chi tiết"}</div>
             </div>
-            <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={onClose}>
+            <button className="px-3 py-2 rounded-lg border hover:bg-gray-50" onClick={onClose}>
               Đóng
             </button>
           </div>
 
-          <div className="p-4 max-h-[75vh] overflow-auto">{children}</div>
+          <div className="p-3 sm:p-4 max-h-[75vh] overflow-auto">{children}</div>
 
-          <div className="p-4 border-t flex justify-end">
-            <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={onClose}>
+          <div className="p-3 sm:p-4 border-t flex justify-end">
+            <button className="px-3 py-2 rounded-lg border hover:bg-gray-50" onClick={onClose}>
               Đóng
             </button>
           </div>
@@ -221,12 +218,14 @@ function Kpi({
 }) {
   return (
     <div
-      className={`bg-white rounded shadow p-4 border ${
-        highlight ? "border-red-500" : "border-transparent"
+      className={`bg-white rounded-xl shadow-sm p-4 border ${
+        highlight ? "border-red-500" : "border-gray-100"
       }`}
     >
-      <div className="text-sm text-gray-500">{title}</div>
-      <div className={`text-xl font-semibold ${highlight ? "text-red-600" : ""}`}>{value}</div>
+      <div className="text-xs sm:text-sm text-gray-500">{title}</div>
+      <div className={`text-lg sm:text-xl font-semibold ${highlight ? "text-red-600" : ""}`}>
+        {value}
+      </div>
       {subHint ? <div className="text-xs text-gray-500 mt-1">{subHint}</div> : null}
     </div>
   );
@@ -238,9 +237,10 @@ function Kpi({
 type HistoryTab = "ALL" | "DEBT" | "PAID";
 
 const MySalesDashboardPage: React.FC = () => {
-  // ✅ date range filter
-  const [fromDate, setFromDate] = useState<string>("");
-  const [toDate, setToDate] = useState<string>("");
+  // ✅ month/year filter (match BE)
+  const now = useMemo(() => new Date(), []);
+  const [month, setMonth] = useState<number>(now.getMonth() + 1);
+  const [year, setYear] = useState<number>(now.getFullYear());
 
   // history tabs + search
   const [tab, setTab] = useState<HistoryTab>("ALL");
@@ -257,15 +257,15 @@ const MySalesDashboardPage: React.FC = () => {
   const [invErr, setInvErr] = useState<string | null>(null);
   const [inv, setInv] = useState<any | null>(null);
 
-  async function fetchDashboard() {
+  async function fetchDashboard(next?: { month: number; year: number }) {
     setLoading(true);
     setErr(null);
 
     try {
-      const params: any = {};
-      if (fromDate) params.from = fromDate;
-      if (toDate) params.to = toDate;
+      const m = next?.month ?? month;
+      const y = next?.year ?? year;
 
+      const params: any = { month: m, year: y, groupBy: "day" };
       const res = await api.get("/me/sales-dashboard", { params });
       const data = unwrapData<DashboardResp>(res.data);
       setDash(data || null);
@@ -299,11 +299,17 @@ const MySalesDashboardPage: React.FC = () => {
     fetchInvoiceDetail(id);
   }
 
-  // ✅ vào trang auto load ALL TIME
+  // ✅ load on mount
   useEffect(() => {
     fetchDashboard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ✅ auto reload when month/year changes (mượt)
+  useEffect(() => {
+    fetchDashboard({ month, year });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [month, year]);
 
   const view: Required<DashboardResp> = {
     period: dash?.period || {},
@@ -332,7 +338,13 @@ const MySalesDashboardPage: React.FC = () => {
   const customerAgg = useMemo(() => {
     const m = new Map<
       string,
-      { customerName: string; normalOutstanding: number; holdOutstanding: number; totalOutstanding: number; count: number }
+      {
+        customerName: string;
+        normalOutstanding: number;
+        holdOutstanding: number;
+        totalOutstanding: number;
+        count: number;
+      }
     >();
 
     for (const d of view.debts) {
@@ -365,11 +377,9 @@ const MySalesDashboardPage: React.FC = () => {
   const historyFiltered = useMemo(() => {
     let rows = historyAll;
 
-    // tab filter
     if (tab === "DEBT") rows = rows.filter((r) => invoiceIsDebt(r));
     if (tab === "PAID") rows = rows.filter((r) => !invoiceIsDebt(r));
 
-    // search filter
     const q = histSearch.trim().toLowerCase();
     if (q) {
       rows = rows.filter((r) => {
@@ -389,85 +399,121 @@ const MySalesDashboardPage: React.FC = () => {
     return { total, debt, paid };
   }, [historyAll]);
 
-  const rangeLabel = useMemo(() => {
-    if (!fromDate && !toDate) return "Tất cả thời gian";
-    const a = fromDate ? fmtDateVN(fromDate) : "…";
-    const b = toDate ? fmtDateVN(toDate) : "…";
-    return `${a} → ${b}`;
-  }, [fromDate, toDate]);
+  const periodLabel = useMemo(() => {
+    const m = view.period?.month ?? month;
+    const y = view.period?.year ?? year;
+    return `${monthLabelVN(m)} • ${y}`;
+  }, [view.period?.month, view.period?.year, month, year]);
+
+  const isSmall = typeof window !== "undefined" ? window.innerWidth < 640 : false;
+
+  const yearOptions = useMemo(() => {
+    const y = new Date().getFullYear();
+    // cho chọn ±5 năm
+    const arr: number[] = [];
+    for (let i = y - 5; i <= y + 1; i++) arr.push(i);
+    return arr;
+  }, []);
 
   return (
-    <div className="p-6 flex flex-col gap-6 min-h-screen">
+    <div className="p-3 sm:p-6 flex flex-col gap-4 sm:gap-6 min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="flex items-start md:items-center justify-between gap-4 flex-col md:flex-row">
-        <div>
-          <h1 className="text-2xl font-semibold">Doanh thu của tôi</h1>
-          <p className="text-sm text-gray-500">Nhân viên SALE</p>
-          <p className="text-xs text-gray-500 mt-1">Khoảng thời gian: {rangeLabel}</p>
-        </div>
-
-        <div className="flex items-end gap-2 flex-wrap">
-          <div className="flex flex-col">
-            <label className="text-xs text-gray-500 mb-1">Từ ngày</label>
-            <input
-              type="date"
-              className="border rounded px-2 py-2 bg-white"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-            />
+      <div className="bg-white border rounded-xl shadow-sm p-4 sm:p-5">
+        <div className="flex items-start sm:items-center justify-between gap-4 flex-col sm:flex-row">
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-semibold">Doanh thu của tôi</h1>
+            <p className="text-sm text-gray-500">Nhân viên SALE</p>
+            <p className="text-xs text-gray-500 mt-1">Khoảng thời gian: {periodLabel}</p>
           </div>
 
-          <div className="flex flex-col">
-            <label className="text-xs text-gray-500 mb-1">Đến ngày</label>
-            <input
-              type="date"
-              className="border rounded px-2 py-2 bg-white"
-              value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
-            />
+          {/* Filters */}
+          <div className="w-full sm:w-auto flex flex-col sm:flex-row sm:items-end gap-2">
+            <div className="grid grid-cols-2 gap-2 w-full sm:w-auto">
+              <div className="flex flex-col">
+                <label className="text-xs text-gray-500 mb-1">Tháng</label>
+                <select
+                  className="border rounded-lg px-3 py-2 bg-white"
+                  value={month}
+                  onChange={(e) => setMonth(Number(e.target.value))}
+                >
+                  {Array.from({ length: 12 }).map((_, i) => {
+                    const m = i + 1;
+                    return (
+                      <option key={m} value={m}>
+                        {monthLabelVN(m)}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+
+              <div className="flex flex-col">
+                <label className="text-xs text-gray-500 mb-1">Năm</label>
+                <select
+                  className="border rounded-lg px-3 py-2 bg-white"
+                  value={year}
+                  onChange={(e) => setYear(Number(e.target.value))}
+                >
+                  {yearOptions.map((y) => (
+                    <option key={y} value={y}>
+                      Năm {y}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                className="px-4 py-2 rounded-lg border bg-white hover:bg-gray-50 w-1/2 sm:w-auto"
+                onClick={() => {
+                  const d = new Date();
+                  setMonth(d.getMonth() + 1);
+                  setYear(d.getFullYear());
+                }}
+                disabled={loading}
+                title="Về tháng hiện tại"
+              >
+                Tháng này
+              </button>
+
+              <button
+                className="px-4 py-2 rounded-lg bg-blue-600 text-white disabled:opacity-60 w-1/2 sm:w-auto"
+                onClick={() => fetchDashboard()}
+                disabled={loading}
+              >
+                Làm mới
+              </button>
+            </div>
           </div>
-
-          <button
-            className="px-4 py-2 rounded border bg-white hover:bg-gray-50"
-            onClick={() => {
-              setFromDate("");
-              setToDate("");
-              setTimeout(() => fetchDashboard(), 0);
-            }}
-            disabled={loading}
-            title="Bỏ lọc (tất cả thời gian)"
-          >
-            Toàn bộ
-          </button>
-
-          <button
-            className="px-4 py-2 rounded bg-blue-600 text-white disabled:opacity-60"
-            onClick={fetchDashboard}
-            disabled={loading}
-          >
-            Làm mới
-          </button>
         </div>
+
+        {err && (
+          <div className="mt-3 bg-red-50 border border-red-200 text-red-700 p-3 rounded-lg text-sm">
+            {err}
+          </div>
+        )}
+        {loading && (
+          <div className="mt-3 bg-white border rounded-lg p-4 text-center text-gray-500 text-sm">
+            Đang tải dữ liệu…
+          </div>
+        )}
       </div>
 
-      {/* State */}
-      {err && <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded">{err}</div>}
-      {loading && <div className="bg-white border rounded p-6 text-center text-gray-500">Đang tải dữ liệu…</div>}
-
       {/* KPI */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <Kpi title="Doanh thu thuần" value={money(view.summary.revenue)} />
         <Kpi title="Đã thu (thực tế)" value={money(kpiCollectedCash)} />
         <Kpi title="Nợ cần thu" value={money(kpiNeedCollect)} highlight={kpiNeedCollect > 0} />
         <Kpi title="Số đơn" value={String(num(view.summary.orderCount))} />
       </div>
 
-      {/* ✅ Fill remaining height: History + Quick debt */}
-      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
-        {/* History with tabs */}
-        <div className="lg:col-span-2 bg-white rounded shadow border p-4 flex flex-col min-h-0">
+      {/* Content */}
+      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 items-stretch">
+        {/* History */}
+        <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border p-3 sm:p-4 flex flex-col min-h-0">
           <div className="flex flex-col gap-3 mb-3">
-            <div className="flex items-start md:items-center justify-between gap-3 flex-col md:flex-row">
+            <div className="flex items-start sm:items-center justify-between gap-3 flex-col sm:flex-row">
               <div className="min-w-0">
                 <h2 className="font-medium">Lịch sử hoá đơn bán</h2>
                 <div className="text-xs text-gray-500">
@@ -475,24 +521,30 @@ const MySalesDashboardPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 w-full md:w-auto">
-                <div className="inline-flex rounded border overflow-hidden bg-white shrink-0">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
+                <div className="inline-flex rounded-lg border overflow-hidden bg-white shrink-0 w-full sm:w-auto">
                   <button
-                    className={`px-3 py-2 text-sm ${tab === "ALL" ? "bg-blue-600 text-white" : "hover:bg-gray-50"}`}
+                    className={`px-3 py-2 text-sm flex-1 ${
+                      tab === "ALL" ? "bg-blue-600 text-white" : "hover:bg-gray-50"
+                    }`}
                     onClick={() => setTab("ALL")}
                     type="button"
                   >
                     Tất cả
                   </button>
                   <button
-                    className={`px-3 py-2 text-sm ${tab === "DEBT" ? "bg-blue-600 text-white" : "hover:bg-gray-50"}`}
+                    className={`px-3 py-2 text-sm flex-1 ${
+                      tab === "DEBT" ? "bg-blue-600 text-white" : "hover:bg-gray-50"
+                    }`}
                     onClick={() => setTab("DEBT")}
                     type="button"
                   >
                     Còn nợ
                   </button>
                   <button
-                    className={`px-3 py-2 text-sm ${tab === "PAID" ? "bg-blue-600 text-white" : "hover:bg-gray-50"}`}
+                    className={`px-3 py-2 text-sm flex-1 ${
+                      tab === "PAID" ? "bg-blue-600 text-white" : "hover:bg-gray-50"
+                    }`}
                     onClick={() => setTab("PAID")}
                     type="button"
                   >
@@ -501,8 +553,8 @@ const MySalesDashboardPage: React.FC = () => {
                 </div>
 
                 <input
-                  className="border rounded px-3 py-2 text-sm w-full md:w-72 bg-white"
-                  placeholder="Tìm mã HĐ / khách hàng"
+                  className="border rounded-lg px-3 py-2 text-sm w-full sm:w-72 bg-white"
+                  placeholder="Tìm mã hoá đơn / khách hàng"
                   value={histSearch}
                   onChange={(e) => setHistSearch(e.target.value)}
                   disabled={historyAll.length === 0}
@@ -515,23 +567,90 @@ const MySalesDashboardPage: React.FC = () => {
             </div>
           </div>
 
-          {/* ✅ Scroll INSIDE table area */}
           <div className="flex-1 min-h-0">
             {historyAll.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-gray-400 text-sm border rounded">
-                Không có dữ liệu hoá đơn trong khoảng thời gian
+              <div className="h-full flex items-center justify-center text-gray-400 text-sm border rounded-lg bg-gray-50">
+                Không có dữ liệu hoá đơn trong tháng này
               </div>
             ) : historyFiltered.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-gray-400 text-sm border rounded">
+              <div className="h-full flex items-center justify-center text-gray-400 text-sm border rounded-lg bg-gray-50">
                 Không có kết quả phù hợp
               </div>
+            ) : isSmall ? (
+              <div className="h-full overflow-auto space-y-2">
+                {historyFiltered.map((r: any, idx: number) => {
+                  const id = pickInvId(r) || `${idx}`;
+                  const code = pickInvCode(r);
+                  const customer = pickInvCustomer(r);
+                  const date = pickInvDate(r);
+
+                  const total = pickTotal(r);
+                  const paidCash = pickPaidGross(r);
+
+                  const normalO = pickInvNormalOutstanding(r);
+                  const holdO = pickInvHoldOutstanding(r);
+                  const totalO = pickInvTotalOutstanding(r);
+
+                  return (
+                    <div key={id} className="border rounded-xl p-3 hover:bg-gray-50">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-xs text-gray-500">{fmtDateVN(date)}</div>
+                          <div className="font-semibold truncate">{code || "(Chưa có mã)"}</div>
+                          <div className="text-sm text-gray-700 truncate">{customer}</div>
+                          {(r?.paymentStatus || r?.status) && (
+                            <div className="text-xs text-gray-500 mt-0.5">
+                              {safeStr(r?.paymentStatus || r?.status || "")}
+                            </div>
+                          )}
+                        </div>
+
+                        <button
+                          className="px-3 py-2 rounded-lg border bg-white hover:bg-gray-50 shrink-0"
+                          onClick={() => {
+                            const realId = pickInvId(r);
+                            if (realId) openInvoice(String(realId));
+                          }}
+                          disabled={!pickInvId(r)}
+                          title={!pickInvId(r) ? "Không có mã hoá đơn để mở chi tiết" : "Xem chi tiết"}
+                        >
+                          Xem
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
+                        <div className="border rounded-lg p-2">
+                          <div className="text-xs text-gray-500">Tổng tiền</div>
+                          <div className="font-semibold">{money(total)}</div>
+                        </div>
+                        <div className="border rounded-lg p-2">
+                          <div className="text-xs text-gray-500">Đã thu</div>
+                          <div>{money(paidCash)}</div>
+                        </div>
+
+                        <div className="border rounded-lg p-2 col-span-2">
+                          <div className="text-xs text-gray-500">Còn thu</div>
+                          <div className={`font-semibold ${invoiceIsDebt(r) ? "text-red-600" : ""}`}>
+                            {money(normalO)}
+                          </div>
+                          {holdO > 0 && (
+                            <div className="text-xs text-amber-700 mt-0.5">
+                              Bảo hành treo: {money(holdO)} (tổng nợ: {money(totalO)})
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             ) : (
-              <div className="h-full overflow-auto border rounded">
+              <div className="h-full overflow-auto border rounded-lg">
                 <table className="w-full text-sm min-w-[980px]">
                   <thead className="bg-gray-50 sticky top-0 z-10 border-b">
                     <tr>
                       <th className="text-left py-2 px-2">Ngày</th>
-                      <th className="text-left px-2">Mã HĐ</th>
+                      <th className="text-left px-2">Mã hoá đơn</th>
                       <th className="text-left px-2">Khách hàng</th>
                       <th className="text-right px-2">Tổng tiền</th>
                       <th className="text-right px-2">Đã thu</th>
@@ -540,7 +659,7 @@ const MySalesDashboardPage: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {historyFiltered.map((r, idx) => {
+                    {historyFiltered.map((r: any, idx: number) => {
                       const id = pickInvId(r) || `${idx}`;
                       const code = pickInvCode(r);
                       const customer = pickInvCustomer(r);
@@ -560,7 +679,9 @@ const MySalesDashboardPage: React.FC = () => {
                           <td className="px-2">
                             <div className="font-medium">{code || "(Chưa có mã)"}</div>
                             {(r?.paymentStatus || r?.status) && (
-                              <div className="text-xs text-gray-500">{safeStr(r?.paymentStatus || r?.status || "")}</div>
+                              <div className="text-xs text-gray-500">
+                                {safeStr(r?.paymentStatus || r?.status || "")}
+                              </div>
                             )}
                           </td>
 
@@ -575,20 +696,20 @@ const MySalesDashboardPage: React.FC = () => {
                             </div>
                             {holdO > 0 && (
                               <div className="text-xs text-amber-700">
-                                BH treo: {money(holdO)} (tổng nợ: {money(totalO)})
+                                Bảo hành treo: {money(holdO)} (tổng nợ: {money(totalO)})
                               </div>
                             )}
                           </td>
 
                           <td className="text-right px-2">
                             <button
-                              className="px-3 py-1.5 rounded border hover:bg-white bg-gray-50"
+                              className="px-3 py-1.5 rounded-lg border hover:bg-white bg-gray-50"
                               onClick={() => {
                                 const realId = pickInvId(r);
                                 if (realId) openInvoice(String(realId));
                               }}
                               disabled={!pickInvId(r)}
-                              title={!pickInvId(r) ? "Không có invoiceId để mở chi tiết" : "Xem chi tiết"}
+                              title={!pickInvId(r) ? "Không có mã hoá đơn để mở chi tiết" : "Xem chi tiết"}
                             >
                               Xem
                             </button>
@@ -604,7 +725,7 @@ const MySalesDashboardPage: React.FC = () => {
         </div>
 
         {/* Quick debt */}
-        <div className="bg-white rounded shadow border p-4 flex flex-col min-h-0">
+        <div className="bg-white rounded-xl shadow-sm border p-3 sm:p-4 flex flex-col min-h-0">
           <div className="flex items-center justify-between">
             <h2 className="font-medium">Công nợ nhanh</h2>
             <div className="text-xs text-gray-500">{customerAgg.length} khách</div>
@@ -628,31 +749,30 @@ const MySalesDashboardPage: React.FC = () => {
           </div>
 
           <div className="text-xs text-gray-500 mt-2">
-            * BH treo là phần giữ lại bảo hành (thường 5%), không tính vào khoản cần thu ngay.
+            * Bảo hành treo là phần giữ lại bảo hành (thường 5%), không tính vào khoản cần thu ngay.
           </div>
 
-          {/* ✅ list scroll inside */}
           <div className="mt-3 flex-1 min-h-0">
             {customerAgg.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-sm text-gray-400 border rounded">
-                Không có khách nợ trong khoảng thời gian
+              <div className="h-full flex items-center justify-center text-sm text-gray-400 border rounded-lg bg-gray-50">
+                Không có khách nợ trong tháng này
               </div>
             ) : (
-              <div className="h-full overflow-auto border rounded p-2 space-y-2">
+              <div className="h-full overflow-auto border rounded-lg p-2 space-y-2">
                 {customerAgg.map((c) => (
                   <div
                     key={c.customerName}
-                    className="flex items-center justify-between text-sm border rounded px-3 py-2 hover:bg-gray-50"
-                    title="Xem chi tiết bằng cách bấm 'Xem' ở bảng lịch sử"
+                    className="flex items-center justify-between text-sm border rounded-lg px-3 py-2 hover:bg-gray-50"
+                    title="Xem chi tiết bằng cách bấm 'Xem' ở danh sách hoá đơn"
                   >
                     <div className="min-w-0">
                       <div className="font-medium truncate">{c.customerName}</div>
-                      <div className="text-xs text-gray-500">{c.count} HĐ nợ</div>
+                      <div className="text-xs text-gray-500">{c.count} hoá đơn nợ</div>
                     </div>
                     <div className="text-right whitespace-nowrap">
                       <div className="font-semibold text-red-600">{money(c.totalOutstanding)}</div>
                       {c.holdOutstanding > 0 && (
-                        <div className="text-xs text-amber-700">BH treo: {money(c.holdOutstanding)}</div>
+                        <div className="text-xs text-amber-700">Bảo hành treo: {money(c.holdOutstanding)}</div>
                       )}
                     </div>
                   </div>
@@ -675,10 +795,12 @@ const MySalesDashboardPage: React.FC = () => {
         title={inv ? `Hoá đơn ${safeStr(inv.code || invId || "")}` : "Chi tiết hoá đơn"}
       >
         {invLoading && (
-          <div className="bg-white border rounded p-6 text-center text-gray-500">Đang tải chi tiết hoá đơn…</div>
+          <div className="bg-white border rounded-lg p-6 text-center text-gray-500">
+            Đang tải chi tiết hoá đơn…
+          </div>
         )}
 
-        {invErr && <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded">{invErr}</div>}
+        {invErr && <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg">{invErr}</div>}
 
         {!invLoading && !invErr && inv && <InvoiceDetailView inv={inv} />}
       </Modal>
@@ -766,7 +888,7 @@ function InvoiceDetailView({ inv }: { inv: any }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
         <div>
           <div className="text-sm text-gray-500">Ngày: {fmtDateVN(issueDate)}</div>
           <div className="text-xs text-gray-400">
@@ -774,14 +896,14 @@ function InvoiceDetailView({ inv }: { inv: any }) {
           </div>
         </div>
 
-        <div className="text-right">
+        <div className="sm:text-right">
           <div className="text-sm text-gray-500">Tổng tiền</div>
           <div className="text-lg font-semibold">{money(total)}</div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div className="border rounded p-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="border rounded-lg p-3">
           <div className="text-xs text-gray-500 mb-1">Khách hàng</div>
           <div className="font-semibold">{partnerName}</div>
           {(partnerPhone || partnerEmail || partnerAddr) && (
@@ -793,7 +915,7 @@ function InvoiceDetailView({ inv }: { inv: any }) {
           )}
         </div>
 
-        <div className="border rounded p-3">
+        <div className="border rounded-lg p-3">
           <div className="text-xs text-gray-500 mb-1">Giá trị</div>
           <div className="text-sm flex justify-between">
             <span>Tạm tính</span>
@@ -809,10 +931,10 @@ function InvoiceDetailView({ inv }: { inv: any }) {
           </div>
         </div>
 
-        <div className="border rounded p-3">
+        <div className="border rounded-lg p-3">
           <div className="text-xs text-gray-500 mb-1">Thanh toán</div>
           <div className="text-sm flex justify-between">
-            <span>Đã thu </span>
+            <span>Đã thu</span>
             <span className="font-semibold">{money(paidAmount)}</span>
           </div>
 
@@ -823,7 +945,7 @@ function InvoiceDetailView({ inv }: { inv: any }) {
 
           {warrantyHold > 0 && (
             <div className="text-sm flex justify-between">
-              <span className="text-amber-700">BH treo</span>
+              <span className="text-amber-700">Bảo hành treo</span>
               <span className="font-semibold text-amber-700">{money(warrantyHold)}</span>
             </div>
           )}
@@ -835,27 +957,25 @@ function InvoiceDetailView({ inv }: { inv: any }) {
         </div>
       </div>
 
-      <div className="border rounded p-3">
+      <div className="border rounded-lg p-3">
         <div className="font-medium mb-2">Dòng hàng</div>
 
         {!hasLines ? (
-          <div className="text-sm text-gray-500">Hoá đơn này chưa có dòng hàng (hoặc API đang không include lines).</div>
+          <div className="text-sm text-gray-500">Hoá đơn này chưa có dòng hàng.</div>
         ) : (
           <div className="overflow-auto">
             <table className="w-full text-sm min-w-[900px]">
               <thead className="border-b bg-gray-50">
                 <tr>
                   <th className="text-left py-2 px-2">Sản phẩm</th>
-                  
-                  <th className="text-right px-2">SL</th>
+                  <th className="text-right px-2">Số lượng</th>
                   <th className="text-right px-2">Đơn giá</th>
                   <th className="text-right px-2">Thành tiền</th>
                 </tr>
               </thead>
               <tbody>
-                {lines.map((l, idx) => {
+                {lines.map((l: any, idx: number) => {
                   const name = safeStr(l.itemName || l.item?.name || "");
-                  
                   const qty = num(l.qty);
                   const price = num(l.price);
                   const lineTotal = qty * price;
@@ -863,7 +983,6 @@ function InvoiceDetailView({ inv }: { inv: any }) {
                   return (
                     <tr key={safeStr(l.id || idx)} className="border-b last:border-0">
                       <td className="py-2 px-2 font-medium">{name || "(Không tên)"}</td>
-                      
                       <td className="text-right px-2">{qty.toLocaleString("vi-VN")}</td>
                       <td className="text-right px-2">{money(price)}</td>
                       <td className="text-right px-2 font-semibold">{money(lineTotal)}</td>
@@ -876,7 +995,7 @@ function InvoiceDetailView({ inv }: { inv: any }) {
         )}
       </div>
 
-      <div className="border rounded p-3">
+      <div className="border rounded-lg p-3">
         <div className="font-medium mb-2">Lịch sử thanh toán</div>
 
         {paymentRows.length === 0 ? (
@@ -893,7 +1012,7 @@ function InvoiceDetailView({ inv }: { inv: any }) {
                   <th className="text-left px-2">Mã tham chiếu</th>
                   <th className="text-right px-2">Số tiền phiếu</th>
                   <th className="text-right px-2">Đã thu</th>
-                  <th className="text-right px-2">Tiền BH</th>
+                  <th className="text-right px-2">Tiền bảo hành</th>
                 </tr>
               </thead>
               <tbody>
@@ -916,7 +1035,7 @@ function InvoiceDetailView({ inv }: { inv: any }) {
       </div>
 
       {safeStr(inv.note) && (
-        <div className="border rounded p-3">
+        <div className="border rounded-lg p-3">
           <div className="font-medium mb-1">Ghi chú</div>
           <div className="text-sm text-gray-700 whitespace-pre-wrap">{safeStr(inv.note)}</div>
         </div>
