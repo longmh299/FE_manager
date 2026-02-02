@@ -1,6 +1,6 @@
 // src/pages/InvoiceDetailPage.tsx
 import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
 import api from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
 
@@ -89,12 +89,10 @@ type Invoice = {
 
   status?: InvoiceStatus;
 
-  // ✅ BẢO HÀNH (treo theo số tiền nhập trực tiếp)
   hasWarrantyHold?: boolean;
   warrantyHoldAmount?: number;
   warrantyDueDate?: string | null;
 
-  // ✅ TRẢ HÀNG - meta tính từ BE (ưu tiên dùng)
   returnMeta?: ReturnMeta;
 };
 
@@ -109,7 +107,7 @@ type PaymentRow = {
   id: string;
   date?: string;
   createdAt?: string;
-  type?: string; // RECEIPT / PAYMENT
+  type?: string;
   amount?: number;
   refNo?: string | null;
   method?: string | null;
@@ -118,7 +116,7 @@ type PaymentRow = {
   allocations?: PaymentAllocation[];
 };
 
-/** ========================= Money input helpers (FORMAT ,) ========================= **/
+/** ========================= Money input helpers ========================= **/
 function fmtMoneyInput(v: number | string | null | undefined) {
   const n = Number(String(v ?? "").replace(/[^\d\-]/g, "")) || 0;
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(n);
@@ -127,7 +125,7 @@ function parseMoneyInput(s: string) {
   return Number(String(s ?? "").replace(/[^\d\-]/g, "")) || 0;
 }
 
-/** ========================= Component: Price input per line (NO HOOK IN MAP) ========================= **/
+/** ========================= Component: Price input per line ========================= **/
 const LinePriceInput: React.FC<{
   value: number;
   disabled?: boolean;
@@ -136,9 +134,7 @@ const LinePriceInput: React.FC<{
 }> = ({ value, disabled, onChange, styleInput }) => {
   const [text, setText] = useState(fmtMoneyInput(value));
 
-  useEffect(() => {
-    setText(fmtMoneyInput(value));
-  }, [value]);
+  useEffect(() => setText(fmtMoneyInput(value)), [value]);
 
   return (
     <input
@@ -156,7 +152,7 @@ const LinePriceInput: React.FC<{
   );
 };
 
-/** ========================= Component: Paid amount input (keeps number logic) ========================= **/
+/** ========================= Paid amount input ========================= **/
 const PaidAmountInput: React.FC<{
   value: number;
   disabled?: boolean;
@@ -164,10 +160,7 @@ const PaidAmountInput: React.FC<{
   styleInput?: React.CSSProperties;
 }> = ({ value, disabled, onChange, styleInput }) => {
   const [text, setText] = useState(fmtMoneyInput(value));
-
-  useEffect(() => {
-    setText(fmtMoneyInput(value));
-  }, [value]);
+  useEffect(() => setText(fmtMoneyInput(value)), [value]);
 
   return (
     <div style={{ width: "100%" }}>
@@ -195,7 +188,6 @@ const PaidAmountInput: React.FC<{
             outline: "none",
             background: "transparent",
             ...(styleInput || {}),
-            // ép đồng bộ theo group (không cho styleInput phá border)
             borderColor: undefined,
           }}
           disabled={disabled}
@@ -227,7 +219,7 @@ const PaidAmountInput: React.FC<{
   );
 };
 
-/** ========================= Component: Warranty hold input (direct amount) ========================= **/
+/** ========================= Warranty hold input ========================= **/
 const WarrantyHoldInput: React.FC<{
   value: number;
   disabled?: boolean;
@@ -235,10 +227,7 @@ const WarrantyHoldInput: React.FC<{
   styleInput?: React.CSSProperties;
 }> = ({ value, disabled, onChange, styleInput }) => {
   const [text, setText] = useState(fmtMoneyInput(value));
-
-  useEffect(() => {
-    setText(fmtMoneyInput(value));
-  }, [value]);
+  useEffect(() => setText(fmtMoneyInput(value)), [value]);
 
   return (
     <div style={{ width: "100%" }}>
@@ -296,17 +285,6 @@ const WarrantyHoldInput: React.FC<{
     </div>
   );
 };
-
-function getAuthUser(): { id?: string; role?: string } {
-  try {
-    const raw = localStorage.getItem("user") || localStorage.getItem("authUser");
-    if (!raw) return {};
-    const u = JSON.parse(raw);
-    return { id: u?.id ? String(u.id) : undefined, role: u?.role };
-  } catch {
-    return {};
-  }
-}
 
 // unwrap { ok: true, data: ... } OR direct
 function unwrap<T = any>(res: any): T {
@@ -377,20 +355,15 @@ function getReturnState(inv: Invoice | null) {
 function isReturnedFull(inv: Invoice | null) {
   return getReturnState(inv) === "FULL";
 }
-// function isReturnedPartial(inv: Invoice | null) {
-//   return getReturnState(inv) === "PARTIAL";
-// }
 
 function calcCollectible(inv: Invoice) {
-  // ✅ ưu tiên returnMeta của BE (đã trừ return + hold)
   if (inv.type === "SALES" && inv.returnMeta) return Math.max(0, toNum(inv.returnMeta.collectible));
-  // fallback: total - hold
   const total = Math.max(0, toNum(inv.totalAmount));
   const hold = inv.hasWarrantyHold ? Math.max(0, toNum(inv.warrantyHoldAmount)) : 0;
   return Math.max(0, total - hold);
 }
 
-// -------- styles (GIỮ NGUYÊN styles của bạn) ----------
+// -------- styles ----------
 const styles: Record<string, React.CSSProperties> = {
   page: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 },
   header: { padding: "12px 16px", borderBottom: "1px solid #e5e7eb" },
@@ -531,7 +504,6 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
 
-  // ✅ SUMMARY: chuyển sang grid để cột tiền canh thẳng mép với cột input
   summaryRow: {
     display: "grid",
     gridTemplateColumns: "220px minmax(260px, 360px) 1fr",
@@ -541,7 +513,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
   },
   summaryLabel: { fontWeight: 500, textAlign: "left" },
-  // ✅ tiền hiển thị nằm ở CỘT 2, canh phải => thẳng mép phải với input/select
   summaryValue: { width: "100%", textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" },
 
   formActions: { display: "flex", justifyContent: "space-between", marginTop: 12, gap: 8 },
@@ -584,62 +555,6 @@ const styles: Record<string, React.CSSProperties> = {
   noticeError: { background: "#fef2f2", border: "1px solid #f87171", color: "#b91c1c" },
 };
 
-/** ========================= Modal styles ========================= **/
-const modalOverlay: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(2, 6, 23, 0.45)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 14,
-  zIndex: 2000,
-};
-
-const modalCard: React.CSSProperties = {
-  width: "min(560px, 96vw)",
-  borderRadius: 10,
-  background: "#fff",
-  border: "1px solid #e5e7eb",
-  boxShadow: "0 18px 40px rgba(0,0,0,0.22)",
-  overflow: "hidden",
-  display: "flex",
-  flexDirection: "column",
-  maxHeight: "86vh",
-};
-
-const modalHeader: React.CSSProperties = {
-  padding: 12,
-  borderBottom: "1px solid #f3f4f6",
-  display: "flex",
-  alignItems: "flex-start",
-  justifyContent: "space-between",
-  gap: 8,
-};
-
-const modalTitle: React.CSSProperties = { fontWeight: 700, fontSize: 14 };
-
-const modalCloseBtn: React.CSSProperties = {
-  padding: "4px 10px",
-  borderRadius: 6,
-  border: "1px solid #d1d5db",
-  background: "#fff",
-  cursor: "pointer",
-  fontWeight: 700,
-  lineHeight: 1.1,
-};
-
-const modalBody: React.CSSProperties = { padding: 12, overflow: "auto" };
-
-const modalFooter: React.CSSProperties = {
-  padding: 12,
-  borderTop: "1px solid #f3f4f6",
-  display: "flex",
-  justifyContent: "flex-end",
-  gap: 8,
-  background: "#fff",
-};
-
 function dangerBtn(disabled?: boolean): React.CSSProperties {
   return {
     padding: "6px 12px",
@@ -652,7 +567,6 @@ function dangerBtn(disabled?: boolean): React.CSSProperties {
     fontWeight: 700,
   };
 }
-
 function primarySmallBtn(disabled?: boolean): React.CSSProperties {
   return {
     padding: "6px 12px",
@@ -666,6 +580,56 @@ function primarySmallBtn(disabled?: boolean): React.CSSProperties {
   };
 }
 
+/** ========================= Modals ========================= **/
+const modalOverlay: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(2, 6, 23, 0.45)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 14,
+  zIndex: 2000,
+};
+const modalCard: React.CSSProperties = {
+  width: "min(560px, 96vw)",
+  borderRadius: 10,
+  background: "#fff",
+  border: "1px solid #e5e7eb",
+  boxShadow: "0 18px 40px rgba(0,0,0,0.22)",
+  overflow: "hidden",
+  display: "flex",
+  flexDirection: "column",
+  maxHeight: "86vh",
+};
+const modalHeader: React.CSSProperties = {
+  padding: 12,
+  borderBottom: "1px solid #f3f4f6",
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: 8,
+};
+const modalTitle: React.CSSProperties = { fontWeight: 700, fontSize: 14 };
+const modalCloseBtn: React.CSSProperties = {
+  padding: "4px 10px",
+  borderRadius: 6,
+  border: "1px solid #d1d5db",
+  background: "#fff",
+  cursor: "pointer",
+  fontWeight: 700,
+  lineHeight: 1.1,
+};
+const modalBody: React.CSSProperties = { padding: 12, overflow: "auto" };
+const modalFooter: React.CSSProperties = {
+  padding: 12,
+  borderTop: "1px solid #f3f4f6",
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 8,
+  background: "#fff",
+};
+
 const ConfirmModal: React.FC<{
   open: boolean;
   title: string;
@@ -676,20 +640,9 @@ const ConfirmModal: React.FC<{
   busy?: boolean;
   onConfirm: () => void | Promise<void>;
   onClose: () => void;
-}> = ({
-  open,
-  title,
-  message,
-  confirmText = "Xác nhận",
-  cancelText = "Hủy",
-  tone = "default",
-  busy,
-  onConfirm,
-  onClose,
-}) => {
+}> = ({ open, title, message, confirmText = "Xác nhận", cancelText = "Hủy", tone = "default", busy, onConfirm, onClose }) => {
   useEffect(() => {
     if (!open) return;
-
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
       if (e.key === "Enter") {
@@ -745,18 +698,7 @@ const PromptModal: React.FC<{
   busy?: boolean;
   onConfirm: (value: string) => void | Promise<void>;
   onClose: () => void;
-}> = ({
-  open,
-  title,
-  message,
-  placeholder = "",
-  defaultValue = "",
-  confirmText = "Xác nhận",
-  cancelText = "Hủy",
-  busy,
-  onConfirm,
-  onClose,
-}) => {
+}> = ({ open, title, message, placeholder = "", defaultValue = "", confirmText = "Xác nhận", cancelText = "Hủy", busy, onConfirm, onClose }) => {
   const [val, setVal] = useState(defaultValue);
 
   useEffect(() => {
@@ -765,7 +707,6 @@ const PromptModal: React.FC<{
 
   useEffect(() => {
     if (!open) return;
-
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
       if (e.key === "Enter") {
@@ -821,7 +762,6 @@ const PromptModal: React.FC<{
 function calcTotal(lines: InvoiceLine[]) {
   return lines.reduce((s, l) => s + l.qty * l.price, 0);
 }
-
 function recalcTotals(lines: InvoiceLine[], taxPercent?: number) {
   const subtotal = calcTotal(lines);
   let tax = 0;
@@ -829,7 +769,6 @@ function recalcTotals(lines: InvoiceLine[], taxPercent?: number) {
   const totalAmount = subtotal + tax;
   return { subtotal, tax, totalAmount };
 }
-
 function createEmptyInvoice(): Invoice {
   const today = new Date().toISOString().slice(0, 10);
   return {
@@ -849,11 +788,9 @@ function createEmptyInvoice(): Invoice {
     receiveAccountId: null,
     note: "",
     status: "DRAFT",
-
     hasWarrantyHold: false,
     warrantyHoldAmount: 0,
     warrantyDueDate: null,
-
     returnMeta: undefined,
   };
 }
@@ -862,11 +799,9 @@ const DEFAULT_HOLD_PCT = 0.05;
 
 const InvoiceDetailPage: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { id } = useParams<{ id?: string }>();
   const isCreate = !id || id === "new";
-
-  const me = useMemo(() => getAuthUser(), []);
-  const isAdmin = (me.role || "").toLowerCase() === "admin";
 
   const { toasts, push, remove } = useToast();
   const toastSuccess = (message: string, title = "Thành công") => push({ type: "success", title, message });
@@ -874,13 +809,105 @@ const InvoiceDetailPage: React.FC = () => {
 
   const gotoListSoon = () => setTimeout(() => navigate("/invoices"), 350);
 
+  // ✅ detect adjust-mode by query (?adjust=1 | ?adjust=true | ?mode=adjust)
+  const isAdjustMode = useMemo(() => {
+    const sp = new URLSearchParams(location.search || "");
+    const a = String(sp.get("adjust") || "").toLowerCase();
+    const m = String(sp.get("mode") || "").toLowerCase();
+    return a === "1" || a === "true" || m === "adjust" || m === "adjustment";
+  }, [location.search]);
+
+  // ✅ AUTH: lấy role từ BE (/me), fallback localStorage
+  const [me, setMe] = useState<{ id?: string; role?: string }>({});
+  const isAdmin = String(me.role || "").trim().toLowerCase() === "admin";
+
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [partners, setPartners] = useState<Partner[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [staffs, setStaffs] = useState<StaffUser[]>([]);
   const [accounts, setAccounts] = useState<PaymentAccount[]>([]);
   const [loading, setLoading] = useState(true);
+
   const [saving, setSaving] = useState(false);
+  const [reopenBusy, setReopenBusy] = useState(false);
+
+    /** ========================= Early stock check (FE warning only) ========================= **/
+const [, setStockCheckLoading] = useState(false);
+const [, setStockCheckError] = useState<string | null>(null);
+const [, setStockQtyMap] = useState<Record<string, number>>({}); // itemId -> qty
+
+
+  function uniqStr(arr: (string | null | undefined)[]) {
+    const s = new Set<string>();
+    for (const x of arr) {
+      const v = String(x ?? "").trim();
+      if (v) s.add(v);
+    }
+    return Array.from(s);
+  }
+
+  async function fetchStockQtyMap(itemIds: string[], warehouseId?: string | null) {
+    // FE warning only: try multiple endpoints; if all fail => throw
+    const ids = uniqStr(itemIds);
+    if (!ids.length) return {};
+
+    const tryGet = async (url: string, params: any) => {
+      const res = await api.get(url, { params });
+      return unwrap<any>(res);
+    };
+
+    // 1) /stocks?warehouseId=&itemIds=1,2,3
+    try {
+      const data = await tryGet("/stocks", {
+        warehouseId: warehouseId || undefined,
+        itemIds: ids.join(","),
+      });
+
+      const arr: any[] = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+      const map: Record<string, number> = {};
+      for (const r of arr) {
+        const id = String(r.itemId ?? r.item?.id ?? "");
+        if (!id) continue;
+        map[id] = toNum(r.qty);
+      }
+      if (Object.keys(map).length) return map;
+    } catch {}
+
+    // 2) /stock?locationId=&itemIds=...
+    try {
+      const data = await tryGet("/stock", {
+        locationId: warehouseId || undefined,
+        itemIds: ids.join(","),
+      });
+      const arr: any[] = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+      const map: Record<string, number> = {};
+      for (const r of arr) {
+        const id = String(r.itemId ?? r.item?.id ?? "");
+        if (!id) continue;
+        map[id] = toNum(r.qty);
+      }
+      if (Object.keys(map).length) return map;
+    } catch {}
+
+    // 3) POST /stocks/check { warehouseId, itemIds }
+    try {
+      const res = await api.post("/stocks/check", {
+        warehouseId: warehouseId || undefined,
+        itemIds: ids,
+      });
+      const data = unwrap<any>(res);
+      const arr: any[] = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+      const map: Record<string, number> = {};
+      for (const r of arr) {
+        const id = String(r.itemId ?? r.item?.id ?? "");
+        if (!id) continue;
+        map[id] = toNum(r.qty);
+      }
+      if (Object.keys(map).length) return map;
+    } catch {}
+
+    throw new Error("Không tìm thấy API tồn kho phù hợp (FE check warning).");
+  }
 
   const [showPartnerSuggest, setShowPartnerSuggest] = useState(false);
   const [openItemSuggestIndex, setOpenItemSuggestIndex] = useState<number | null>(null);
@@ -993,6 +1020,44 @@ const InvoiceDetailPage: React.FC = () => {
     return next;
   }
 
+  // ✅ load /me để lấy role (quan trọng)
+  useEffect(() => {
+    let mounted = true;
+
+    (async () => {
+      try {
+        const res = await api.get("auth/me");
+        const u = unwrap<any>(res);
+        const role = u?.role ?? u?.data?.role;
+        const uid = u?.id ?? u?.data?.id;
+        if (mounted) setMe({ id: uid ? String(uid) : undefined, role: role ? String(role) : undefined });
+        return;
+      } catch {}
+
+      try {
+        const res2 = await api.get("/auth/me");
+        const u2 = unwrap<any>(res2);
+        const role2 = u2?.role ?? u2?.data?.role;
+        const uid2 = u2?.id ?? u2?.data?.id;
+        if (mounted) setMe({ id: uid2 ? String(uid2) : undefined, role: role2 ? String(role2) : undefined });
+        return;
+      } catch {}
+
+      // fallback localStorage
+      try {
+        const raw = localStorage.getItem("user") || localStorage.getItem("authUser");
+        if (raw) {
+          const u = JSON.parse(raw);
+          if (mounted) setMe({ id: u?.id ? String(u.id) : undefined, role: u?.role ? String(u.role) : undefined });
+        }
+      } catch {}
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   useEffect(() => {
     async function init() {
       try {
@@ -1005,6 +1070,50 @@ const InvoiceDetailPage: React.FC = () => {
     init();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+    useEffect(() => {
+    if (!invoice) return;
+    if ((invoice.status ?? "DRAFT") !== "DRAFT") {
+      // không check khi đã submitted/approved để tránh hiểu nhầm
+      setStockCheckError(null);
+      setStockCheckLoading(false);
+      return;
+    }
+
+    const itemIds = invoice.lines.map((l) => safeId(l.itemId)).filter(Boolean) as string[];
+    if (!itemIds.length) {
+      setStockQtyMap({});
+      setStockCheckError(null);
+      return;
+    }
+
+    // debounce 350ms
+    let alive = true;
+    const t = setTimeout(async () => {
+      try {
+        setStockCheckLoading(true);
+        setStockCheckError(null);
+
+        // nếu FE chưa có chọn kho, để undefined => BE sẽ dùng default warehouse
+        const map = await fetchStockQtyMap(itemIds, (invoice as any).warehouseId ?? null);
+
+        if (!alive) return;
+        setStockQtyMap(map || {});
+      } catch (e: any) {
+        if (!alive) return;
+        // warning-only: đừng làm app đỏ lòm, chỉ ghi nhẹ
+        setStockQtyMap({});
+        setStockCheckError(e?.message || "Không check được tồn kho.");
+      } finally {
+        if (alive) setStockCheckLoading(false);
+      }
+    }, 350);
+
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoice?.lines]);
 
   useEffect(() => {
     if (!invoice?.id || isCreate) {
@@ -1386,7 +1495,6 @@ const InvoiceDetailPage: React.FC = () => {
     setInvoice((prev) => {
       if (!prev) return prev;
 
-      // ✅ quan trọng: "đủ" phải theo collectible (Gross - Hold, và theo BE nếu có returnMeta)
       const totalBase = calcCollectible(prev);
 
       let paidAmount = prev.paidAmount ?? 0;
@@ -1398,20 +1506,10 @@ const InvoiceDetailPage: React.FC = () => {
     });
   }
 
-  async function handleSave() {
-    if (!invoice) return;
-
-    const status = invoice.status ?? "DRAFT";
-    const lockedForStaff = !isAdmin && (status === "SUBMITTED" || status === "APPROVED" || status === "REJECTED");
-
-    if (lockedForStaff) {
-      toastError("Hóa đơn đã gửi duyệt/đã duyệt/bị từ chối nên không thể chỉnh sửa.", "Không thể lưu");
-      return;
-    }
-
-    const totalBase = calcCollectible(invoice);
-    let paidAmount = Number(invoice.paidAmount ?? 0) || 0;
-    const paymentStatus = (invoice.paymentStatus ?? "UNPAID") as PaymentStatus;
+  function buildUpdatePayload(inv: Invoice) {
+    const totalBase = calcCollectible(inv);
+    let paidAmount = Number(inv.paidAmount ?? 0) || 0;
+    const paymentStatus = (inv.paymentStatus ?? "UNPAID") as PaymentStatus;
 
     if (paymentStatus === "UNPAID") paidAmount = 0;
     if (paymentStatus === "PAID") paidAmount = totalBase;
@@ -1420,8 +1518,67 @@ const InvoiceDetailPage: React.FC = () => {
       if (paidAmount < 0) paidAmount = 0;
     }
 
-    const hasWarrantyHold = !!invoice.hasWarrantyHold;
-    const warrantyHoldAmount = hasWarrantyHold ? Math.max(0, Number(invoice.warrantyHoldAmount || 0)) : 0;
+    const hasWarrantyHold = !!inv.hasWarrantyHold;
+    const warrantyHoldAmount = hasWarrantyHold ? Math.max(0, Number(inv.warrantyHoldAmount || 0)) : 0;
+
+    const payload = {
+      code: inv.code,
+      issueDate: inv.date,
+      type: inv.type,
+
+      partnerId: safeId(inv.partnerId),
+      partnerName: inv.partnerName,
+      partnerCode: inv.partnerCode || undefined,
+
+      partnerPhone: inv.partnerPhone,
+      partnerTax: inv.partnerTaxCode,
+      partnerAddr: inv.partnerAddress,
+
+      saleUserId: safeId(inv.saleUserId),
+      techUserId: safeId(inv.techUserId),
+
+      taxPercent: inv.taxPercent ?? 0,
+
+      paymentStatus,
+      paidAmount,
+
+      receiveAccountId: safeId(inv.receiveAccountId),
+
+      hasWarrantyHold,
+      warrantyHoldAmount,
+
+      note: inv.note ?? "",
+
+      lines: inv.lines.map((l) => ({
+        id: l.id,
+        itemId: safeId(l.itemId),
+        qty: l.qty,
+        price: l.price,
+        unitPrice: l.price,
+        itemName: l.itemName,
+      })),
+    };
+
+    return { payload, hasWarrantyHold, warrantyHoldAmount };
+  }
+
+  async function handleSave() {
+    if (!invoice) return;
+
+    const status = (invoice.status ?? "DRAFT") as InvoiceStatus;
+
+    const allowAdjustApprovedEdit = isAdmin && isAdjustMode && status === "APPROVED" && !isCreate && !!invoice.id;
+
+    // ✅ luật: bình thường chỉ DRAFT mới save; riêng admin adjust-mode cho phép save khi APPROVED
+    if (!allowAdjustApprovedEdit && status !== "DRAFT") {
+      toastError(
+        "Hóa đơn không ở trạng thái NHÁP nên không thể lưu trực tiếp. Nếu đã duyệt hãy dùng 'Mở lại để sửa' hoặc mở bằng chế độ điều chỉnh (?adjust=1).",
+        "Không thể lưu"
+      );
+      return;
+    }
+
+    const { payload, hasWarrantyHold, warrantyHoldAmount } = buildUpdatePayload(invoice);
 
     const sub = Number(invoice.subtotal || 0);
     if (hasWarrantyHold && warrantyHoldAmount > sub && sub > 0) {
@@ -1432,53 +1589,61 @@ const InvoiceDetailPage: React.FC = () => {
     try {
       setSaving(true);
 
-      const payload = {
-        code: invoice.code,
-        issueDate: invoice.date,
-        type: invoice.type,
-
-        partnerId: safeId(invoice.partnerId),
-        partnerName: invoice.partnerName,
-        partnerCode: invoice.partnerCode || undefined,
-
-        partnerPhone: invoice.partnerPhone,
-        partnerTax: invoice.partnerTaxCode,
-        partnerAddr: invoice.partnerAddress,
-
-        saleUserId: safeId(invoice.saleUserId),
-        techUserId: safeId(invoice.techUserId),
-
-        taxPercent: invoice.taxPercent ?? 0,
-
-        paymentStatus,
-        paidAmount,
-
-        receiveAccountId: safeId(invoice.receiveAccountId),
-
-        hasWarrantyHold,
-        warrantyHoldAmount,
-
-        note: invoice.note ?? "",
-
-        lines: invoice.lines.map((l) => ({
-          id: l.id,
-          itemId: safeId(l.itemId),
-          qty: l.qty,
-          price: l.price,
-          unitPrice: l.price,
-          itemName: l.itemName,
-        })),
-      };
-
+      // ✅ CREATE
       if (!invoice.id) {
         const res = await api.post("/invoices", payload);
         const created = unwrap<any>(res);
         const newId = created?.id ?? created?.data?.id;
-        if (newId != null) setInvoice((prev) => (prev ? { ...prev, id: newId } : prev));
-      } else {
-        await api.put(`/invoices/${invoice.id}`, payload);
+        if (newId != null) {
+          setInvoice((prev) => (prev ? { ...prev, id: newId } : prev));
+        }
+
+        // ✅ admin: tạo xong -> auto submit luôn (hoá đơn thường)
+        if (isAdmin && newId != null && !isAdjustMode) {
+          await api.post(`/invoices/${newId}/submit`);
+          toastSuccess("Đã lưu & gửi duyệt (auto).");
+          setDirtySinceLastSave(false);
+          setMessage(null);
+          gotoListSoon();
+          return;
+        }
+
+        toastSuccess("Đã tạo hóa đơn.");
+        setDirtySinceLastSave(false);
+        setMessage(null);
+        gotoListSoon();
+        return;
       }
 
+      // ✅ UPDATE existing
+      const invId = String(invoice.id);
+
+      // ✅ CASE B: Admin + Adjust mode + APPROVED => admin-save-and-post (auto APPROVED)
+      if (allowAdjustApprovedEdit) {
+        await api.post(`/invoices/${invId}/admin-save-and-post`, payload);
+        setDirtySinceLastSave(false);
+        setMessage(null);
+        toastSuccess("Đã điều chỉnh & post lại hóa đơn (auto APPROVED).");
+        await loadInvoiceIfNeeded();
+        gotoListSoon();
+        return;
+      }
+
+      // ✅ normal: PUT
+      await api.put(`/invoices/${invId}`, payload);
+
+      // ✅ CASE A: Admin save => auto submit (DRAFT -> SUBMITTED)
+      if (isAdmin && !isAdjustMode) {
+        await api.post(`/invoices/${invId}/submit`);
+        updateInvoice({ status: "SUBMITTED" });
+        setDirtySinceLastSave(false);
+        setMessage(null);
+        toastSuccess("Đã lưu & gửi duyệt (auto).");
+        gotoListSoon();
+        return;
+      }
+
+      // ✅ staff: chỉ save
       setDirtySinceLastSave(false);
       setMessage(null);
       toastSuccess("Đã lưu hóa đơn.");
@@ -1491,13 +1656,56 @@ const InvoiceDetailPage: React.FC = () => {
     }
   }
 
+  // ✅ NEW: REOPEN APPROVED -> DRAFT (route BE: POST /invoices/:id/reopen)
+  async function handleReopenApproved() {
+    if (!invoice?.id) return;
+    if (!isAdmin) {
+      toastError("Chỉ ADMIN mới được mở lại để sửa.");
+      return;
+    }
+    if ((invoice.status ?? "") !== "APPROVED") {
+      toastError("Chỉ hóa đơn ĐÃ DUYỆT mới mở lại để sửa.");
+      return;
+    }
+
+    openConfirm({
+      title: "Mở lại để sửa hóa đơn",
+      message: "Hệ thống sẽ rollback tồn kho từ hóa đơn đã duyệt và đưa hóa đơn về NHÁP để sửa. Bạn chắc chắn chứ?",
+      confirmText: "Mở lại",
+      cancelText: "Hủy",
+      tone: "danger",
+      onConfirm: async () => {
+        try {
+          setConfirmBusy(true);
+          setReopenBusy(true);
+
+          await api.post(`/invoices/${invoice.id}/reopen`);
+
+          toastSuccess("Đã mở lại hóa đơn về NHÁP để sửa.");
+          setMessage({ type: "success", text: "Đã mở lại hóa đơn về NHÁP để sửa." });
+
+          await loadInvoiceIfNeeded();
+        } catch (err: any) {
+          console.error("reopen error", err);
+          const msg = err?.response?.data?.message || err?.message || "Mở lại thất bại.";
+          toastError(msg);
+          setMessage({ type: "error", text: msg });
+        } finally {
+          setReopenBusy(false);
+          setConfirmBusy(false);
+          closeConfirm();
+        }
+      },
+    });
+  }
+
   async function handleSubmit() {
     if (!invoice?.id) {
       toastError("Cần lưu hóa đơn trước khi gửi duyệt.");
       return;
     }
     if (dirtySinceLastSave) {
-      const text = "Bạn vừa sửa hóa đơn nhưng chưa lưu. Vui lòng bấm 'Lưu hóa đơn' trước khi 'Gửi duyệt'.";
+      const text = "Bạn vừa sửa hóa đơn nhưng chưa lưu. Vui lòng bấm 'Lưu' trước khi 'Gửi duyệt'.";
       setMessage({ type: "error", text });
       toastError(text, "Chưa lưu thay đổi");
       return;
@@ -1537,7 +1745,7 @@ const InvoiceDetailPage: React.FC = () => {
     if (!invoice?.id) return;
 
     if (dirtySinceLastSave) {
-      const text = "Bạn vừa sửa hóa đơn nhưng chưa lưu. Vui lòng bấm 'Lưu hóa đơn' trước khi 'Duyệt'.";
+      const text = "Bạn vừa sửa hóa đơn nhưng chưa lưu. Vui lòng bấm 'Lưu' trước khi 'Duyệt'.";
       setMessage({ type: "error", text });
       toastError(text, "Chưa lưu thay đổi");
       return;
@@ -1623,8 +1831,15 @@ const InvoiceDetailPage: React.FC = () => {
     );
   }
 
-  const status = invoice.status ?? "DRAFT";
-  const lockedForStaff = !isAdmin && (status === "SUBMITTED" || status === "APPROVED" || status === "REJECTED");
+  const status = (invoice.status ?? "DRAFT") as InvoiceStatus;
+
+  // ✅ editable rules:
+  // - DRAFT: ai cũng sửa được (theo UI hiện tại)
+  // - APPROVED: chỉ admin + adjust-mode mới sửa (điều chỉnh & post lại)
+  const canEditApprovedAdjust = isAdmin && isAdjustMode && status === "APPROVED";
+  const canEdit = status === "DRAFT" || canEditApprovedAdjust;
+
+  const locked = !canEdit;
 
   const partnerSuggestions =
     invoice.partnerName
@@ -1642,13 +1857,11 @@ const InvoiceDetailPage: React.FC = () => {
       ? "Bị từ chối"
       : "Nháp";
 
-  // ====== Payment derived ======
   const paidByPayments = paymentHistoryRows.reduce((s, r) => s + (r.allocatedAmount || 0), 0);
 
-  // ✅ theo UI/BE: paidAmount là phần NORMAL (Gross - Hold). BH (hold) sẽ thu bằng phiếu riêng.
   const paidNormal = Math.max(0, toNum(invoice.paidAmount));
   const paidTotal = Math.max(0, paidByPayments);
-  const paidWarranty = Math.max(0, paidTotal - paidNormal); // best-effort
+  const paidWarranty = Math.max(0, paidTotal - paidNormal);
 
   const vatAmount = Math.max(0, toNum(invoice.tax));
   const returnedTotal =
@@ -1665,18 +1878,27 @@ const InvoiceDetailPage: React.FC = () => {
   const debtNow = Math.max(0, collectible - Math.max(0, toNum(invoice.paidAmount)));
 
   const derivedHoldPct =
-    invoice.hasWarrantyHold && Number(invoice.subtotal || 0) > 0
-      ? ((hold * 100) / Number(invoice.subtotal || 0)).toFixed(2)
-      : "0.00";
+    invoice.hasWarrantyHold && Number(invoice.subtotal || 0) > 0 ? ((hold * 100) / Number(invoice.subtotal || 0)).toFixed(2) : "0.00";
 
   const returnState = getReturnState(invoice);
   const returnColor = returnState === "FULL" ? "#7c3aed" : returnState === "PARTIAL" ? "#6d28d9" : "#6b7280";
-  const canEditInvoiceCode = status === "DRAFT" && !lockedForStaff;
+
+  const canEditInvoiceCode = status === "DRAFT"; // giữ nguyên policy
+
+  const title = isCreate ? "Tạo hóa đơn mới" : canEditApprovedAdjust ? "Điều chỉnh hóa đơn (Admin)" : "Chi tiết hóa đơn";
+
+  // label nút save
+  const saveLabel = (() => {
+    if (saving) return "Đang lưu...";
+    if (canEditApprovedAdjust) return "Điều chỉnh & Post lại";
+    if (isAdmin && status === "DRAFT" && !isAdjustMode) return "Lưu & Gửi duyệt";
+    return "Lưu hóa đơn";
+  })();
 
   return (
     <div style={styles.page}>
       <div style={styles.header}>
-        <h1 style={styles.headerTitle}>{isCreate ? "Tạo hóa đơn mới" : "Sửa hóa đơn"}</h1>
+        <h1 style={styles.headerTitle}>{title}</h1>
       </div>
 
       <div style={styles.body}>
@@ -1685,7 +1907,43 @@ const InvoiceDetailPage: React.FC = () => {
             ← Quay lại danh sách hóa đơn
           </button>
 
-          {lockedForStaff && (
+          {/* APPROVED notice */}
+          {status === "APPROVED" && !canEditApprovedAdjust && (
+            <div style={{ ...styles.notice, background: "#eef2ff", border: "1px solid #c7d2fe", color: "#3730a3" }}>
+              Hóa đơn đã <b>DUYỆT</b>. Không thể sửa trực tiếp hóa đơn gốc.
+              <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <span style={{ fontSize: 12.5, color: "#4f46e5" }}>
+                  Nếu cần sửa: bấm <b>Mở lại để sửa</b> (rollback tồn kho và đưa về NHÁP) hoặc mở bằng chế độ điều chỉnh{" "}
+                  <b>?adjust=1</b>.
+                </span>
+
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    style={primarySmallBtn(reopenBusy || saving)}
+                    disabled={reopenBusy || saving}
+                    onClick={handleReopenApproved}
+                  >
+                    {reopenBusy ? "Đang mở lại..." : "Mở lại để sửa"}
+                  </button>
+                ) : (
+                  <span style={{ fontSize: 12.5, color: "#b91c1c" }}>(Bạn không phải ADMIN nên không có quyền mở lại.)</span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Adjust-mode notice */}
+          {status === "APPROVED" && canEditApprovedAdjust && (
+            <div style={{ ...styles.notice, background: "#ecfeff", border: "1px solid #67e8f9", color: "#155e75" }}>
+              Bạn đang ở chế độ <b>ĐIỀU CHỈNH</b> (admin). Bấm <b>{saveLabel}</b> sẽ tự rollback movement cũ, lưu lại nội dung mới và post tồn kho lại (auto <b>APPROVED</b>).
+              <div style={{ marginTop: 6, fontSize: 12.5, color: "#0e7490" }}>
+                (Link: <code>?adjust=1</code>)
+              </div>
+            </div>
+          )}
+
+          {(status === "SUBMITTED" || status === "REJECTED") && (
             <div style={{ ...styles.notice, ...styles.noticeError }}>
               Hóa đơn đang ở trạng thái <b>{statusText}</b> nên không thể chỉnh sửa.
             </div>
@@ -1695,7 +1953,8 @@ const InvoiceDetailPage: React.FC = () => {
             style={styles.form}
             onSubmit={(e) => {
               e.preventDefault();
-              handleSave();
+              if (canEdit) handleSave();
+              else toastError("Không có thao tác lưu hợp lệ cho trạng thái hiện tại.");
             }}
           >
             {/* Thông tin đơn hàng */}
@@ -1705,21 +1964,20 @@ const InvoiceDetailPage: React.FC = () => {
               <div style={styles.formRow}>
                 <label style={styles.label}>Số hóa đơn *</label>
                 <input
-                style={{
-                  ...styles.input,
-                  background: canEditInvoiceCode ? "#fff" : "#f8fafc",
-                  cursor: canEditInvoiceCode ? "text" : "not-allowed",
-                }}
-                value={invoice.code ?? ""}
-                disabled={!canEditInvoiceCode}
-                placeholder={canEditInvoiceCode ? "Nhập mã hóa đơn (để trống thì hệ thống tự nhảy)" : "số tự nhảy"}
-                onChange={(e) => {
-                  if (!canEditInvoiceCode) return;
-                  markDirty();
-                  updateInvoice({ code: e.target.value });
-                }}
-              />
-
+                  style={{
+                    ...styles.input,
+                    background: canEditInvoiceCode ? "#fff" : "#f8fafc",
+                    cursor: canEditInvoiceCode ? "text" : "not-allowed",
+                  }}
+                  value={invoice.code ?? ""}
+                  disabled={!canEditInvoiceCode}
+                  placeholder={canEditInvoiceCode ? "Nhập mã hóa đơn (để trống thì hệ thống tự nhảy)" : "số tự nhảy"}
+                  onChange={(e) => {
+                    if (!canEditInvoiceCode) return;
+                    markDirty();
+                    updateInvoice({ code: e.target.value });
+                  }}
+                />
               </div>
 
               <div style={{ ...styles.formRow, ...styles.rowInline }}>
@@ -1729,7 +1987,7 @@ const InvoiceDetailPage: React.FC = () => {
                     style={styles.input}
                     type="date"
                     value={invoice.date || ""}
-                    disabled={lockedForStaff}
+                    disabled={locked}
                     onChange={(e) => {
                       markDirty();
                       updateInvoice({ date: e.target.value || undefined });
@@ -1741,7 +1999,7 @@ const InvoiceDetailPage: React.FC = () => {
                   <select
                     style={styles.select}
                     value={invoice.type}
-                    disabled={lockedForStaff}
+                    disabled={locked || status !== "DRAFT"}
                     onChange={(e) => {
                       markDirty();
                       updateInvoice({ type: e.target.value as InvoiceType });
@@ -1750,12 +2008,21 @@ const InvoiceDetailPage: React.FC = () => {
                     <option value="SALES">Bán hàng</option>
                     <option value="PURCHASE">Nhập hàng</option>
                   </select>
+                  {status !== "DRAFT" && (
+                    <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                      * Hóa đơn đã phát sinh nghiệp vụ nên không đổi loại.
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* ✅ Trả hàng badge theo BE */}
               {invoice.type === "SALES" && (
                 <div style={{ marginTop: 6, fontSize: 13, color: returnColor }}>
+                  {returnState === "FULL"
+                    ? "Trả hàng: Toàn bộ"
+                    : returnState === "PARTIAL"
+                    ? "Trả hàng: Một phần"
+                    : "Trả hàng: Không"}
                   {invoice.returnMeta?.debtIgnore ? (
                     <span style={{ marginLeft: 10, color: "#b91c1c" }}>(debtIgnore=true)</span>
                   ) : null}
@@ -1775,12 +2042,12 @@ const InvoiceDetailPage: React.FC = () => {
                 <input
                   style={styles.input}
                   value={invoice.partnerName}
-                  disabled={lockedForStaff}
+                  disabled={locked || status !== "DRAFT"} // policy: approved adjust-mode không cho đổi khách ở đây (đỡ rủi ro)
                   onChange={(e) => handlePartnerNameChange(e.target.value)}
                   onFocus={() => setShowPartnerSuggest(true)}
                   placeholder="Nhập tên khách hàng..."
                 />
-                {showPartnerSuggest && !lockedForStaff && partnerSuggestions.length > 0 && (
+                {showPartnerSuggest && !locked && status === "DRAFT" && partnerSuggestions.length > 0 && (
                   <div style={styles.suggestBox}>
                     {partnerSuggestions.map((p) => (
                       <div
@@ -1798,6 +2065,11 @@ const InvoiceDetailPage: React.FC = () => {
                     ))}
                   </div>
                 )}
+                {status !== "DRAFT" && (
+                  <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                    * Hóa đơn đã phát sinh nghiệp vụ: không đổi khách hàng tại đây.
+                  </div>
+                )}
               </div>
 
               <div style={styles.formRow}>
@@ -1805,7 +2077,7 @@ const InvoiceDetailPage: React.FC = () => {
                 <input
                   style={styles.input}
                   value={invoice.partnerCode || ""}
-                  disabled={lockedForStaff}
+                  disabled={locked || status !== "DRAFT"}
                   onChange={(e) => {
                     markDirty();
                     updateInvoice({ partnerCode: e.target.value });
@@ -1818,7 +2090,7 @@ const InvoiceDetailPage: React.FC = () => {
                 <input
                   style={styles.input}
                   value={invoice.partnerAddress || ""}
-                  disabled={lockedForStaff}
+                  disabled={locked || status !== "DRAFT"}
                   onChange={(e) => {
                     markDirty();
                     updateInvoice({ partnerAddress: e.target.value });
@@ -1832,7 +2104,7 @@ const InvoiceDetailPage: React.FC = () => {
                   <input
                     style={styles.input}
                     value={invoice.partnerPhone || ""}
-                    disabled={lockedForStaff}
+                    disabled={locked || status !== "DRAFT"}
                     onChange={(e) => {
                       markDirty();
                       updateInvoice({ partnerPhone: e.target.value });
@@ -1844,7 +2116,7 @@ const InvoiceDetailPage: React.FC = () => {
                   <input
                     style={styles.input}
                     value={invoice.partnerTaxCode || ""}
-                    disabled={lockedForStaff}
+                    disabled={locked || status !== "DRAFT"}
                     onChange={(e) => {
                       markDirty();
                       updateInvoice({ partnerTaxCode: e.target.value });
@@ -1858,7 +2130,7 @@ const InvoiceDetailPage: React.FC = () => {
                 <input
                   style={styles.input}
                   value={invoice.partnerEmail || ""}
-                  disabled={lockedForStaff}
+                  disabled={locked || status !== "DRAFT"}
                   onChange={(e) => {
                     markDirty();
                     updateInvoice({ partnerEmail: e.target.value });
@@ -1870,7 +2142,7 @@ const InvoiceDetailPage: React.FC = () => {
                 <button
                   type="button"
                   style={styles.secondarySmallBtn}
-                  disabled={lockedForStaff}
+                  disabled={locked || status !== "DRAFT"}
                   onClick={handleSavePartner}
                 >
                   Lưu khách hàng vào danh sách đối tác
@@ -1888,7 +2160,7 @@ const InvoiceDetailPage: React.FC = () => {
                   <select
                     style={styles.select}
                     value={invoice.saleUserId || ""}
-                    disabled={lockedForStaff}
+                    disabled={locked}
                     onChange={(e) => {
                       markDirty();
                       updateInvoice({ saleUserId: safeId(e.target.value) });
@@ -1908,7 +2180,7 @@ const InvoiceDetailPage: React.FC = () => {
                   <select
                     style={styles.select}
                     value={invoice.techUserId || ""}
-                    disabled={lockedForStaff}
+                    disabled={locked}
                     onChange={(e) => {
                       markDirty();
                       updateInvoice({ techUserId: safeId(e.target.value) });
@@ -1962,12 +2234,14 @@ const InvoiceDetailPage: React.FC = () => {
                       <input
                         style={styles.smallInput}
                         value={line.itemName}
-                        disabled={lockedForStaff}
+                        disabled={locked}
                         onChange={(e) => handleLineChange(idx, "itemName", e.target.value)}
                         onFocus={() => setOpenItemSuggestIndex(idx)}
                         placeholder="Gõ mã hoặc tên sản phẩm..."
                       />
-                      {openItemSuggestIndex === idx && !lockedForStaff && line.itemName.length > 0 && (
+
+
+                      {openItemSuggestIndex === idx && !locked && line.itemName.length > 0 && (
                         <div style={styles.suggestBox}>
                           {itemSuggestions.length > 0 ? (
                             itemSuggestions.map((it) => (
@@ -1979,6 +2253,7 @@ const InvoiceDetailPage: React.FC = () => {
                                   selectItemForLine(idx, it);
                                 }}
                               >
+                                {it.sku ? <b style={{ marginRight: 6 }}>{it.sku}</b> : null}
                                 {it.name}
                               </div>
                             ))
@@ -1995,7 +2270,7 @@ const InvoiceDetailPage: React.FC = () => {
                         type="number"
                         min={0}
                         value={line.qty}
-                        disabled={lockedForStaff}
+                        disabled={locked}
                         onChange={(e) => handleLineChange(idx, "qty", Number(e.target.value) || 0)}
                       />
                     </div>
@@ -2003,7 +2278,7 @@ const InvoiceDetailPage: React.FC = () => {
                     <div>
                       <LinePriceInput
                         value={Number(line.price || 0)}
-                        disabled={lockedForStaff}
+                        disabled={locked}
                         styleInput={{ ...styles.smallInput, textAlign: "right" }}
                         onChange={(raw) => handleLineChange(idx, "price", raw)}
                       />
@@ -2014,12 +2289,7 @@ const InvoiceDetailPage: React.FC = () => {
                     </div>
 
                     <div style={{ textAlign: "center" }}>
-                      <button
-                        type="button"
-                        style={styles.smallBtn}
-                        disabled={lockedForStaff}
-                        onClick={() => removeLine(idx)}
-                      >
+                      <button type="button" style={styles.smallBtn} disabled={locked} onClick={() => removeLine(idx)}>
                         Xóa
                       </button>
                     </div>
@@ -2027,11 +2297,12 @@ const InvoiceDetailPage: React.FC = () => {
                 );
               })}
 
-              <button type="button" style={styles.addLineBtn} disabled={lockedForStaff} onClick={addLine}>
+              <button type="button" style={styles.addLineBtn} disabled={locked} onClick={addLine}>
                 + Thêm dòng sản phẩm
               </button>
+              
 
-              {/* Summary + thanh toán */}
+              {/* Summary */}
               <div style={{ marginTop: 8 }}>
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Tạm tính:</span>
@@ -2041,10 +2312,8 @@ const InvoiceDetailPage: React.FC = () => {
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>VAT (thuế):</span>
                   <span style={styles.summaryValue}>{formatMoney(vatAmount)} đ</span>
-                  {/* <span style={{ fontSize: 12, color: "#6b7280" }}>(VAT đã nằm trong khoản thu NORMAL)</span> */}
                 </div>
 
-                {/* ✅ Thuế %: làm thành 1 group box width chuẩn, % nằm trong suffix */}
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Thuế (%)</span>
 
@@ -2056,7 +2325,7 @@ const InvoiceDetailPage: React.FC = () => {
                       border: "1px solid #d1d5db",
                       borderRadius: 4,
                       overflow: "hidden",
-                      background: lockedForStaff ? "#f8fafc" : "#fff",
+                      background: locked ? "#f8fafc" : "#fff",
                       boxSizing: "border-box",
                     }}
                   >
@@ -2076,7 +2345,7 @@ const InvoiceDetailPage: React.FC = () => {
                       type="number"
                       min={0}
                       value={invoice.taxPercent ?? 0}
-                      disabled={lockedForStaff}
+                      disabled={locked}
                       onChange={(e) => {
                         markDirty();
                         const num = Number(e.target.value || 0);
@@ -2106,13 +2375,13 @@ const InvoiceDetailPage: React.FC = () => {
                   <span style={{ whiteSpace: "nowrap" }}>= {formatMoney(invoice.tax ?? 0)} đ</span>
                 </div>
 
-                {/* ✅ BẢO HÀNH */}
+                {/* Bảo hành */}
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Bảo hành:</span>
                   <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <input
                       type="checkbox"
-                      disabled={lockedForStaff}
+                      disabled={locked}
                       checked={!!invoice.hasWarrantyHold}
                       onChange={(e) => {
                         markDirty();
@@ -2135,7 +2404,7 @@ const InvoiceDetailPage: React.FC = () => {
 
                     <WarrantyHoldInput
                       value={Number(invoice.warrantyHoldAmount || 0)}
-                      disabled={lockedForStaff}
+                      disabled={locked}
                       onChange={(raw) => {
                         markDirty();
                         setWarrantyHoldManual(true);
@@ -2147,9 +2416,7 @@ const InvoiceDetailPage: React.FC = () => {
                           return { ...prev, warrantyHoldAmount: clamped };
                         });
                       }}
-                      styleInput={{
-                        textAlign: "right",
-                      }}
+                      styleInput={{ textAlign: "right" }}
                     />
 
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -2157,7 +2424,7 @@ const InvoiceDetailPage: React.FC = () => {
                       <button
                         type="button"
                         style={styles.secondarySmallBtn}
-                        disabled={lockedForStaff}
+                        disabled={locked}
                         title="Đặt về mặc định 5% theo tạm tính"
                         onClick={() => {
                           markDirty();
@@ -2175,7 +2442,6 @@ const InvoiceDetailPage: React.FC = () => {
                   </div>
                 )}
 
-                {/* ✅ Hiển thị breakdown trả hàng theo BE */}
                 {invoice.type === "SALES" && returnedTotal > 0 && (
                   <div style={styles.summaryRow}>
                     <span style={styles.summaryLabel}>Đã trả hàng:</span>
@@ -2188,7 +2454,7 @@ const InvoiceDetailPage: React.FC = () => {
                   <select
                     style={styles.select}
                     value={invoice.paymentStatus || "UNPAID"}
-                    disabled={lockedForStaff}
+                    disabled={locked}
                     onChange={(e) => {
                       markDirty();
                       applyPaymentStatus(e.target.value as PaymentStatus);
@@ -2200,20 +2466,16 @@ const InvoiceDetailPage: React.FC = () => {
                   </select>
                 </div>
 
-                {/* giữ input PARTIAL như cũ */}
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Nhập số tiền đã thu:</span>
                   <PaidAmountInput
                     value={invoice.paidAmount ?? 0}
-                    disabled={!showPaidInput || lockedForStaff}
+                    disabled={!showPaidInput || locked}
                     onChange={(raw) => {
                       markDirty();
                       applyPaymentStatus("PARTIAL", raw);
                     }}
-                    styleInput={{
-                      textAlign: "right",
-                      opacity: showPaidInput ? 1 : 0.7,
-                    }}
+                    styleInput={{ textAlign: "right", opacity: showPaidInput ? 1 : 0.7 }}
                   />
                 </div>
 
@@ -2222,7 +2484,7 @@ const InvoiceDetailPage: React.FC = () => {
                   <select
                     style={styles.select}
                     value={invoice.receiveAccountId || ""}
-                    disabled={lockedForStaff}
+                    disabled={locked}
                     onChange={(e) => {
                       markDirty();
                       updateInvoice({ receiveAccountId: safeId(e.target.value) });
@@ -2239,7 +2501,6 @@ const InvoiceDetailPage: React.FC = () => {
 
                 {accountLoadError && <div style={{ ...styles.notice, ...styles.noticeError }}>{accountLoadError}</div>}
 
-                {/* ✅ Các số tiền: đưa về cột 2 + canh phải => thẳng mép input */}
                 <div style={styles.summaryRow}>
                   <span style={styles.summaryLabel}>Tổng cộng:</span>
                   <span style={styles.summaryValue}>{formatMoney(invoice.totalAmount)} đ</span>
@@ -2262,7 +2523,7 @@ const InvoiceDetailPage: React.FC = () => {
                   <textarea
                     style={{ ...styles.input, minHeight: 80, resize: "vertical" }}
                     value={invoice.note ?? ""}
-                    disabled={lockedForStaff}
+                    disabled={locked}
                     onChange={(e) => {
                       markDirty();
                       updateInvoice({ note: e.target.value });
@@ -2270,7 +2531,7 @@ const InvoiceDetailPage: React.FC = () => {
                   />
                 </div>
               </div>
-
+              
               {message && (
                 <div style={{ ...styles.notice, ...(message.type === "success" ? styles.noticeSuccess : styles.noticeError) }}>
                   {message.text}
@@ -2288,6 +2549,7 @@ const InvoiceDetailPage: React.FC = () => {
                 </span>
 
                 <div style={{ display: "flex", gap: 8 }}>
+                  {/* staff: giữ nút gửi duyệt */}
                   {!isAdmin && status === "DRAFT" && (
                     <button
                       type="button"
@@ -2300,6 +2562,7 @@ const InvoiceDetailPage: React.FC = () => {
                     </button>
                   )}
 
+                  {/* admin: duyệt/từ chối khi SUBMITTED */}
                   {isAdmin && status === "SUBMITTED" && (
                     <>
                       <button type="button" style={styles.secondarySmallBtn} onClick={handleApprove}>
@@ -2314,7 +2577,7 @@ const InvoiceDetailPage: React.FC = () => {
               </div>
             </div>
 
-            {/* ✅ LỊCH SỬ THANH TOÁN */}
+            {/* Lịch sử thanh toán */}
             {!isCreate && invoice.id && (
               <div style={styles.sectionBox}>
                 <div style={styles.sectionTitle}>Lịch sử thanh toán</div>
@@ -2344,18 +2607,14 @@ const InvoiceDetailPage: React.FC = () => {
                     <thead>
                       <tr style={{ background: "#f9fafb" }}>
                         <th style={{ textAlign: "left", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>Ngày</th>
-                        <th style={{ textAlign: "left", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>
-                          Tài khoản
-                        </th>
+                        <th style={{ textAlign: "left", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>Tài khoản</th>
                         <th style={{ textAlign: "right", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>
                           Số tiền áp vào HĐ
                         </th>
                         <th style={{ textAlign: "right", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>
                           Tổng phiếu
                         </th>
-                        <th style={{ textAlign: "left", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>
-                          Ghi chú
-                        </th>
+                        <th style={{ textAlign: "left", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>Ghi chú</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2377,35 +2636,20 @@ const InvoiceDetailPage: React.FC = () => {
 
                       {!paymentHistoryLoading &&
                         paymentHistoryRows.map((p) => {
-                          const accText = p.account
-                            ? `${p.account.code || ""}${p.account.name ? " - " + p.account.name : ""}`
-                            : "-";
+                          const accText = p.account ? `${p.account.code || ""}${p.account.name ? " - " + p.account.name : ""}` : "-";
                           const note = p.note || "";
                           const timeStr = formatDateTimeDisplay(p.createdAt || p.date);
 
                           return (
                             <tr key={p.id}>
-                              <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6", whiteSpace: "nowrap" }}>
-                                {timeStr}
-                              </td>
-
+                              <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6", whiteSpace: "nowrap" }}>{timeStr}</td>
                               <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6" }}>{accText || "-"}</td>
-
-                              <td
-                                style={{
-                                  padding: "8px 8px",
-                                  borderBottom: "1px solid #f3f4f6",
-                                  textAlign: "right",
-                                  fontWeight: 600,
-                                }}
-                              >
+                              <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6", textAlign: "right", fontWeight: 600 }}>
                                 {formatMoney((p as any).allocatedAmount || 0)} đ
                               </td>
-
                               <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6", textAlign: "right" }}>
                                 {formatMoney(Number(p.amount || 0))} đ
                               </td>
-
                               <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6" }}>{note}</td>
                             </tr>
                           );
@@ -2417,12 +2661,19 @@ const InvoiceDetailPage: React.FC = () => {
             )}
 
             <div style={styles.formActions}>
-              <button type="button" style={styles.secondaryBtn} onClick={() => navigate("/invoices")}>
+              <button type="button" style={styles.secondaryBtn} onClick={() => navigate("/invoices")} disabled={saving}>
                 Hủy
               </button>
-              <button type="submit" style={styles.primaryBtn} disabled={saving || lockedForStaff}>
-                {saving ? "Đang lưu..." : "Lưu hóa đơn"}
-              </button>
+
+              {canEdit ? (
+                <button type="submit" style={styles.primaryBtn} disabled={saving || locked}>
+                  {saveLabel}
+                </button>
+              ) : (
+                <button type="button" style={{ ...styles.primaryBtn, background: "#9ca3af", cursor: "not-allowed" }} disabled>
+                  Không thể lưu
+                </button>
+              )}
             </div>
           </form>
         </div>
@@ -2441,6 +2692,7 @@ const InvoiceDetailPage: React.FC = () => {
         onClose={closeConfirm}
         onConfirm={() => confirmCfg?.onConfirm?.()}
       />
+
       <PromptModal
         open={promptOpen && !!promptCfg}
         title={promptCfg?.title || ""}

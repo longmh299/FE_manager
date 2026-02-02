@@ -11,6 +11,9 @@ type PartStockRow = {
   unit?: string; // unitCode
   unitName?: string; // unitName (VN)
 
+  // ✅ NEW: note của item (từ BE summary-by-item)
+  note?: string | null;
+
   totalQty: number;
   sellPrice: number | null;
 
@@ -47,6 +50,19 @@ type EditState =
     }
   | { open: false };
 
+// ✅ NEW: inline note editor state per row
+type NoteDraft = {
+  editing: boolean;
+  value: string;
+  original: string;
+  saving: boolean;
+};
+
+// ✅ NEW: view full note modal
+type ViewNoteState =
+  | { open: true; sku: string; name: string; note: string }
+  | { open: false };
+
 const PAGE_SIZE = 30;
 
 function sortNameKey(name: string) {
@@ -56,6 +72,7 @@ function sortNameKey(name: string) {
 const PartStocksPage: React.FC = () => {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const canEditNote = user?.role === "admin" || user?.role === "accountant";
 
   const [rows, setRows] = useState<PartStockRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -104,6 +121,12 @@ const PartStocksPage: React.FC = () => {
   // ===== Edit modal =====
   const [edit, setEdit] = useState<EditState>({ open: false });
   const dialogRef = useRef<HTMLDivElement | null>(null);
+
+  // ✅ NEW: note drafts keyed by itemId
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, NoteDraft>>({});
+
+  // ✅ NEW: view note
+  const [viewNote, setViewNote] = useState<ViewNoteState>({ open: false });
 
   const scrollToTop = () => {
     if (containerRef.current) {
@@ -171,6 +194,7 @@ const PartStocksPage: React.FC = () => {
         name: r.name ?? "",
         unit: r.unit ?? "",
         unitName: r.unitName ?? "",
+        note: r.note ?? null, // ✅ NEW
         totalQty: Number(r.totalQty ?? 0),
         sellPrice: r.sellPrice === null || r.sellPrice === undefined ? null : Number(r.sellPrice),
 
@@ -189,6 +213,20 @@ const PartStocksPage: React.FC = () => {
       setRows(mapped);
       setPage(1);
       scrollToTop();
+
+      // ✅ reset note drafts theo dữ liệu mới
+      const nextDrafts: Record<string, NoteDraft> = {};
+      for (const it of mapped) {
+        if (!it.itemId) continue;
+        const orig = String(it.note ?? "");
+        nextDrafts[it.itemId] = {
+          editing: false,
+          value: orig,
+          original: orig,
+          saving: false,
+        };
+      }
+      setNoteDrafts(nextDrafts);
     } catch (e: any) {
       console.error(e);
       const msg = e?.response?.data?.message || e?.message || "Lỗi tải dữ liệu";
@@ -215,7 +253,10 @@ const PartStocksPage: React.FC = () => {
 
   const handleExport = () => {
     const base = getApiBaseUrl();
-    const url = base + "/api/stocks/summary-by-item/export?kind=PART" + (q ? `&q=${encodeURIComponent(q)}` : "");
+    const url =
+      base +
+      "/api/stocks/summary-by-item/export?kind=PART" +
+      (q ? `&q=${encodeURIComponent(q)}` : "");
     window.open(url, "_blank");
   };
 
@@ -276,7 +317,7 @@ const PartStocksPage: React.FC = () => {
     }
   };
 
-  // ===== edit =====
+  // ===== edit (modal) =====
   const openEdit = async (row: PartStockRow) => {
     if (!isAdmin) return;
 
@@ -338,7 +379,8 @@ const PartStocksPage: React.FC = () => {
       return;
     }
 
-    const sellPriceNumber = edit.sellPrice.trim() === "" ? null : Number(edit.sellPrice.replace(/,/g, ""));
+    const sellPriceNumber =
+      edit.sellPrice.trim() === "" ? null : Number(edit.sellPrice.replace(/,/g, ""));
     if (sellPriceNumber !== null && Number.isNaN(sellPriceNumber)) {
       showToast("error", "Giá bán không hợp lệ.");
       return;
@@ -348,7 +390,6 @@ const PartStocksPage: React.FC = () => {
       setEdit({ ...edit, loading: true });
 
       // ✅ sửa master: sku + name + unit
-      // (sku chỉ gửi nếu có giá trị; tránh bị BE reject khi để trống)
       await api.patch(`/items/${edit.itemId}/master`, {
         ...(skuTrim ? { sku: skuTrim } : {}),
         name,
@@ -361,7 +402,10 @@ const PartStocksPage: React.FC = () => {
       });
 
       const u = unitById.get(edit.unitId);
-      showToast("success", `Đã cập nhật. SKU: ${skuTrim || "(trống)"} – ĐVT: ${u ? `${u.name} (${u.code})` : "OK"}`);
+      showToast(
+        "success",
+        `Đã cập nhật. SKU: ${skuTrim || "(trống)"} – ĐVT: ${u ? `${u.name} (${u.code})` : "OK"}`
+      );
 
       closeEdit();
       fetchStocks(q);
@@ -381,6 +425,162 @@ const PartStocksPage: React.FC = () => {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [edit.open]);
+
+  // ========================= NOTE INLINE EDIT =========================
+
+  const ensureDraft = (itemId: string, currentNote: string) => {
+    setNoteDrafts((prev) => {
+      if (prev[itemId]) return prev;
+      return {
+        ...prev,
+        [itemId]: { editing: false, value: currentNote, original: currentNote, saving: false },
+      };
+    });
+  };
+
+  const startEditNote = (row: PartStockRow) => {
+    if (!canEditNote) return;
+    if (!row.itemId) {
+      showToast("error", "Dòng này thiếu itemId từ BE. Không thể lưu ghi chú.");
+      return;
+    }
+    const itemId = row.itemId;
+    const current = String(row.note ?? "");
+    ensureDraft(itemId, current);
+
+    setNoteDrafts((prev) => ({
+      ...prev,
+      [itemId]: {
+        ...(prev[itemId] || { editing: false, value: current, original: current, saving: false }),
+        editing: true,
+        value: prev[itemId]?.value ?? current,
+        original: prev[itemId]?.original ?? current,
+      },
+    }));
+  };
+
+  const cancelEditNote = (itemId: string) => {
+    setNoteDrafts((prev) => {
+      const d = prev[itemId];
+      if (!d) return prev;
+      return {
+        ...prev,
+        [itemId]: { ...d, editing: false, value: d.original, saving: false },
+      };
+    });
+  };
+
+  const changeNoteValue = (itemId: string, value: string) => {
+    setNoteDrafts((prev) => {
+      const d = prev[itemId];
+      if (!d) return prev;
+      return { ...prev, [itemId]: { ...d, value } };
+    });
+  };
+
+  const saveNote = async (row: PartStockRow) => {
+    if (!canEditNote) return;
+    if (!row.itemId) {
+      showToast("error", "Dòng này thiếu itemId từ BE. Không thể lưu ghi chú.");
+      return;
+    }
+
+    const itemId = row.itemId;
+    const draft = noteDrafts[itemId];
+    const value = (draft?.value ?? String(row.note ?? "")).trim();
+    const original = draft?.original ?? String(row.note ?? "");
+
+    // Không đổi gì thì thôi
+    if (value === original.trim()) {
+      setNoteDrafts((prev) => {
+        const d = prev[itemId];
+        if (!d) return prev;
+        return { ...prev, [itemId]: { ...d, editing: false, saving: false } };
+      });
+      return;
+    }
+
+    try {
+      setNoteDrafts((prev) => {
+        const d = prev[itemId];
+        if (!d) return prev;
+        return { ...prev, [itemId]: { ...d, saving: true } };
+      });
+
+      await api.put(`/items/${itemId}`, {
+        note: value ? value : null,
+      });
+
+      // ✅ update rows local
+      setRows((prev) =>
+        prev.map((r) => (r.itemId === itemId ? { ...r, note: value ? value : null } : r))
+      );
+
+      // ✅ sync draft state
+      setNoteDrafts((prev) => {
+        const d = prev[itemId] || { editing: false, value, original, saving: false };
+        return {
+          ...prev,
+          [itemId]: { ...d, editing: false, saving: false, value, original: value },
+        };
+      });
+
+      showToast("success", "Đã lưu ghi chú.");
+    } catch (e: any) {
+      console.error("save note error", e);
+      const msg = e?.response?.data?.message || e?.message || "Lưu ghi chú thất bại.";
+      showToast("error", msg);
+
+      setNoteDrafts((prev) => {
+        const d = prev[itemId];
+        if (!d) return prev;
+        return { ...prev, [itemId]: { ...d, saving: false } };
+      });
+    }
+  };
+
+  const onNoteKeyDown = (ev: React.KeyboardEvent<HTMLInputElement>, row: PartStockRow) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      saveNote(row);
+    }
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      if (row.itemId) cancelEditNote(row.itemId);
+    }
+  };
+
+  const getNoteUi = (row: PartStockRow) => {
+    const itemId = row.itemId;
+    if (!itemId) return null;
+    return noteDrafts[itemId];
+  };
+
+  // ========================= VIEW NOTE MODAL =========================
+
+  const openViewNote = (row: PartStockRow) => {
+    const note = String(row.note ?? "").trim();
+    setViewNote({
+      open: true,
+      sku: String(row.sku ?? ""),
+      name: String(row.name ?? ""),
+      note,
+    });
+  };
+
+  const closeViewNote = () => setViewNote({ open: false });
+
+  const copyNote = async () => {
+    if (!viewNote.open) return;
+    try {
+      await navigator.clipboard.writeText(viewNote.note || "");
+      showToast("success", "Đã copy ghi chú.");
+    } catch {
+      showToast("error", "Không copy được (trình duyệt chặn clipboard).");
+    }
+  };
+
+  const noteColWidth = 260;
 
   return (
     <div className="page-container" ref={containerRef}>
@@ -433,9 +633,14 @@ const PartStocksPage: React.FC = () => {
             <span style={{ fontSize: 11, color: "#6b7280" }}>(Chỉ dành cho Admin)</span>
           </div>
 
-          <form onSubmit={handleCreatePart} style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
+          <form
+            onSubmit={handleCreatePart}
+            style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}
+          >
             <div style={{ minWidth: 140, flex: "0 0 auto" }}>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>Mã linh kiện</label>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                Mã linh kiện
+              </label>
               <input
                 type="text"
                 value={newSku}
@@ -453,7 +658,9 @@ const PartStocksPage: React.FC = () => {
             </div>
 
             <div style={{ minWidth: 220, flex: 1 }}>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>Tên linh kiện *</label>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                Tên linh kiện *
+              </label>
               <input
                 type="text"
                 value={newName}
@@ -471,7 +678,9 @@ const PartStocksPage: React.FC = () => {
             </div>
 
             <div style={{ minWidth: 180, flex: "0 0 auto" }}>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>ĐVT</label>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                ĐVT
+              </label>
               <select
                 value={newUnitId}
                 onChange={(e) => setNewUnitId(e.target.value)}
@@ -499,7 +708,9 @@ const PartStocksPage: React.FC = () => {
             </div>
 
             <div style={{ minWidth: 140, flex: "0 0 auto" }}>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>Giá bán (VND)</label>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                Giá bán (VND)
+              </label>
               <input
                 type="number"
                 min={0}
@@ -541,7 +752,15 @@ const PartStocksPage: React.FC = () => {
         </div>
       )}
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 16 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 12,
+          gap: 16,
+        }}
+      >
         <form onSubmit={handleSearchSubmit} style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <input
             type="text"
@@ -600,16 +819,76 @@ const PartStocksPage: React.FC = () => {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
           <thead style={{ backgroundColor: "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
             <tr>
-              <th style={{ textAlign: "left", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 160 }}>Mã</th>
-              <th style={{ textAlign: "left", padding: "8px 10px", borderRight: "1px solid #e5e7eb" }}>Tên linh kiện</th>
-              <th style={{ textAlign: "center", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 110 }}>ĐVT</th>
+              <th
+                style={{
+                  textAlign: "left",
+                  padding: "8px 10px",
+                  borderRight: "1px solid #e5e7eb",
+                  width: 160,
+                }}
+              >
+                Mã
+              </th>
+              <th style={{ textAlign: "left", padding: "8px 10px", borderRight: "1px solid #e5e7eb" }}>
+                Tên linh kiện
+              </th>
+
+              {/* ✅ NEW: NOTE COLUMN */}
+              <th
+                style={{
+                  textAlign: "left",
+                  padding: "8px 10px",
+                  borderRight: "1px solid #e5e7eb",
+                  width: noteColWidth,
+                }}
+              >
+                Ghi chú
+              </th>
+
+              <th
+                style={{
+                  textAlign: "center",
+                  padding: "8px 10px",
+                  borderRight: "1px solid #e5e7eb",
+                  width: 110,
+                }}
+              >
+                ĐVT
+              </th>
               <th style={{ textAlign: "right", padding: "8px 10px", width: 120 }}>Tồn kho</th>
 
               {isAdmin && (
                 <>
-                  <th style={{ textAlign: "right", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 140 }}>Giá vốn TB</th>
-                  <th style={{ textAlign: "right", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 160 }}>Giá trị tồn</th>
-                  <th style={{ textAlign: "center", padding: "8px 10px", borderRight: "1px solid #e5e7eb", width: 120 }}>Cập nhật</th>
+                  <th
+                    style={{
+                      textAlign: "right",
+                      padding: "8px 10px",
+                      borderRight: "1px solid #e5e7eb",
+                      width: 140,
+                    }}
+                  >
+                    Giá vốn TB
+                  </th>
+                  <th
+                    style={{
+                      textAlign: "right",
+                      padding: "8px 10px",
+                      borderRight: "1px solid #e5e7eb",
+                      width: 160,
+                    }}
+                  >
+                    Giá trị tồn
+                  </th>
+                  <th
+                    style={{
+                      textAlign: "center",
+                      padding: "8px 10px",
+                      borderRight: "1px solid #e5e7eb",
+                      width: 120,
+                    }}
+                  >
+                    Cập nhật
+                  </th>
                 </>
               )}
             </tr>
@@ -618,75 +897,291 @@ const PartStocksPage: React.FC = () => {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={isAdmin ? 7 : 4} style={{ padding: 12, textAlign: "center" }}>
+                <td colSpan={isAdmin ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
                   Đang tải dữ liệu...
                 </td>
               </tr>
             ) : pagedRows.length === 0 ? (
               <tr>
-                <td colSpan={isAdmin ? 7 : 4} style={{ padding: 12, textAlign: "center" }}>
+                <td colSpan={isAdmin ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
                   Không có linh kiện nào thỏa điều kiện.
                 </td>
               </tr>
             ) : (
-              pagedRows.map((row) => (
-                <tr key={row.itemId || row.sku || row.name}>
-                  <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9" }}>{row.sku}</td>
+              pagedRows.map((row) => {
+                const id = row.itemId || "";
+                const draft = id ? getNoteUi(row) : undefined;
+                const noteText = String(row.note ?? "");
+                const isEditing = !!draft?.editing;
+                const isSaving = !!draft?.saving;
+                const val = draft ? draft.value : noteText;
+                const dirty = draft ? draft.value.trim() !== draft.original.trim() : false;
 
-                  <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9" }}>{row.name}</td>
+                const showEye = noteText.trim().length > 60;
 
-                  <td
-                    style={{
-                      padding: "8px 10px",
-                      borderTop: "1px solid #f1f5f9",
-                      borderRight: "1px solid #f1f5f9",
-                      textAlign: "center",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {renderUnitCell(row)}
-                  </td>
+                return (
+                  <tr key={row.itemId || row.sku || row.name}>
+                    <td
+                      style={{
+                        padding: "8px 10px",
+                        borderTop: "1px solid #f1f5f9",
+                        borderRight: "1px solid #f1f5f9",
+                      }}
+                    >
+                      {row.sku}
+                    </td>
 
-                  <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", textAlign: "right", whiteSpace: "nowrap", fontWeight: 600 }}>
-                    {fmtQty(row.totalQty)}
-                  </td>
+                    <td
+                      style={{
+                        padding: "8px 10px",
+                        borderTop: "1px solid #f1f5f9",
+                        borderRight: "1px solid #f1f5f9",
+                      }}
+                    >
+                      {row.name}
+                    </td>
 
-                  {isAdmin && (
-                    <>
-                      <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9", textAlign: "right", whiteSpace: "nowrap" }}>
-                        {fmtMoney(row.avgCost || 0)}
-                      </td>
-                      <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9", textAlign: "right", whiteSpace: "nowrap" }}>
-                        {fmtMoney(row.stockValue || 0)}
-                      </td>
-                      <td style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", borderRight: "1px solid #f1f5f9", textAlign: "center", whiteSpace: "nowrap" }}>
-                        <button
-                          type="button"
-                          onClick={() => openEdit(row)}
+                    {/* ✅ NOTE CELL */}
+                    <td
+                      style={{
+                        padding: "8px 10px",
+                        borderTop: "1px solid #f1f5f9",
+                        borderRight: "1px solid #f1f5f9",
+                      }}
+                    >
+                      {!canEditNote || !row.itemId ? (
+                        <div
                           style={{
-                            padding: "6px 10px",
-                            borderRadius: 6,
-                            border: "1px solid #2563eb",
-                            backgroundColor: "#eff6ff",
-                            color: "#1d4ed8",
+                            color: "#334155",
                             fontSize: 13,
-                            fontWeight: 700,
-                            cursor: "pointer",
+                            lineHeight: 1.35,
+                            display: "-webkit-box",
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: "vertical" as any,
+                            overflow: "hidden",
+                            wordBreak: "break-word",
+                          }}
+                          title={noteText || ""}
+                        >
+                          {noteText ? noteText : <span style={{ color: "#94a3b8" }}>—</span>}
+                        </div>
+                      ) : isEditing ? (
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <input
+                            value={val}
+                            onChange={(e) => changeNoteValue(row.itemId!, e.target.value)}
+                            onKeyDown={(e) => onNoteKeyDown(e, row)}
+                            disabled={isSaving}
+                            placeholder="Nhập ghi chú..."
+                            style={{
+                              width: "100%",
+                              padding: "6px 8px",
+                              borderRadius: 6,
+                              border: "1px solid #cbd5e1",
+                              fontSize: 13,
+                              outline: "none",
+                            }}
+                          />
+
+                          <button
+                            type="button"
+                            onClick={() => saveNote(row)}
+                            disabled={isSaving || !dirty}
+                            title="Lưu (Enter)"
+                            style={{
+                              padding: "6px 10px",
+                              borderRadius: 6,
+                              border: "1px solid #16a34a",
+                              backgroundColor: isSaving || !dirty ? "#dcfce7" : "#16a34a",
+                              color: isSaving || !dirty ? "#166534" : "#fff",
+                              fontSize: 12,
+                              fontWeight: 800,
+                              cursor: isSaving || !dirty ? "default" : "pointer",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {isSaving ? "..." : "Lưu"}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => cancelEditNote(row.itemId!)}
+                            disabled={isSaving}
+                            title="Hủy (Esc)"
+                            style={{
+                              padding: "6px 10px",
+                              borderRadius: 6,
+                              border: "1px solid #e5e7eb",
+                              backgroundColor: "#fff",
+                              color: "#334155",
+                              fontSize: 12,
+                              fontWeight: 800,
+                              cursor: isSaving ? "default" : "pointer",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            Hủy
+                          </button>
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                          <div
+                            style={{
+                              color: "#334155",
+                              fontSize: 13,
+                              lineHeight: 1.35,
+                              display: "-webkit-box",
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: "vertical" as any,
+                              overflow: "hidden",
+                              wordBreak: "break-word",
+                              flex: 1,
+                            }}
+                            title={noteText || ""}
+                          >
+                            {noteText ? noteText : <span style={{ color: "#94a3b8" }}>—</span>}
+                          </div>
+
+                          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            {showEye && (
+                              <button
+                                type="button"
+                                onClick={() => openViewNote(row)}
+                                style={{
+                                  padding: "4px 8px",
+                                  borderRadius: 999,
+                                  border: "1px solid #cbd5e1",
+                                  backgroundColor: "#fff",
+                                  color: "#0f172a",
+                                  fontSize: 12,
+                                  fontWeight: 900,
+                                  cursor: "pointer",
+                                  whiteSpace: "nowrap",
+                                }}
+                                title="Xem đầy đủ"
+                              >
+                                👁
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => startEditNote(row)}
+                              style={{
+                                padding: "4px 8px",
+                                borderRadius: 999,
+                                border: "1px solid #cbd5e1",
+                                backgroundColor: "#fff",
+                                color: "#0f172a",
+                                fontSize: 12,
+                                fontWeight: 900,
+                                cursor: "pointer",
+                                whiteSpace: "nowrap",
+                              }}
+                              title="Sửa ghi chú"
+                            >
+                              ✎
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </td>
+
+                    <td
+                      style={{
+                        padding: "8px 10px",
+                        borderTop: "1px solid #f1f5f9",
+                        borderRight: "1px solid #f1f5f9",
+                        textAlign: "center",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {renderUnitCell(row)}
+                    </td>
+
+                    <td
+                      style={{
+                        padding: "8px 10px",
+                        borderTop: "1px solid #f1f5f9",
+                        textAlign: "right",
+                        whiteSpace: "nowrap",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {fmtQty(row.totalQty)}
+                    </td>
+
+                    {isAdmin && (
+                      <>
+                        <td
+                          style={{
+                            padding: "8px 10px",
+                            borderTop: "1px solid #f1f5f9",
+                            borderRight: "1px solid #f1f5f9",
+                            textAlign: "right",
+                            whiteSpace: "nowrap",
                           }}
                         >
-                          Sửa
-                        </button>
-                      </td>
-                    </>
-                  )}
-                </tr>
-              ))
+                          {fmtMoney(row.avgCost || 0)}
+                        </td>
+                        <td
+                          style={{
+                            padding: "8px 10px",
+                            borderTop: "1px solid #f1f5f9",
+                            borderRight: "1px solid #f1f5f9",
+                            textAlign: "right",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {fmtMoney(row.stockValue || 0)}
+                        </td>
+                        <td
+                          style={{
+                            padding: "8px 10px",
+                            borderTop: "1px solid #f1f5f9",
+                            borderRight: "1px solid #f1f5f9",
+                            textAlign: "center",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => openEdit(row)}
+                            style={{
+                              padding: "6px 10px",
+                              borderRadius: 6,
+                              border: "1px solid #2563eb",
+                              backgroundColor: "#eff6ff",
+                              color: "#1d4ed8",
+                              fontSize: 13,
+                              fontWeight: 700,
+                              cursor: "pointer",
+                            }}
+                          >
+                            Sửa
+                          </button>
+                        </td>
+                      </>
+                    )}
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
       </div>
 
-      <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, flexWrap: "wrap", gap: 8 }}>
+      <div
+        style={{
+          marginTop: 10,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          fontSize: 13,
+          flexWrap: "wrap",
+          gap: 8,
+        }}
+      >
         <div>
           Trang {page}/{totalPages} – Tổng {totalItems} linh kiện
         </div>
@@ -748,7 +1243,7 @@ const PartStocksPage: React.FC = () => {
         </div>
       </div>
 
-      {/* ========================= EDIT MODAL ========================= */}
+      {/* ========================= EDIT MODAL (GIỮ NGUYÊN LOGIC) ========================= */}
       {edit.open && isAdmin && (
         <div
           role="dialog"
@@ -829,15 +1324,18 @@ const PartStocksPage: React.FC = () => {
               >
                 <div style={{ fontWeight: 800, marginBottom: 4 }}>Phạm vi cập nhật</div>
                 <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
-                  <li>Đổi <b>Mã (SKU)</b>, <b>Tên</b>, <b>ĐVT</b>, <b>Giá bán</b> trên master Item.</li>
+                  <li>
+                    Đổi <b>Mã (SKU)</b>, <b>Tên</b>, <b>ĐVT</b>, <b>Giá bán</b> trên master Item.
+                  </li>
                   <li>Không đụng tồn / giá vốn / movement / invoice nên an toàn.</li>
                 </ul>
               </div>
 
               <div style={{ display: "grid", gap: 12 }}>
-                {/* ✅ NEW: editable SKU */}
                 <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Mã linh kiện (SKU) *</label>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
+                    Mã linh kiện (SKU) *
+                  </label>
                   <input
                     type="text"
                     value={edit.sku}
@@ -859,7 +1357,9 @@ const PartStocksPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Tên linh kiện *</label>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
+                    Tên linh kiện *
+                  </label>
                   <input
                     type="text"
                     value={edit.name}
@@ -880,7 +1380,9 @@ const PartStocksPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Đơn vị tính (Unit) *</label>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
+                    Đơn vị tính (Unit) *
+                  </label>
                   <select
                     value={edit.unitId}
                     onChange={(e) => setEdit({ ...edit, unitId: e.target.value })}
@@ -916,7 +1418,9 @@ const PartStocksPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Giá bán (VND)</label>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
+                    Giá bán (VND)
+                  </label>
                   <input
                     type="number"
                     min={0}
@@ -985,7 +1489,135 @@ const PartStocksPage: React.FC = () => {
           </div>
         </div>
       )}
-      {/* ========================= END MODAL ========================= */}
+      {/* ========================= END EDIT MODAL ========================= */}
+
+      {/* ========================= VIEW NOTE MODAL ========================= */}
+      {viewNote.open && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) closeViewNote();
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            backgroundColor: "rgba(0,0,0,0.45)",
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: "min(720px, 96vw)",
+              maxHeight: "90vh",
+              backgroundColor: "#fff",
+              borderRadius: 12,
+              border: "1px solid #e5e7eb",
+              overflow: "hidden",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <div
+              style={{
+                padding: "12px 14px",
+                borderBottom: "1px solid #e5e7eb",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 900 }}>Ghi chú</div>
+                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                  <b>{viewNote.sku}</b> — {viewNote.name}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeViewNote}
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 8,
+                  border: "1px solid #e5e7eb",
+                  backgroundColor: "#fff",
+                  cursor: "pointer",
+                  fontWeight: 900,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ padding: 14, overflow: "auto", flex: 1 }}>
+              <div
+                style={{
+                  padding: 12,
+                  borderRadius: 10,
+                  border: "1px solid #e2e8f0",
+                  backgroundColor: "#f8fafc",
+                  fontSize: 14,
+                  lineHeight: 1.6,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                }}
+              >
+                {viewNote.note ? viewNote.note : <span style={{ color: "#94a3b8" }}>Không có ghi chú.</span>}
+              </div>
+            </div>
+
+            <div
+              style={{
+                padding: 12,
+                borderTop: "1px solid #e5e7eb",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-end",
+                gap: 8,
+                backgroundColor: "#fff",
+              }}
+            >
+              <button
+                type="button"
+                onClick={copyNote}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #cbd5e1",
+                  backgroundColor: "#fff",
+                  cursor: "pointer",
+                  fontWeight: 900,
+                }}
+              >
+                Copy
+              </button>
+
+              <button
+                type="button"
+                onClick={closeViewNote}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #e5e7eb",
+                  backgroundColor: "#fff",
+                  cursor: "pointer",
+                  fontWeight: 900,
+                }}
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ========================= END VIEW NOTE MODAL ========================= */}
     </div>
   );
 };

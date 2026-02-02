@@ -379,38 +379,37 @@ const InvoicesPage: React.FC = () => {
     setConfirmOpen(true);
   };
 
-const loadAccounts = async () => {
-  try {
-    setAccountsLoading(true);
+  const loadAccounts = async () => {
+    try {
+      setAccountsLoading(true);
 
-    const res = await api.get("/payment-accounts", {
-      params: { active: 1, _ts: Date.now() },
-    });
+      const res = await api.get("/payment-accounts", {
+        params: { active: 1, _ts: Date.now() },
+      });
 
-    const arr: any[] = Array.isArray(res?.data)
-      ? res.data
-      : Array.isArray(res?.data?.data)
-      ? res.data.data
-      : [];
+      const arr: any[] = Array.isArray(res?.data)
+        ? res.data
+        : Array.isArray(res?.data?.data)
+        ? res.data.data
+        : [];
 
-    const mapped: PaymentAccount[] = arr
-      .map((a: any) => ({
-        id: String(a.id),
-        code: String(a.code || ""),
-        name: String(a.name || ""),
-      }))
-      .filter((a) => a.id && a.id !== "undefined" && a.id !== "null");
+      const mapped: PaymentAccount[] = arr
+        .map((a: any) => ({
+          id: String(a.id),
+          code: String(a.code || ""),
+          name: String(a.name || ""),
+        }))
+        .filter((a) => a.id && a.id !== "undefined" && a.id !== "null");
 
-    // ✅ Chỉ load danh sách tài khoản, KHÔNG auto chọn tài khoản nào
-    setAccounts(mapped);
-  } catch (err) {
-    console.error("load payment accounts error", err);
-    setAccounts([]);
-  } finally {
-    setAccountsLoading(false);
-  }
-};
-
+      // ✅ Chỉ load danh sách tài khoản, KHÔNG auto chọn tài khoản nào
+      setAccounts(mapped);
+    } catch (err) {
+      console.error("load payment accounts error", err);
+      setAccounts([]);
+    } finally {
+      setAccountsLoading(false);
+    }
+  };
 
   const fetchInvoices = async (q: string, fromVal: string, toVal: string, typeVal: InvoiceTypeFilter) => {
     try {
@@ -654,6 +653,44 @@ const loadAccounts = async () => {
     setRejectOpen(true);
   };
 
+  // ✅ NEW: Điều chỉnh (ADMIN) cho hóa đơn APPROVED trong tháng hiện tại
+  const handleAdjustApproved = async (inv: InvoiceListItem) => {
+    if (!inv?.id) return;
+
+    if (!isAdmin) {
+      toast.push({ type: "warning", title: "Không có quyền", message: "Chỉ ADMIN mới được điều chỉnh hóa đơn đã duyệt." });
+      return;
+    }
+    if (inv.status !== "APPROVED") {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Chỉ hóa đơn ĐÃ DUYỆT mới cần điều chỉnh." });
+      return;
+    }
+    if (!isInCurrentMonth(inv.date)) {
+      toast.push({ type: "warning", title: "Bị khóa kỳ", message: "Chỉ được điều chỉnh hóa đơn trong THÁNG HIỆN TẠI." });
+      return;
+    }
+
+    openConfirm({
+      title: "Điều chỉnh hóa đơn",
+      message: (
+        <div className="text-sm text-gray-700 space-y-2">
+          <div>
+            Bạn muốn <b>mở lại</b> hóa đơn <b>{inv.code}</b> để sửa?
+          </div>
+          <div className="text-xs text-gray-500">
+            * Hệ thống sẽ rollback tồn (nếu có) và đưa hóa đơn về trạng thái NHÁP để bạn chỉnh sửa lại.
+          </div>
+        </div>
+      ),
+      action: async () => {
+        await api.post(`/invoices/${inv.id}/reopen`, { _ts: Date.now() });
+        toast.push({ type: "success", title: "Đã mở lại", message: `Hóa đơn ${inv.code} đã mở lại để sửa.` });
+        await fetchInvoices(search.trim(), from, to, typeFilter);
+        navigate(`/invoices/${inv.id}`, { state: { adminEditApproved: true } });
+      },
+    });
+  };
+
   const openPayModal = (inv: InvoiceListItem) => {
     if (!isAdmin) {
       toast.push({ type: "warning", title: "Không có quyền", message: "Chỉ ADMIN mới được thao tác thanh toán." });
@@ -692,7 +729,6 @@ const loadAccounts = async () => {
     setPayTarget(inv);
     setPayAmount(remainingNormal);
     setPayAmountText(formatMoney(remainingNormal));
-    // if (!payAccountId && accounts.length > 0) setPayAccountId(accounts[0].id);
     setPayAccountId("");
     setPayOpen(true);
   };
@@ -1015,6 +1051,9 @@ const loadAccounts = async () => {
                   const isHighlighted = highlightInvoiceId && String(inv.id) === String(highlightInvoiceId);
                   const returnedBadge = renderReturnBadge(inv);
 
+                  // ✅ Option A: Nút điều chỉnh riêng
+                  const canAdjust = isAdmin && inv.status === "APPROVED" && isInCurrentMonth(inv.date);
+
                   return (
                     <tr
                       key={inv.id}
@@ -1136,6 +1175,7 @@ const loadAccounts = async () => {
 
                       <td className="px-3 py-2 border-t border-gray-200">
                         <div className="flex flex-wrap items-center gap-3 text-xs">
+                          {/* ✅ Sửa: chỉ DRAFT như cũ */}
                           <button
                             type="button"
                             className={
@@ -1146,6 +1186,25 @@ const loadAccounts = async () => {
                             onClick={() => navigate(`/invoices/${inv.id}`)}
                           >
                             Sửa
+                          </button>
+
+                          {/* ✅ NEW: Điều chỉnh riêng (ADMIN + APPROVED + trong tháng) */}
+                          <button
+                            type="button"
+                            className={"hover:underline " + (canAdjust ? "text-indigo-600" : "text-gray-400 cursor-not-allowed")}
+                            disabled={!canAdjust}
+                            onClick={() => handleAdjustApproved(inv)}
+                            title={
+                              canAdjust
+                                ? "Mở lại hóa đơn đã duyệt để sửa"
+                                : !isAdmin
+                                ? "Chỉ ADMIN"
+                                : inv.status !== "APPROVED"
+                                ? "Chỉ áp dụng cho hóa đơn ĐÃ DUYỆT"
+                                : "Chỉ được trong tháng hiện tại"
+                            }
+                          >
+                            Điều chỉnh
                           </button>
 
                           <button
@@ -1453,39 +1512,38 @@ const loadAccounts = async () => {
                   <div>
                     <label className="block text-xs font-semibold mb-1">Tài khoản thanh toán</label>
                     <select
-                        value={payAccountId}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setPayAccountId(v);
+                      value={payAccountId}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setPayAccountId(v);
 
-                          // ✅ chỉ lưu khi user chọn tài khoản thật
-                          if (v) {
-                            try {
-                              localStorage.setItem(LS_LAST_PAY_ACCOUNT, String(v));
-                            } catch {}
-                          }
-                        }}
-                        className="w-full border border-gray-300 rounded-md px-2 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
-                        disabled={!isAdmin || accountsLoading || paySubmitting}
-                      >
-                        {/* ✅ placeholder bắt buộc chọn */}
+                        // ✅ chỉ lưu khi user chọn tài khoản thật
+                        if (v) {
+                          try {
+                            localStorage.setItem(LS_LAST_PAY_ACCOUNT, String(v));
+                          } catch {}
+                        }
+                      }}
+                      className="w-full border border-gray-300 rounded-md px-2 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                      disabled={!isAdmin || accountsLoading || paySubmitting}
+                    >
+                      {/* ✅ placeholder bắt buộc chọn */}
+                      <option value="" disabled>
+                        -- Chọn tài khoản --
+                      </option>
+
+                      {accounts.length === 0 ? (
                         <option value="" disabled>
-                          -- Chọn tài khoản --
+                          Chưa có tài khoản
                         </option>
-
-                        {accounts.length === 0 ? (
-                          <option value="" disabled>
-                            Chưa có tài khoản
+                      ) : (
+                        accounts.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.code} - {a.name}
                           </option>
-                        ) : (
-                          accounts.map((a) => (
-                            <option key={a.id} value={a.id}>
-                              {a.code} - {a.name}
-                            </option>
-                          ))
-                        )}
-                      </select>
-
+                        ))
+                      )}
+                    </select>
                   </div>
                 </div>
 
