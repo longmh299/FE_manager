@@ -1,6 +1,6 @@
 // src/pages/PartStocksPage.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import api, { extractList, getApiBaseUrl } from "../api/client";
+import api, { extractList } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 
 type PartStockRow = {
