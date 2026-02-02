@@ -254,9 +254,7 @@ const PartStocksPage: React.FC = () => {
   const handleExport = () => {
     const base = getApiBaseUrl();
     const url =
-      base +
-      "/api/stocks/summary-by-item/export?kind=PART" +
-      (q ? `&q=${encodeURIComponent(q)}` : "");
+      base + "/api/stocks/summary-by-item/export?kind=PART" + (q ? `&q=${encodeURIComponent(q)}` : "");
     window.open(url, "_blank");
   };
 
@@ -266,7 +264,16 @@ const PartStocksPage: React.FC = () => {
     scrollToTop();
   };
 
-  const pageNumbers = Array.from({ length: totalPages }, (_, i) => i + 1);
+  // ✅ pagination responsive
+  const isMobile =
+    typeof window !== "undefined" ? window.matchMedia("(max-width: 640px)").matches : false;
+
+  const pageNumbers = useMemo(() => {
+    if (!totalPages) return [1];
+    if (isMobile) return [page];
+    return Array.from({ length: totalPages }, (_, i) => i + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalPages, page, isMobile]);
 
   const handleCreatePart = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -389,14 +396,12 @@ const PartStocksPage: React.FC = () => {
     try {
       setEdit({ ...edit, loading: true });
 
-      // ✅ sửa master: sku + name + unit
       await api.patch(`/items/${edit.itemId}/master`, {
         ...(skuTrim ? { sku: skuTrim } : {}),
         name,
         unitId: edit.unitId,
       });
 
-      // ✅ sellPrice: cập nhật qua PUT /items/:id (accountant|admin)
       await api.put(`/items/${edit.itemId}`, {
         sellPrice: sellPriceNumber ?? 0,
       });
@@ -490,7 +495,6 @@ const PartStocksPage: React.FC = () => {
     const value = (draft?.value ?? String(row.note ?? "")).trim();
     const original = draft?.original ?? String(row.note ?? "");
 
-    // Không đổi gì thì thôi
     if (value === original.trim()) {
       setNoteDrafts((prev) => {
         const d = prev[itemId];
@@ -511,12 +515,8 @@ const PartStocksPage: React.FC = () => {
         note: value ? value : null,
       });
 
-      // ✅ update rows local
-      setRows((prev) =>
-        prev.map((r) => (r.itemId === itemId ? { ...r, note: value ? value : null } : r))
-      );
+      setRows((prev) => prev.map((r) => (r.itemId === itemId ? { ...r, note: value || null } : r)));
 
-      // ✅ sync draft state
       setNoteDrafts((prev) => {
         const d = prev[itemId] || { editing: false, value, original, saving: false };
         return {
@@ -582,6 +582,10 @@ const PartStocksPage: React.FC = () => {
 
   const noteColWidth = 260;
 
+  // ===== common borders =====
+  const B_HDR = "1px solid #e5e7eb";
+  const B_ROW = "1px solid #f1f5f9";
+
   return (
     <div className="page-container" ref={containerRef}>
       <div className="page-subtitle">Tồn kho theo linh kiện</div>
@@ -609,6 +613,7 @@ const PartStocksPage: React.FC = () => {
         </div>
       )}
 
+      {/* ✅ Create card responsive */}
       {isAdmin && (
         <div
           style={{
@@ -627,17 +632,15 @@ const PartStocksPage: React.FC = () => {
               display: "flex",
               alignItems: "center",
               gap: 6,
+              flexWrap: "wrap",
             }}
           >
             <span>Tạo mới linh kiện nhanh</span>
             <span style={{ fontSize: 11, color: "#6b7280" }}>(Chỉ dành cho Admin)</span>
           </div>
 
-          <form
-            onSubmit={handleCreatePart}
-            style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}
-          >
-            <div style={{ minWidth: 140, flex: "0 0 auto" }}>
+          <form onSubmit={handleCreatePart} style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
+            <div style={{ minWidth: 180, flex: "1 1 180px" }}>
               <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
                 Mã linh kiện
               </label>
@@ -657,7 +660,7 @@ const PartStocksPage: React.FC = () => {
               />
             </div>
 
-            <div style={{ minWidth: 220, flex: 1 }}>
+            <div style={{ minWidth: 220, flex: "2 1 220px" }}>
               <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
                 Tên linh kiện *
               </label>
@@ -677,7 +680,7 @@ const PartStocksPage: React.FC = () => {
               />
             </div>
 
-            <div style={{ minWidth: 180, flex: "0 0 auto" }}>
+            <div style={{ minWidth: 180, flex: "1 1 180px" }}>
               <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
                 ĐVT
               </label>
@@ -707,7 +710,7 @@ const PartStocksPage: React.FC = () => {
               </select>
             </div>
 
-            <div style={{ minWidth: 140, flex: "0 0 auto" }}>
+            <div style={{ minWidth: 180, flex: "1 1 180px" }}>
               <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
                 Giá bán (VND)
               </label>
@@ -752,23 +755,35 @@ const PartStocksPage: React.FC = () => {
         </div>
       )}
 
+      {/* ✅ Search + Export responsive (wrap) */}
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
-          alignItems: "center",
+          alignItems: "flex-end",
           marginBottom: 12,
-          gap: 16,
+          gap: 12,
+          flexWrap: "wrap",
         }}
       >
-        <form onSubmit={handleSearchSubmit} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <form
+          onSubmit={handleSearchSubmit}
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            flex: "1 1 320px",
+            flexWrap: "wrap",
+          }}
+        >
           <input
             type="text"
             placeholder="Tìm theo mã / tên linh kiện..."
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             style={{
-              minWidth: 260,
+              flex: "1 1 220px",
+              width: "100%",
               padding: "8px 10px",
               borderRadius: 6,
               border: "1px solid #cbd5e1",
@@ -807,6 +822,7 @@ const PartStocksPage: React.FC = () => {
             cursor: "pointer",
             whiteSpace: "nowrap",
             fontWeight: 700,
+            flex: "0 0 auto",
           }}
         >
           Xuất Excel tồn linh kiện
@@ -815,216 +831,92 @@ const PartStocksPage: React.FC = () => {
 
       {error && <div style={{ marginBottom: 8, color: "#b91c1c", fontSize: 14 }}>Lỗi: {error}</div>}
 
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, overflow: "hidden", backgroundColor: "#fff" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-          <thead style={{ backgroundColor: "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
-            <tr>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "8px 10px",
-                  borderRight: "1px solid #e5e7eb",
-                  width: 160,
-                }}
-              >
-                Mã
-              </th>
-              <th style={{ textAlign: "left", padding: "8px 10px", borderRight: "1px solid #e5e7eb" }}>
-                Tên linh kiện
-              </th>
-
-              {/* ✅ NEW: NOTE COLUMN */}
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "8px 10px",
-                  borderRight: "1px solid #e5e7eb",
-                  width: noteColWidth,
-                }}
-              >
-                Ghi chú
-              </th>
-
-              <th
-                style={{
-                  textAlign: "center",
-                  padding: "8px 10px",
-                  borderRight: "1px solid #e5e7eb",
-                  width: 110,
-                }}
-              >
-                ĐVT
-              </th>
-              <th style={{ textAlign: "right", padding: "8px 10px", width: 120 }}>Tồn kho</th>
-
-              {isAdmin && (
-                <>
-                  <th
-                    style={{
-                      textAlign: "right",
-                      padding: "8px 10px",
-                      borderRight: "1px solid #e5e7eb",
-                      width: 140,
-                    }}
-                  >
-                    Giá vốn TB
-                  </th>
-                  <th
-                    style={{
-                      textAlign: "right",
-                      padding: "8px 10px",
-                      borderRight: "1px solid #e5e7eb",
-                      width: 160,
-                    }}
-                  >
-                    Giá trị tồn
-                  </th>
-                  <th
-                    style={{
-                      textAlign: "center",
-                      padding: "8px 10px",
-                      borderRight: "1px solid #e5e7eb",
-                      width: 120,
-                    }}
-                  >
-                    Cập nhật
-                  </th>
-                </>
-              )}
-            </tr>
-          </thead>
-
-          <tbody>
-            {loading ? (
+      {/* ✅ Table wrapper scroll ngang (mobile) + FIX kẻ dọc */}
+      <div style={{ border: B_HDR, borderRadius: 8, overflow: "hidden", backgroundColor: "#fff" }}>
+        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+          <table
+            style={{
+              width: "100%",
+              minWidth: isAdmin ? 1180 : 860, // có cột note nên rộng hơn
+              borderCollapse: "collapse",
+              fontSize: 14,
+            }}
+          >
+            <thead style={{ backgroundColor: "#f9fafb", borderBottom: B_HDR }}>
               <tr>
-                <td colSpan={isAdmin ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
-                  Đang tải dữ liệu...
-                </td>
+                <th style={{ textAlign: "left", padding: "8px 10px", borderRight: B_HDR, width: 160, whiteSpace: "nowrap" }}>
+                  Mã
+                </th>
+                <th style={{ textAlign: "left", padding: "8px 10px", borderRight: B_HDR }}>
+                  Tên linh kiện
+                </th>
+
+                <th style={{ textAlign: "left", padding: "8px 10px", borderRight: B_HDR, width: noteColWidth }}>
+                  Ghi chú
+                </th>
+
+                <th style={{ textAlign: "center", padding: "8px 10px", borderRight: B_HDR, width: 110, whiteSpace: "nowrap" }}>
+                  ĐVT
+                </th>
+
+                {/* ✅ FIX: thêm borderRight cho Tồn kho */}
+                <th style={{ textAlign: "right", padding: "8px 10px", borderRight: B_HDR, width: 120, whiteSpace: "nowrap" }}>
+                  Tồn kho
+                </th>
+
+                {isAdmin && (
+                  <>
+                    <th style={{ textAlign: "right", padding: "8px 10px", borderRight: B_HDR, width: 140, whiteSpace: "nowrap" }}>
+                      Giá vốn TB
+                    </th>
+                    <th style={{ textAlign: "right", padding: "8px 10px", borderRight: B_HDR, width: 160, whiteSpace: "nowrap" }}>
+                      Giá trị tồn
+                    </th>
+                    <th style={{ textAlign: "center", padding: "8px 10px", width: 120, whiteSpace: "nowrap" }}>
+                      Cập nhật
+                    </th>
+                  </>
+                )}
               </tr>
-            ) : pagedRows.length === 0 ? (
-              <tr>
-                <td colSpan={isAdmin ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
-                  Không có linh kiện nào thỏa điều kiện.
-                </td>
-              </tr>
-            ) : (
-              pagedRows.map((row) => {
-                const id = row.itemId || "";
-                const draft = id ? getNoteUi(row) : undefined;
-                const noteText = String(row.note ?? "");
-                const isEditing = !!draft?.editing;
-                const isSaving = !!draft?.saving;
-                const val = draft ? draft.value : noteText;
-                const dirty = draft ? draft.value.trim() !== draft.original.trim() : false;
+            </thead>
 
-                const showEye = noteText.trim().length > 60;
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={isAdmin ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
+                    Đang tải dữ liệu...
+                  </td>
+                </tr>
+              ) : pagedRows.length === 0 ? (
+                <tr>
+                  <td colSpan={isAdmin ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
+                    Không có linh kiện nào thỏa điều kiện.
+                  </td>
+                </tr>
+              ) : (
+                pagedRows.map((row) => {
+                  const id = row.itemId || "";
+                  const draft = id ? getNoteUi(row) : undefined;
+                  const noteText = String(row.note ?? "");
+                  const isEditing = !!draft?.editing;
+                  const isSaving = !!draft?.saving;
+                  const val = draft ? draft.value : noteText;
+                  const dirty = draft ? draft.value.trim() !== draft.original.trim() : false;
 
-                return (
-                  <tr key={row.itemId || row.sku || row.name}>
-                    <td
-                      style={{
-                        padding: "8px 10px",
-                        borderTop: "1px solid #f1f5f9",
-                        borderRight: "1px solid #f1f5f9",
-                      }}
-                    >
-                      {row.sku}
-                    </td>
+                  const showEye = noteText.trim().length > 60;
 
-                    <td
-                      style={{
-                        padding: "8px 10px",
-                        borderTop: "1px solid #f1f5f9",
-                        borderRight: "1px solid #f1f5f9",
-                      }}
-                    >
-                      {row.name}
-                    </td>
+                  return (
+                    <tr key={row.itemId || row.sku || row.name}>
+                      <td style={{ padding: "8px 10px", borderTop: B_ROW, borderRight: B_ROW, whiteSpace: "nowrap" }}>
+                        {row.sku}
+                      </td>
 
-                    {/* ✅ NOTE CELL */}
-                    <td
-                      style={{
-                        padding: "8px 10px",
-                        borderTop: "1px solid #f1f5f9",
-                        borderRight: "1px solid #f1f5f9",
-                      }}
-                    >
-                      {!canEditNote || !row.itemId ? (
-                        <div
-                          style={{
-                            color: "#334155",
-                            fontSize: 13,
-                            lineHeight: 1.35,
-                            display: "-webkit-box",
-                            WebkitLineClamp: 2,
-                            WebkitBoxOrient: "vertical" as any,
-                            overflow: "hidden",
-                            wordBreak: "break-word",
-                          }}
-                          title={noteText || ""}
-                        >
-                          {noteText ? noteText : <span style={{ color: "#94a3b8" }}>—</span>}
-                        </div>
-                      ) : isEditing ? (
-                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                          <input
-                            value={val}
-                            onChange={(e) => changeNoteValue(row.itemId!, e.target.value)}
-                            onKeyDown={(e) => onNoteKeyDown(e, row)}
-                            disabled={isSaving}
-                            placeholder="Nhập ghi chú..."
-                            style={{
-                              width: "100%",
-                              padding: "6px 8px",
-                              borderRadius: 6,
-                              border: "1px solid #cbd5e1",
-                              fontSize: 13,
-                              outline: "none",
-                            }}
-                          />
+                      <td style={{ padding: "8px 10px", borderTop: B_ROW, borderRight: B_ROW }}>
+                        {row.name}
+                      </td>
 
-                          <button
-                            type="button"
-                            onClick={() => saveNote(row)}
-                            disabled={isSaving || !dirty}
-                            title="Lưu (Enter)"
-                            style={{
-                              padding: "6px 10px",
-                              borderRadius: 6,
-                              border: "1px solid #16a34a",
-                              backgroundColor: isSaving || !dirty ? "#dcfce7" : "#16a34a",
-                              color: isSaving || !dirty ? "#166534" : "#fff",
-                              fontSize: 12,
-                              fontWeight: 800,
-                              cursor: isSaving || !dirty ? "default" : "pointer",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {isSaving ? "..." : "Lưu"}
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => cancelEditNote(row.itemId!)}
-                            disabled={isSaving}
-                            title="Hủy (Esc)"
-                            style={{
-                              padding: "6px 10px",
-                              borderRadius: 6,
-                              border: "1px solid #e5e7eb",
-                              backgroundColor: "#fff",
-                              color: "#334155",
-                              fontSize: 12,
-                              fontWeight: 800,
-                              cursor: isSaving ? "default" : "pointer",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            Hủy
-                          </button>
-                        </div>
-                      ) : (
-                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                      <td style={{ padding: "8px 10px", borderTop: B_ROW, borderRight: B_ROW }}>
+                        {!canEditNote || !row.itemId ? (
                           <div
                             style={{
                               color: "#334155",
@@ -1035,18 +927,113 @@ const PartStocksPage: React.FC = () => {
                               WebkitBoxOrient: "vertical" as any,
                               overflow: "hidden",
                               wordBreak: "break-word",
-                              flex: 1,
                             }}
                             title={noteText || ""}
                           >
                             {noteText ? noteText : <span style={{ color: "#94a3b8" }}>—</span>}
                           </div>
-
+                        ) : isEditing ? (
                           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                            {showEye && (
+                            <input
+                              value={val}
+                              onChange={(e) => changeNoteValue(row.itemId!, e.target.value)}
+                              onKeyDown={(e) => onNoteKeyDown(e, row)}
+                              disabled={isSaving}
+                              placeholder="Nhập ghi chú..."
+                              style={{
+                                width: "100%",
+                                padding: "6px 8px",
+                                borderRadius: 6,
+                                border: "1px solid #cbd5e1",
+                                fontSize: 13,
+                                outline: "none",
+                              }}
+                            />
+
+                            <button
+                              type="button"
+                              onClick={() => saveNote(row)}
+                              disabled={isSaving || !dirty}
+                              title="Lưu (Enter)"
+                              style={{
+                                padding: "6px 10px",
+                                borderRadius: 6,
+                                border: "1px solid #16a34a",
+                                backgroundColor: isSaving || !dirty ? "#dcfce7" : "#16a34a",
+                                color: isSaving || !dirty ? "#166534" : "#fff",
+                                fontSize: 12,
+                                fontWeight: 800,
+                                cursor: isSaving || !dirty ? "default" : "pointer",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {isSaving ? "..." : "Lưu"}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => cancelEditNote(row.itemId!)}
+                              disabled={isSaving}
+                              title="Hủy (Esc)"
+                              style={{
+                                padding: "6px 10px",
+                                borderRadius: 6,
+                                border: "1px solid #e5e7eb",
+                                backgroundColor: "#fff",
+                                color: "#334155",
+                                fontSize: 12,
+                                fontWeight: 800,
+                                cursor: isSaving ? "default" : "pointer",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              Hủy
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                            <div
+                              style={{
+                                color: "#334155",
+                                fontSize: 13,
+                                lineHeight: 1.35,
+                                display: "-webkit-box",
+                                WebkitLineClamp: 2,
+                                WebkitBoxOrient: "vertical" as any,
+                                overflow: "hidden",
+                                wordBreak: "break-word",
+                                flex: 1,
+                              }}
+                              title={noteText || ""}
+                            >
+                              {noteText ? noteText : <span style={{ color: "#94a3b8" }}>—</span>}
+                            </div>
+
+                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                              {showEye && (
+                                <button
+                                  type="button"
+                                  onClick={() => openViewNote(row)}
+                                  style={{
+                                    padding: "4px 8px",
+                                    borderRadius: 999,
+                                    border: "1px solid #cbd5e1",
+                                    backgroundColor: "#fff",
+                                    color: "#0f172a",
+                                    fontSize: 12,
+                                    fontWeight: 900,
+                                    cursor: "pointer",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                  title="Xem đầy đủ"
+                                >
+                                  👁
+                                </button>
+                              )}
+
                               <button
                                 type="button"
-                                onClick={() => openViewNote(row)}
+                                onClick={() => startEditNote(row)}
                                 style={{
                                   padding: "4px 8px",
                                   borderRadius: 999,
@@ -1058,135 +1045,68 @@ const PartStocksPage: React.FC = () => {
                                   cursor: "pointer",
                                   whiteSpace: "nowrap",
                                 }}
-                                title="Xem đầy đủ"
+                                title="Sửa ghi chú"
                               >
-                                👁
+                                ✎
                               </button>
-                            )}
+                            </div>
+                          </div>
+                        )}
+                      </td>
 
+                      <td style={{ padding: "8px 10px", borderTop: B_ROW, borderRight: B_ROW, textAlign: "center", whiteSpace: "nowrap" }}>
+                        {renderUnitCell(row)}
+                      </td>
+
+                      {/* ✅ FIX: thêm borderRight cho Tồn kho ở body */}
+                      <td style={{ padding: "8px 10px", borderTop: B_ROW, borderRight: B_ROW, textAlign: "right", whiteSpace: "nowrap", fontWeight: 600 }}>
+                        {fmtQty(row.totalQty)}
+                      </td>
+
+                      {isAdmin && (
+                        <>
+                          <td style={{ padding: "8px 10px", borderTop: B_ROW, borderRight: B_ROW, textAlign: "right", whiteSpace: "nowrap" }}>
+                            {fmtMoney(row.avgCost || 0)}
+                          </td>
+                          <td style={{ padding: "8px 10px", borderTop: B_ROW, borderRight: B_ROW, textAlign: "right", whiteSpace: "nowrap" }}>
+                            {fmtMoney(row.stockValue || 0)}
+                          </td>
+                          <td style={{ padding: "8px 10px", borderTop: B_ROW, textAlign: "center", whiteSpace: "nowrap" }}>
                             <button
                               type="button"
-                              onClick={() => startEditNote(row)}
+                              onClick={() => openEdit(row)}
                               style={{
-                                padding: "4px 8px",
-                                borderRadius: 999,
-                                border: "1px solid #cbd5e1",
-                                backgroundColor: "#fff",
-                                color: "#0f172a",
-                                fontSize: 12,
-                                fontWeight: 900,
+                                padding: "6px 10px",
+                                borderRadius: 6,
+                                border: "1px solid #2563eb",
+                                backgroundColor: "#eff6ff",
+                                color: "#1d4ed8",
+                                fontSize: 13,
+                                fontWeight: 700,
                                 cursor: "pointer",
-                                whiteSpace: "nowrap",
                               }}
-                              title="Sửa ghi chú"
                             >
-                              ✎
+                              Sửa
                             </button>
-                          </div>
-                        </div>
+                          </td>
+                        </>
                       )}
-                    </td>
-
-                    <td
-                      style={{
-                        padding: "8px 10px",
-                        borderTop: "1px solid #f1f5f9",
-                        borderRight: "1px solid #f1f5f9",
-                        textAlign: "center",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {renderUnitCell(row)}
-                    </td>
-
-                    <td
-                      style={{
-                        padding: "8px 10px",
-                        borderTop: "1px solid #f1f5f9",
-                        textAlign: "right",
-                        whiteSpace: "nowrap",
-                        fontWeight: 600,
-                      }}
-                    >
-                      {fmtQty(row.totalQty)}
-                    </td>
-
-                    {isAdmin && (
-                      <>
-                        <td
-                          style={{
-                            padding: "8px 10px",
-                            borderTop: "1px solid #f1f5f9",
-                            borderRight: "1px solid #f1f5f9",
-                            textAlign: "right",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {fmtMoney(row.avgCost || 0)}
-                        </td>
-                        <td
-                          style={{
-                            padding: "8px 10px",
-                            borderTop: "1px solid #f1f5f9",
-                            borderRight: "1px solid #f1f5f9",
-                            textAlign: "right",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {fmtMoney(row.stockValue || 0)}
-                        </td>
-                        <td
-                          style={{
-                            padding: "8px 10px",
-                            borderTop: "1px solid #f1f5f9",
-                            borderRight: "1px solid #f1f5f9",
-                            textAlign: "center",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => openEdit(row)}
-                            style={{
-                              padding: "6px 10px",
-                              borderRadius: 6,
-                              border: "1px solid #2563eb",
-                              backgroundColor: "#eff6ff",
-                              color: "#1d4ed8",
-                              fontSize: 13,
-                              fontWeight: 700,
-                              cursor: "pointer",
-                            }}
-                          >
-                            Sửa
-                          </button>
-                        </td>
-                      </>
-                    )}
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      <div
-        style={{
-          marginTop: 10,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          fontSize: 13,
-          flexWrap: "wrap",
-          gap: 8,
-        }}
-      >
+      {/* ✅ Pagination responsive */}
+      <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, flexWrap: "wrap", gap: 8 }}>
         <div>
           Trang {page}/{totalPages} – Tổng {totalItems} linh kiện
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <button
             type="button"
             onClick={() => goToPage(page - 1)}
@@ -1204,25 +1124,42 @@ const PartStocksPage: React.FC = () => {
             Trước
           </button>
 
-          {pageNumbers.map((p) => (
-            <button
-              key={p}
-              type="button"
-              onClick={() => goToPage(p)}
+          {!isMobile &&
+            pageNumbers.map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => goToPage(p)}
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                  border: "1px solid #d1d5db",
+                  backgroundColor: p === page ? "#1d4ed8" : "#ffffff",
+                  color: p === page ? "#ffffff" : "#374151",
+                  cursor: "pointer",
+                  minWidth: 36,
+                  fontWeight: 800,
+                }}
+              >
+                {p}
+              </button>
+            ))}
+
+          {isMobile && (
+            <span
               style={{
                 padding: "6px 10px",
                 borderRadius: 6,
-                border: "1px solid #d1d5db",
-                backgroundColor: p === page ? "#1d4ed8" : "#ffffff",
-                color: p === page ? "#ffffff" : "#374151",
-                cursor: "pointer",
-                minWidth: 36,
+                border: "1px solid #e5e7eb",
+                background: "#fff",
                 fontWeight: 800,
+                minWidth: 90,
+                textAlign: "center",
               }}
             >
-              {p}
-            </button>
-          ))}
+              {page}/{totalPages}
+            </span>
+          )}
 
           <button
             type="button"
@@ -1310,6 +1247,7 @@ const PartStocksPage: React.FC = () => {
               </button>
             </div>
 
+            {/* phần body + footer modal giữ nguyên như bạn gửi (mình không đụng nữa) */}
             <div style={{ padding: 14, overflow: "auto", flex: 1 }}>
               <div
                 style={{
@@ -1489,7 +1427,6 @@ const PartStocksPage: React.FC = () => {
           </div>
         </div>
       )}
-      {/* ========================= END EDIT MODAL ========================= */}
 
       {/* ========================= VIEW NOTE MODAL ========================= */}
       {viewNote.open && (

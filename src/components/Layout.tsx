@@ -3,7 +3,6 @@ import { NavLink, Outlet, useLocation, Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { LowStockBell } from "./LowStockBell";
 
-
 type GroupKey =
   | "inventory"
   | "sales"
@@ -22,7 +21,6 @@ const Layout: React.FC = () => {
   const isAdmin = role === "admin";
   const isAccountant = role === "accountant";
   const isStaff = role === "staff";
-
   const canSeeAuditLogs = isAdmin || isAccountant;
 
   const location = useLocation();
@@ -33,7 +31,9 @@ const Layout: React.FC = () => {
   }
 
   const navCls = ({ isActive }: { isActive: boolean }) =>
-    `block rounded px-3 py-2 ${isActive ? "bg-slate-700" : "hover:bg-slate-800"}`;
+    `block rounded px-3 py-2 ${
+      isActive ? "bg-slate-700" : "hover:bg-slate-800"
+    }`;
 
   const linkMatch = (to: string) => {
     const p = location.pathname;
@@ -48,8 +48,6 @@ const Layout: React.FC = () => {
   const invLinks = useMemo(
     () => [
       { to: "part-stocks", label: "Tồn linh kiện" },
-      // ✅ ẨN: Linh kiện theo dòng máy
-      // { to: "machines", label: "Linh kiện theo dòng máy" },
       { to: "machine-stocks", label: "Tồn máy móc" },
     ],
     []
@@ -57,15 +55,9 @@ const Layout: React.FC = () => {
 
   const salesLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
-    // ✅ revenue: admin + accountant
     list.push({ to: "revenue", label: "Báo cáo doanh thu" });
     list.push({ to: "invoices", label: "Quản lý hóa đơn" });
-
     if (isAdmin) list.push({ to: "/sales-returns", label: "Khách trả hàng" });
-
-    // ✅ ẨN với admin/accountant: Doanh số cá nhân chỉ staff
-    // list.push({ to: "/me/sales", label: "Doanh số cá nhân" });
-
     return list;
   }, [isAdmin]);
 
@@ -74,7 +66,6 @@ const Layout: React.FC = () => {
     []
   );
 
-  // ✅ VẬN HÀNH: kiểm kê + tồn đầu
   const opsLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
     if (isAdmin) list.push({ to: "stock-counts", label: "Kiểm kê tồn" });
@@ -82,40 +73,26 @@ const Layout: React.FC = () => {
     return list;
   }, [isAdmin]);
 
-  // ✅ BÁO CÁO & CÔNG NỢ
   const reportLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
-
-    // bạn đang để report chỉ admin, mình giữ như cũ
     if (isAdmin) list.push({ to: "debts/by-sale", label: "Công Nợ" });
     if (isAdmin) list.push({ to: "/reports/ledger", label: "Sổ kho" });
     if (isAdmin) list.push({ to: "/reports/sales-ledger", label: "Bảng kê bán" });
-
-    // ✅ ADD: Báo cáo XNT (admin + accountant hay chỉ admin tuỳ bạn)
-    // Mặc định mình để admin + accountant đều thấy, vì đây là báo cáo kho.
-    if (isAdmin || isAccountant) {
+    if (isAdmin || isAccountant)
       list.push({ to: "/reports/stock-inout", label: "Báo cáo XNT" });
-    }
-
     return list;
   }, [isAdmin, isAccountant]);
 
-  // ✅ QUẢN TRỊ
   const adminLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
     if (isAdmin) list.push({ to: "users", label: "Quản lý tài khoản" });
-    if (isAdmin) list.push({ to: "payment-accounts", label: "Thêm tài khoản thanh toán" });
-
-    // ✅ AUDIT LOGS: admin + accountant
-    if (canSeeAuditLogs) {
-      list.push({ to: "audit-logs", label: "Lịch sử thao tác" });
-    }
+    if (isAdmin)
+      list.push({ to: "payment-accounts", label: "Thêm tài khoản thanh toán" });
+    if (canSeeAuditLogs) list.push({ to: "audit-logs", label: "Lịch sử thao tác" });
     if (isAdmin) list.push({ to: "invoice-status", label: "Sửa trạng thái hóa đơn" });
-
     return list;
   }, [isAdmin, canSeeAuditLogs]);
 
-  // ✅ TÀI KHOẢN
   const accountLinks = useMemo(
     () => [{ to: "change-password", label: "Đổi mật khẩu" }],
     []
@@ -132,32 +109,81 @@ const Layout: React.FC = () => {
     account: false,
   });
 
-  // load persisted (admin/accountant)
+  // ✅ Mobile drawer + Desktop collapse
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [desktopCollapsed, setDesktopCollapsed] = useState(false);
+
+  // ✅ track breakpoint reliably (fix rotate lag)
+  const [isDesktop, setIsDesktop] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return window.matchMedia("(min-width: 768px)").matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(min-width: 768px)");
+    const handler = () => {
+      const next = mq.matches;
+      setIsDesktop(next);
+
+      // ✅ reset state when crossing breakpoint to avoid stuck/lag
+      setMobileMenuOpen(false);
+      // desktopCollapsed giữ nguyên (tuỳ bạn), nhưng mobile thì nó không ảnh hưởng width
+    };
+
+    handler();
+    if (mq.addEventListener) mq.addEventListener("change", handler);
+    else mq.addListener(handler);
+
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener("change", handler);
+      else mq.removeListener(handler);
+    };
+  }, []);
+
+  const closeMobileMenu = () => setMobileMenuOpen(false);
+
+  // ✅ click 1 nút: mobile => toggle drawer | desktop => toggle collapse
+  const onToggleMenu = () => {
+    if (isDesktop) setDesktopCollapsed((v) => !v);
+    else setMobileMenuOpen((v) => !v);
+  };
+
+  // Auto close drawer when route changed (mobile)
+  useEffect(() => {
+    closeMobileMenu();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
+
+  // ESC closes drawer (mobile)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeMobileMenu();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Load persisted groups (admin/accountant)
   useEffect(() => {
     if (isStaff) return;
     try {
       const raw = localStorage.getItem(LS_KEY);
       if (!raw) return;
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") {
+      if (parsed && typeof parsed === "object")
         setOpenGroups((prev) => ({ ...prev, ...parsed }));
-      }
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, [isStaff]);
 
-  // persist
+  // Persist
   useEffect(() => {
     if (isStaff) return;
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(openGroups));
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, [openGroups, isStaff]);
 
-  // ✅ luôn đóng mặc định; KHÔNG auto-open theo route
   const toggleGroup = (k: GroupKey) =>
     setOpenGroups((prev) => ({ ...prev, [k]: !prev[k] }));
 
@@ -185,13 +211,13 @@ const Layout: React.FC = () => {
           } hover:bg-slate-800`}
           title={opened ? "Thu gọn" : "Mở rộng"}
         >
-          <span>{title}</span>
-          <span className={`transition-transform ${opened ? "rotate-90" : ""}`}>
-            ▶
+          <span className={desktopCollapsed ? "hidden md:inline-block md:truncate" : ""}>
+            {title}
           </span>
+          <span className={`transition-transform ${opened ? "rotate-90" : ""}`}>▶</span>
         </button>
 
-        {opened && (
+        {opened && !desktopCollapsed && (
           <div className="mt-1 space-y-1">
             {links.map((l) => (
               <NavLink key={l.to} to={l.to} className={navCls}>
@@ -204,110 +230,136 @@ const Layout: React.FC = () => {
     );
   };
 
-  return (
-    <div className="h-screen flex bg-slate-100 overflow-hidden">
-      {/* SIDEBAR */}
-      <aside className="w-64 bg-slate-900 text-slate-100 flex flex-col sticky top-0 h-screen">
-        <div className="p-4 border-b border-slate-700">
-          <h1 className="font-bold text-lg">Quản Lý Kho</h1>
-          <p className="text-xs text-slate-300 mt-1">MCBROTHER</p>
-        </div>
+  const SidebarContent = () => (
+    <>
+      <div className="p-4 border-b border-slate-700">
+        <h1 className={`font-bold ${desktopCollapsed ? "text-base" : "text-lg"}`}>
+          Quản Lý Kho
+        </h1>
+        {!desktopCollapsed && <p className="text-xs text-slate-300 mt-1">MCBROTHER</p>}
+      </div>
 
-        <nav className="flex-1 p-2 text-sm overflow-y-auto">
-          {/* STAFF: phẳng, không group */}
-          {isStaff ? (
-            <div className="space-y-1">
-              <NavLink to="part-stocks" end className={navCls}>
-                Tồn linh kiện
-              </NavLink>
+      <nav className="flex-1 p-2 text-sm overflow-y-auto">
+        {isStaff ? (
+          <div className="space-y-1">
+            <NavLink to="part-stocks" end className={navCls}>
+              {desktopCollapsed ? "LK" : "Tồn linh kiện"}
+            </NavLink>
 
-              {/* ✅ ẨN: Linh kiện theo dòng máy */}
-              {/*
-              <NavLink to="machines" className={navCls}>
-                Linh kiện theo dòng máy
-              </NavLink>
-              */}
+            <NavLink to="machine-stocks" className={navCls}>
+              {desktopCollapsed ? "MM" : "Tồn máy móc"}
+            </NavLink>
 
-              <NavLink to="machine-stocks" className={navCls}>
-                Tồn máy móc
-              </NavLink>
+            <NavLink to="invoices" className={navCls}>
+              {desktopCollapsed ? "HD" : "Quản lý hóa đơn"}
+            </NavLink>
 
-              {/* staff: ẩn revenue */}
-              <NavLink to="invoices" className={navCls}>
-                Quản lý hóa đơn
-              </NavLink>
+            <NavLink to="/me/sales" className={navCls}>
+              {desktopCollapsed ? "DS" : "Doanh số cá nhân"}
+            </NavLink>
 
-              {/* ✅ chỉ staff thấy */}
-              <NavLink to="/me/sales" className={navCls}>
-                Doanh số cá nhân
-              </NavLink>
+            <NavLink to="partners" className={navCls}>
+              {desktopCollapsed ? "KH" : "Khách hàng"}
+            </NavLink>
 
-              <NavLink to="partners" className={navCls}>
-                Khách hàng
-              </NavLink>
+            <NavLink to="change-password" className={navCls}>
+              {desktopCollapsed ? "MK" : "Đổi mật khẩu"}
+            </NavLink>
+          </div>
+        ) : (
+          <div>
+            <Group k="inventory" title={desktopCollapsed ? "TK" : "Tồn kho"} links={invLinks} />
+            <Group k="sales" title={desktopCollapsed ? "BH" : "Bán hàng"} links={salesLinks} />
+            <Group k="partner" title={desktopCollapsed ? "DT" : "Đối tác"} links={partnerLinks} />
+            <Group k="ops" title={desktopCollapsed ? "VH" : "Vận hành"} links={opsLinks} />
+            <Group
+              k="reports"
+              title={desktopCollapsed ? "BC" : "Báo cáo & công nợ"}
+              links={reportLinks}
+            />
+            <Group k="admin" title={desktopCollapsed ? "QT" : "Quản trị"} links={adminLinks} />
+            <Group k="account" title={desktopCollapsed ? "TK" : "Tài khoản"} links={accountLinks} />
+          </div>
+        )}
+      </nav>
 
-              {/* ✅ staff cũng có thể cần XNT (nếu bạn muốn staff thấy, mở comment) */}
-              {/* 
-              <NavLink to="/reports/stock-inout" className={navCls}>
-                Báo cáo XNT
-              </NavLink>
-              */}
-
-              <NavLink to="change-password" className={navCls}>
-                Đổi mật khẩu
-              </NavLink>
-            </div>
-          ) : (
-            <div>
-              <Group k="inventory" title="Tồn kho" links={invLinks} />
-              <Group k="sales" title="Bán hàng" links={salesLinks} />
-              <Group k="partner" title="Đối tác" links={partnerLinks} />
-
-              {/* ✅ tách 2 group theo yêu cầu */}
-              <Group k="ops" title="Vận hành" links={opsLinks} />
-              <Group k="reports" title="Báo cáo & công nợ" links={reportLinks} />
-
-              <Group k="admin" title="Quản trị" links={adminLinks} />
-              <Group k="account" title="Tài khoản" links={accountLinks} />
-            </div>
-          )}
-        </nav>
-
-        <div className="p-3 border-t border-slate-700 text-xs">
+      <div className="p-3 border-t border-slate-700 text-xs">
+        {!desktopCollapsed && (
           <div className="mb-2">
             Đăng nhập:{" "}
-            <span className="font-semibold">
-              {user?.fullName || user?.username}
-            </span>{" "}
+            <span className="font-semibold">{user?.fullName || user?.username}</span>{" "}
             ({user?.role})
           </div>
-          <button
-            onClick={logout}
-            className="w-full text-left text-red-300 hover:text-red-200"
-          >
-            Đăng xuất
-          </button>
-        </div>
+        )}
+        <button
+          onClick={logout}
+          className="w-full text-left text-red-300 hover:text-red-200"
+          title="Đăng xuất"
+        >
+          {desktopCollapsed ? "⎋" : "Đăng xuất"}
+        </button>
+      </div>
+    </>
+  );
+
+  return (
+    <div className="h-screen flex bg-slate-100 overflow-hidden">
+      {/* MOBILE overlay */}
+      {!isDesktop && mobileMenuOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/40"
+          onClick={closeMobileMenu}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* SIDEBAR */}
+      <aside
+        className={[
+          "bg-slate-900 text-slate-100 flex flex-col h-screen",
+          "transition-transform duration-200 ease-out",
+          // desktop width collapse
+          desktopCollapsed ? "md:w-20" : "md:w-64",
+          // desktop position
+          "md:sticky md:top-0 md:translate-x-0 md:z-auto",
+          // mobile drawer base
+          "fixed top-0 left-0 z-50 w-72 max-w-[85vw] md:static md:max-w-none",
+          // ✅ ONLY ONE translate controller for mobile (fix rotate lag)
+          !isDesktop && !mobileMenuOpen ? "-translate-x-full" : "translate-x-0",
+        ].join(" ")}
+      >
+        <SidebarContent />
       </aside>
 
       {/* MAIN */}
-      <main className="flex-1 flex flex-col max-h-screen overflow-hidden">
-        <header className="h-14 bg-white border-b border-slate-200 flex items-center px-4">
-          <h2 className="font-semibold text-slate-800 text-lg">
+      <main className="flex-1 flex flex-col max-h-screen overflow-hidden min-w-0">
+        <header className="h-14 bg-white border-b border-slate-200 flex items-center px-4 gap-3">
+          <button
+            type="button"
+            onClick={onToggleMenu}
+            className="inline-flex items-center justify-center rounded px-3 py-2 border border-slate-200 hover:bg-slate-50"
+            aria-label="Menu"
+            title="Mở/thu nhỏ menu"
+          >
+            <span className="text-sm font-semibold">
+              {isDesktop ? (desktopCollapsed ? "☰" : "⇤") : mobileMenuOpen ? "✕" : "☰"}
+            </span>
+          </button>
+
+          <h2 className="font-semibold text-slate-800 text-lg flex-1 truncate">
             Hệ thống quản lý kho
           </h2>
+
           <div className="flex items-center gap-2">
             <LowStockBell />
-            {/* avatar, menu khác */}
           </div>
         </header>
-        
+
         <div className="flex-1 p-4 overflow-auto">
           <Outlet />
         </div>
       </main>
     </div>
-    
   );
 };
 
