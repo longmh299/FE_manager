@@ -1163,6 +1163,17 @@ const [, setStockQtyMap] = useState<Record<string, number>>({}); // itemId -> qt
       console.error("loadItems error", err);
     }
   }
+const goBackToInvoices = () => {
+  // ✅ Ưu tiên back thật (giữ filter/type/page đúng như lúc vào)
+  if (window.history.length > 1) {
+    navigate(-1);
+    return;
+  }
+
+  // ✅ Fallback: nếu user vào thẳng link detail (không có history)
+  const s = (location.state as any)?.returnSearch || "";
+  navigate(`/invoices${s}`);
+};
 
   async function loadStaffs() {
     try {
@@ -1903,9 +1914,10 @@ const [, setStockQtyMap] = useState<Record<string, number>>({}); // itemId -> qt
 
       <div style={styles.body}>
         <div style={styles.content}>
-          <button type="button" style={styles.backBtn} onClick={() => navigate("/invoices")}>
-            ← Quay lại danh sách hóa đơn
-          </button>
+          <button type="button" style={styles.backBtn} onClick={goBackToInvoices}>
+  ← Quay lại danh sách hóa đơn
+</button>
+
 
           {/* APPROVED notice */}
           {status === "APPROVED" && !canEditApprovedAdjust && (

@@ -1,3 +1,4 @@
+// src/components/Layout.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation, Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
@@ -23,10 +24,18 @@ const Layout: React.FC = () => {
   const isStaff = role === "staff";
   const canSeeAuditLogs = isAdmin || isAccountant;
 
+  // ✅ chỉ admin/accountant thấy phiếu kho
+  const canSeeMovements = isAdmin || isAccountant;
+
   const location = useLocation();
 
   // ✅ chặn route "Doanh số cá nhân" nếu không phải staff
   if (!isStaff && location.pathname.startsWith("/me/sales")) {
+    return <Navigate to="/" replace />;
+  }
+
+  // ✅ chặn route "Phiếu kho" nếu không phải admin/accountant
+  if (!canSeeMovements && location.pathname.startsWith("/movements")) {
     return <Navigate to="/" replace />;
   }
 
@@ -53,13 +62,18 @@ const Layout: React.FC = () => {
     []
   );
 
+  // ✅ "Phiếu kho" nằm chung mục với "Quản lý hóa đơn" (sales group)
   const salesLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
     list.push({ to: "revenue", label: "Báo cáo doanh thu" });
     list.push({ to: "invoices", label: "Quản lý hóa đơn" });
+
+    // ✅ chỉ admin/accountant mới thấy
+    if (canSeeMovements) list.push({ to: "movements", label: "Phiếu kho" });
+
     if (isAdmin) list.push({ to: "/sales-returns", label: "Khách trả hàng" });
     return list;
-  }, [isAdmin]);
+  }, [isAdmin, canSeeMovements]);
 
   const partnerLinks = useMemo(
     () => [{ to: "partners", label: "Khách hàng" }],
@@ -69,7 +83,8 @@ const Layout: React.FC = () => {
   const opsLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
     if (isAdmin) list.push({ to: "stock-counts", label: "Kiểm kê tồn" });
-    if (isAdmin) list.push({ to: "stock-import-opening", label: "Khởi tạo tồn đầu" });
+    if (isAdmin)
+      list.push({ to: "stock-import-opening", label: "Khởi tạo tồn đầu" });
     return list;
   }, [isAdmin]);
 
@@ -88,8 +103,10 @@ const Layout: React.FC = () => {
     if (isAdmin) list.push({ to: "users", label: "Quản lý tài khoản" });
     if (isAdmin)
       list.push({ to: "payment-accounts", label: "Thêm tài khoản thanh toán" });
-    if (canSeeAuditLogs) list.push({ to: "audit-logs", label: "Lịch sử thao tác" });
-    if (isAdmin) list.push({ to: "invoice-status", label: "Sửa trạng thái hóa đơn" });
+    if (canSeeAuditLogs)
+      list.push({ to: "audit-logs", label: "Lịch sử thao tác" });
+    if (isAdmin)
+      list.push({ to: "invoice-status", label: "Sửa trạng thái hóa đơn" });
     return list;
   }, [isAdmin, canSeeAuditLogs]);
 
@@ -253,6 +270,8 @@ const Layout: React.FC = () => {
             <NavLink to="invoices" className={navCls}>
               {desktopCollapsed ? "HD" : "Quản lý hóa đơn"}
             </NavLink>
+
+            {/* ✅ staff KHÔNG thấy movements theo yêu cầu */}
 
             <NavLink to="/me/sales" className={navCls}>
               {desktopCollapsed ? "DS" : "Doanh số cá nhân"}

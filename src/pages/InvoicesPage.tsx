@@ -1,12 +1,11 @@
 // src/pages/InvoicesPage.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import api from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
 
 type InvoiceType = "SALES" | "PURCHASE";
 type AnyInvoiceType = "SALES" | "PURCHASE" | "SALES_RETURN" | "PURCHASE_RETURN";
-
 type PaymentStatus = "UNPAID" | "PARTIAL" | "PAID";
 
 // ✅ đồng bộ với BE hiện tại (không có CANCELLED)
@@ -55,6 +54,8 @@ type InvoiceListItem = {
 };
 
 type InvoiceTypeFilter = "" | "SALES" | "PURCHASE";
+type SourceFilter = "INVOICE" | "ADJUST"; // ✅ NEW: hóa đơn / chứng từ điều chỉnh (adjust move)
+
 const LS_LAST_PAY_ACCOUNT = "lastPayAccountId";
 
 /* ========================= helpers ========================= */
@@ -71,25 +72,6 @@ function formatDateDisplay(raw?: string) {
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const year = d.getFullYear();
   return `${day}/${month}/${year}`;
-}
-
-function ymLocalNow() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${yyyy}-${mm}`;
-}
-
-function ymFromYmd(dateStr?: string) {
-  if (!dateStr) return "";
-  const s = String(dateStr).trim();
-  return s.length >= 7 ? s.slice(0, 7) : "";
-}
-
-function isInCurrentMonth(issueDate?: string) {
-  const ym = ymFromYmd(issueDate);
-  if (!ym) return false;
-  return ym === ymLocalNow();
 }
 
 function unwrapList(res: any): any[] {
@@ -209,17 +191,10 @@ function calcCollectibleRemaining(params: { collectibleTotal: number; paidNormal
   return { collectibleTotal, remainingNormal };
 }
 
-/**
- * ✅ Fallback derive (khi BE không trả paymentStatus)
- * BUG cũ: invoice total=0 => paid=0 bị UNPAID do check paid trước.
- * Fix: check collectibleTotal <= 0 trước.
- */
 function derivePaymentStatus(inv: InvoiceListItem): PaymentStatus {
   if (isFullyReturned(inv)) return "PAID";
 
   const collectibleTotal = getCollectibleTotal(inv);
-
-  // ✅ nếu không có gì để thu/chi => coi như PAID
   if (collectibleTotal <= 0.0001) return "PAID";
 
   const paid = clamp0(inv.paidAmount);
@@ -229,9 +204,6 @@ function derivePaymentStatus(inv: InvoiceListItem): PaymentStatus {
   return "PARTIAL";
 }
 
-/**
- * ✅ Ưu tiên BE paymentStatus nếu có, nhưng vẫn "chốt" PAID khi collectibleTotal <= 0.
- */
 function resolvePaymentStatus(inv: InvoiceListItem): PaymentStatus {
   if (isFullyReturned(inv)) return "PAID";
 
@@ -240,7 +212,6 @@ function resolvePaymentStatus(inv: InvoiceListItem): PaymentStatus {
 
   const be = inv.paymentStatus;
   if (be === "PAID" || be === "UNPAID" || be === "PARTIAL") {
-    // sanity nhẹ: nếu BE nói UNPAID nhưng paidAmount > 0 thì hiển thị PARTIAL
     const paid = clamp0(inv.paidAmount);
     if (be === "UNPAID" && paid > 0.0001) return "PARTIAL";
     if (be === "PARTIAL" && paid + 0.0001 >= collectibleTotal) return "PAID";
@@ -280,7 +251,7 @@ function invoiceCodeToSortParts(code: string) {
   return { prefix: s, num: Number.POSITIVE_INFINITY, raw: s };
 }
 
-/** ========================= UI: Modal ========================= **/
+/* ========================= UI: Modal ========================= */
 
 function Modal(props: {
   open: boolean;
@@ -312,18 +283,61 @@ function Modal(props: {
   );
 }
 
-/** ========================= Page ========================= **/
+/* ========================= Page ========================= */
 
 const InvoicesPage: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const toast = useToast();
 
-  const [search, setSearch] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  // ✅ sync filter to URL
+  const [sp, setSp] = useSearchParams();
 
-  // ✅ mặc định chỉ xem hóa đơn BÁN
-  const [typeFilter, setTypeFilter] = useState<InvoiceTypeFilter>("SALES");
+  const containerTopRef = useRef<HTMLDivElement | null>(null);
+
+  const scrollToTop = (smooth = true) => {
+    const el = containerTopRef.current;
+    if (el && "scrollIntoView" in el) {
+      el.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+      return;
+    }
+    window.scrollTo({ top: 0, behavior: smooth ? "smooth" : "auto" });
+  };
+
+  const readQuery = () => {
+    const q = sp.get("q") ?? "";
+    const from = sp.get("from") ?? "";
+    const to = sp.get("to") ?? "";
+    const type = (sp.get("type") ?? "SALES") as InvoiceTypeFilter;
+    const src = (sp.get("src") ?? "INVOICE") as SourceFilter;
+
+    const safeType: InvoiceTypeFilter = type === "PURCHASE" || type === "SALES" || type === "" ? type : "SALES";
+    const safeSrc: SourceFilter = src === "ADJUST" ? "ADJUST" : "INVOICE";
+
+    return { q, from, to, type: safeType, src: safeSrc };
+  };
+
+  const writeQuery = (next: { q: string; from: string; to: string; type: InvoiceTypeFilter; src: SourceFilter }) => {
+    const params: any = {};
+    if (next.q.trim()) params.q = next.q.trim();
+    if (next.from) params.from = next.from;
+    if (next.to) params.to = next.to;
+    if (next.type) params.type = next.type;
+    if (next.src && next.src !== "INVOICE") params.src = next.src; // mặc định INVOICE thì không cần ghi
+    setSp(params, { replace: true });
+  };
+
+  const initial = useMemo(() => readQuery(), [location.key]); // key đổi khi back/forward
+
+  const [search, setSearch] = useState(initial.q);
+  const [from, setFrom] = useState(initial.from);
+  const [to, setTo] = useState(initial.to);
+
+  // ✅ mặc định theo URL (nếu không có thì SALES)
+  const [typeFilter, setTypeFilter] = useState<InvoiceTypeFilter>(initial.type || "SALES");
+
+  // ✅ NEW: hóa đơn / điều chỉnh
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>(initial.src || "INVOICE");
 
   const [loading, setLoading] = useState(false);
   const [invoices, setInvoices] = useState<InvoiceListItem[]>([]);
@@ -331,6 +345,7 @@ const InvoicesPage: React.FC = () => {
   const [role, setRole] = useState<string>("");
   const isStaff = role === "staff";
   const isAdmin = role === "admin";
+  const isAccountant = role === "accountant";
   const canApprove = role === "admin" || role === "accountant";
 
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -401,7 +416,6 @@ const InvoicesPage: React.FC = () => {
         }))
         .filter((a) => a.id && a.id !== "undefined" && a.id !== "null");
 
-      // ✅ Chỉ load danh sách tài khoản, KHÔNG auto chọn tài khoản nào
       setAccounts(mapped);
     } catch (err) {
       console.error("load payment accounts error", err);
@@ -477,7 +491,6 @@ const InvoicesPage: React.FC = () => {
         };
       });
 
-      // ✅ SORT mã hóa đơn từ LỚN -> BÉ (00099, 00098, ... 00002, 00001)
       mapped.sort((a, b) => {
         const pa = invoiceCodeToSortParts(a.code);
         const pb = invoiceCodeToSortParts(b.code);
@@ -485,9 +498,9 @@ const InvoicesPage: React.FC = () => {
         const pfx = pa.prefix.localeCompare(pb.prefix, "vi", { sensitivity: "base" });
         if (pfx !== 0) return pfx;
 
-        if (pa.num !== pb.num) return pb.num - pa.num; // ✅ DESC (lớn -> bé)
+        if (pa.num !== pb.num) return pb.num - pa.num; // ✅ DESC
 
-        return pb.raw.localeCompare(pa.raw, "vi", { numeric: true, sensitivity: "base" }); // tie-break DESC
+        return pb.raw.localeCompare(pa.raw, "vi", { numeric: true, sensitivity: "base" });
       });
 
       setInvoices(mapped);
@@ -504,11 +517,84 @@ const InvoicesPage: React.FC = () => {
     }
   };
 
+  // ✅ NEW: fetch adjustments (adjust move) — m gửi endpoint thật tao sẽ thay đúng
+  const fetchAdjustments = async (q: string, fromVal: string, toVal: string) => {
+    try {
+      setLoading(true);
+
+      // TODO: thay bằng endpoint adjust move thật của m
+      // Ví dụ (placeholder): /movements?kind=ADJUST&page=1&pageSize=300&q=...
+      const res = await api.get("/movements", {
+        params: {
+          page: 1,
+          pageSize: 300,
+          q: q || undefined,
+          from: fromVal || undefined,
+          to: toVal || undefined,
+          // kind: "ADJUST",
+          _ts: Date.now(),
+        },
+      });
+
+      const data: any[] = unwrapList(res);
+
+      // Map tạm sang InvoiceListItem để reuse UI (m gửi schema tao map đúng 100%)
+      const mapped: InvoiceListItem[] = (Array.isArray(data) ? data : []).map((x: any) => {
+        const total = toNum(x.total ?? x.totalAmount ?? x.amount ?? 0);
+        const rawDate = x.issueDate ?? x.date ?? x.createdAt ?? "";
+
+        return {
+          id: x.id,
+          code: x.code ?? x.refCode ?? x.movementCode ?? "(ADJ)",
+          date: rawDate,
+          type: "SALES", // chỉ để pass type, UI badge/logic sẽ hơi lệch nếu không map đúng => chờ endpoint thật
+          partnerId: x.partnerId ?? undefined,
+          partnerName: x.partnerName ?? x.note ?? "Điều chỉnh",
+          totalAmount: total,
+          paidAmount: 0,
+          paymentStatus: "PAID",
+          status: "APPROVED",
+        };
+      });
+
+      setInvoices(mapped);
+    } catch (err: any) {
+      console.error("load adjustments error", err);
+      toast.push({
+        type: "error",
+        title: "Lỗi",
+        message: err?.response?.data?.message || err?.message || "Không tải được chứng từ điều chỉnh.",
+      });
+      setInvoices([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const runFetchBySource = async (opts: { q: string; from: string; to: string; type: InvoiceTypeFilter; src: SourceFilter }) => {
+    if (opts.src === "ADJUST") {
+      await fetchAdjustments(opts.q, opts.from, opts.to);
+      return;
+    }
+    await fetchInvoices(opts.q, opts.from, opts.to, opts.type);
+  };
+
+  // ✅ initial load based on URL query (fix back button reset)
   useEffect(() => {
-    fetchInvoices("", "", "", "SALES");
+    const q0 = readQuery();
+
+    // sync state -> query
+    setSearch(q0.q);
+    setFrom(q0.from);
+    setTo(q0.to);
+    setTypeFilter(q0.type || "SALES");
+    setSourceFilter(q0.src || "INVOICE");
+
+    runFetchBySource({ q: q0.q, from: q0.from, to: q0.to, type: q0.type || "SALES", src: q0.src || "INVOICE" });
     loadAccounts();
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [location.key]);
 
   useEffect(() => {
     if (!payOpen) return;
@@ -534,19 +620,33 @@ const InvoicesPage: React.FC = () => {
     return () => clearTimeout(t);
   }, [highlightInvoiceId, invoices.length]);
 
-  const handleApplyFilter = (e?: React.FormEvent) => {
+  const handleApplyFilter = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    fetchInvoices(search.trim(), from, to, typeFilter);
+
+    const next = {
+      q: search.trim(),
+      from,
+      to,
+      type: typeFilter,
+      src: sourceFilter,
+    };
+
+    writeQuery(next);
+    await runFetchBySource(next);
+    scrollToTop(true);
   };
 
-  const handleClearFilter = () => {
-    const emptyFrom = "";
-    const emptyTo = "";
-    setFrom(emptyFrom);
-    setTo(emptyTo);
+  const handleClearFilter = async () => {
+    const next = { q: search.trim(), from: "", to: "", type: "SALES" as InvoiceTypeFilter, src: "INVOICE" as SourceFilter };
 
+    setFrom("");
+    setTo("");
     setTypeFilter("SALES");
-    fetchInvoices(search.trim(), emptyFrom, emptyTo, "SALES");
+    setSourceFilter("INVOICE");
+
+    writeQuery(next);
+    await runFetchBySource(next);
+    scrollToTop(true);
   };
 
   const handleDelete = async (inv: InvoiceListItem) => {
@@ -571,7 +671,7 @@ const InvoicesPage: React.FC = () => {
       action: async () => {
         await api.delete(`/invoices/${inv.id}`);
         toast.push({ type: "success", title: "Thành công", message: "Đã xóa hóa đơn." });
-        await fetchInvoices(search.trim(), from, to, typeFilter);
+        await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
       },
     });
   };
@@ -593,7 +693,7 @@ const InvoicesPage: React.FC = () => {
       action: async () => {
         await api.post(`/invoices/${inv.id}/submit`);
         toast.push({ type: "success", title: "Thành công", message: "Đã gửi duyệt." });
-        await fetchInvoices(search.trim(), from, to, typeFilter);
+        await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
       },
     });
   };
@@ -615,7 +715,7 @@ const InvoicesPage: React.FC = () => {
       action: async () => {
         await api.post(`/invoices/${inv.id}/recall`);
         toast.push({ type: "success", title: "Thành công", message: "Đã hủy gửi duyệt." });
-        await fetchInvoices(search.trim(), from, to, typeFilter);
+        await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
       },
     });
   };
@@ -637,7 +737,7 @@ const InvoicesPage: React.FC = () => {
       action: async () => {
         await api.post(`/invoices/${inv.id}/approve`, {});
         toast.push({ type: "success", title: "Đã duyệt", message: "Hóa đơn đã được duyệt." });
-        await fetchInvoices(search.trim(), from, to, typeFilter);
+        await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
       },
     });
   };
@@ -653,20 +753,19 @@ const InvoicesPage: React.FC = () => {
     setRejectOpen(true);
   };
 
-  // ✅ NEW: Điều chỉnh (ADMIN) cho hóa đơn APPROVED trong tháng hiện tại
   const handleAdjustApproved = async (inv: InvoiceListItem) => {
     if (!inv?.id) return;
 
-    if (!isAdmin) {
-      toast.push({ type: "warning", title: "Không có quyền", message: "Chỉ ADMIN mới được điều chỉnh hóa đơn đã duyệt." });
+    if (!(isAdmin || isAccountant)) {
+      toast.push({
+        type: "warning",
+        title: "Không có quyền",
+        message: "Chỉ ADMIN / KẾ TOÁN mới được điều chỉnh hóa đơn đã duyệt.",
+      });
       return;
     }
     if (inv.status !== "APPROVED") {
       toast.push({ type: "warning", title: "Không hợp lệ", message: "Chỉ hóa đơn ĐÃ DUYỆT mới cần điều chỉnh." });
-      return;
-    }
-    if (!isInCurrentMonth(inv.date)) {
-      toast.push({ type: "warning", title: "Bị khóa kỳ", message: "Chỉ được điều chỉnh hóa đơn trong THÁNG HIỆN TẠI." });
       return;
     }
 
@@ -678,14 +777,16 @@ const InvoicesPage: React.FC = () => {
             Bạn muốn <b>mở lại</b> hóa đơn <b>{inv.code}</b> để sửa?
           </div>
           <div className="text-xs text-gray-500">
-            * Hệ thống sẽ rollback tồn (nếu có) và đưa hóa đơn về trạng thái NHÁP để bạn chỉnh sửa lại.
+            * Hệ thống sẽ đưa hóa đơn về trạng thái NHÁP để bạn chỉnh sửa lại.
+            <br />
+            * BE sẽ tự kiểm tra giới hạn thời gian (ADMIN 90 ngày / KẾ TOÁN 7 ngày) và khóa kỳ (nếu có).
           </div>
         </div>
       ),
       action: async () => {
         await api.post(`/invoices/${inv.id}/reopen`, { _ts: Date.now() });
         toast.push({ type: "success", title: "Đã mở lại", message: `Hóa đơn ${inv.code} đã mở lại để sửa.` });
-        await fetchInvoices(search.trim(), from, to, typeFilter);
+        await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
         navigate(`/invoices/${inv.id}`, { state: { adminEditApproved: true } });
       },
     });
@@ -813,9 +914,9 @@ const InvoicesPage: React.FC = () => {
       setHighlightInvoiceId(paidId);
       setTimeout(() => setHighlightInvoiceId(""), 2800);
 
-      await fetchInvoices(search.trim(), from, to, typeFilter);
+      await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
     } catch (e: any) {
-      await fetchInvoices(search.trim(), from, to, typeFilter);
+      await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
       toast.push({
         type: "error",
         title: "Lỗi",
@@ -903,7 +1004,7 @@ const InvoicesPage: React.FC = () => {
   const showRoleWarning = useMemo(() => !role, [role]);
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-4 space-y-4" ref={containerTopRef}>
       <ToastHost toasts={toast.toasts} onClose={toast.remove} />
 
       <h1 className="text-xl font-semibold mb-2">Hóa đơn</h1>
@@ -936,6 +1037,7 @@ const InvoicesPage: React.FC = () => {
                 className="border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
               />
             </div>
+
             <div>
               <label className="block text-xs font-semibold mb-1">Đến ngày</label>
               <input
@@ -946,12 +1048,29 @@ const InvoicesPage: React.FC = () => {
               />
             </div>
 
+            {/* ✅ NEW: nguồn dữ liệu */}
+            <div>
+              <label className="block text-xs font-semibold mb-1">Nguồn</label>
+              <select
+                value={sourceFilter}
+                onChange={(e) => setSourceFilter(e.target.value as SourceFilter)}
+                className="border border-gray-300 rounded-md px-2 py-1 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="INVOICE">Hóa đơn</option>
+                <option value="ADJUST">Chứng từ điều chỉnh</option>
+              </select>
+            </div>
+
             <div>
               <label className="block text-xs font-semibold mb-1">Loại</label>
               <select
                 value={typeFilter}
                 onChange={(e) => setTypeFilter(e.target.value as InvoiceTypeFilter)}
-                className="border border-gray-300 rounded-md px-2 py-1 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                disabled={sourceFilter === "ADJUST"} // điều chỉnh không có sales/purchase
+                className={
+                  "border border-gray-300 rounded-md px-2 py-1 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 " +
+                  (sourceFilter === "ADJUST" ? "opacity-60 cursor-not-allowed" : "")
+                }
               >
                 <option value="">Tất cả</option>
                 <option value="SALES">Hóa đơn bán</option>
@@ -980,270 +1099,289 @@ const InvoicesPage: React.FC = () => {
           </div>
         </form>
 
+        {/* ✅ Sticky header + scroll container (mobile cũng mượt) */}
         <div className="mt-4 border border-gray-200 rounded-md overflow-hidden">
-          <table className="min-w-full table-fixed text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200">Số HĐ</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200">Ngày</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200">Khách hàng</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold border-b border-gray-200">Tổng tiền</th>
-                <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200">Thanh toán</th>
-                <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200">Trạng thái</th>
+          <div className="max-h-[70vh] overflow-auto">
+            <table className="min-w-full table-fixed text-sm">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                    Số HĐ
+                  </th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                    Ngày
+                  </th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                    Khách hàng
+                  </th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                    Tổng tiền
+                  </th>
+                  <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                    Thanh toán
+                  </th>
+                  <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                    Trạng thái
+                  </th>
 
-                {showStaffWorkflowColumns && (
-                  <>
-                    <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200">Xem</th>
-                    <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200">Gửi duyệt</th>
-                    <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200">Hủy gửi</th>
-                  </>
+                  {showStaffWorkflowColumns && (
+                    <>
+                      <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                        Xem
+                      </th>
+                      <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                        Gửi duyệt
+                      </th>
+                      <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                        Hủy gửi
+                      </th>
+                    </>
+                  )}
+
+                  {showApprovalColumn && (
+                    <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                      Duyệt
+                    </th>
+                  )}
+
+                  <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                    Thao tác
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {loading && (
+                  <tr>
+                    <td className="px-3 py-2 text-sm text-gray-600 border-t border-gray-200" colSpan={colCount}>
+                      Đang tải dữ liệu...
+                    </td>
+                  </tr>
                 )}
 
-                {showApprovalColumn && (
-                  <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200">Duyệt</th>
+                {!loading && invoices.length === 0 && (
+                  <tr>
+                    <td className="px-3 py-2 text-sm text-gray-600 border-t border-gray-200" colSpan={colCount}>
+                      Không tìm thấy dữ liệu.
+                    </td>
+                  </tr>
                 )}
 
-                <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200">Thao tác</th>
-              </tr>
-            </thead>
+                {!loading &&
+                  invoices.map((inv) => {
+                    const showSubmitBtn = isStaff && inv.status === "DRAFT";
+                    const showRecallBtn = isStaff && inv.status === "SUBMITTED";
 
-            <tbody>
-              {loading && (
-                <tr>
-                  <td className="px-3 py-2 text-sm text-gray-600 border-t border-gray-200" colSpan={colCount}>
-                    Đang tải dữ liệu...
-                  </td>
-                </tr>
-              )}
+                    const showApproveBtn = canApprove && inv.status === "SUBMITTED";
+                    const showRejectBtn = canApprove && inv.status === "SUBMITTED";
 
-              {!loading && invoices.length === 0 && (
-                <tr>
-                  <td className="px-3 py-2 text-sm text-gray-600 border-t border-gray-200" colSpan={colCount}>
-                    Không tìm thấy hóa đơn.
-                  </td>
-                </tr>
-              )}
+                    const grossTotal = clamp0(inv.totalAmount);
 
-              {!loading &&
-                invoices.map((inv) => {
-                  const showSubmitBtn = isStaff && inv.status === "DRAFT";
-                  const showRecallBtn = isStaff && inv.status === "SUBMITTED";
+                    const collectibleTotal = getCollectibleTotal(inv);
+                    const paidNormal = clamp0(inv.paidAmount);
+                    const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal, paidNormal });
 
-                  const showApproveBtn = canApprove && inv.status === "SUBMITTED";
-                  const showRejectBtn = canApprove && inv.status === "SUBMITTED";
+                    const paySt = resolvePaymentStatus(inv);
 
-                  const grossTotal = clamp0(inv.totalAmount);
+                    const canPayBase =
+                      inv.status === "APPROVED" &&
+                      !isFullyReturned(inv) &&
+                      (paySt === "UNPAID" || paySt === "PARTIAL") &&
+                      remainingNormal > 0;
 
-                  const collectibleTotal = getCollectibleTotal(inv);
-                  const paidNormal = clamp0(inv.paidAmount);
-                  const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal, paidNormal });
+                    const canPay = isAdmin && canPayBase;
 
-                  const paySt = resolvePaymentStatus(inv);
+                    const isHighlighted = highlightInvoiceId && String(inv.id) === String(highlightInvoiceId);
+                    const returnedBadge = renderReturnBadge(inv);
 
-                  const canPayBase =
-                    inv.status === "APPROVED" &&
-                    !isFullyReturned(inv) &&
-                    (paySt === "UNPAID" || paySt === "PARTIAL") &&
-                    remainingNormal > 0;
+                    const canAdjust = (isAdmin || isAccountant) && inv.status === "APPROVED";
 
-                  const canPay = isAdmin && canPayBase && isInCurrentMonth(inv.date);
+                    return (
+                      <tr
+                        key={inv.id}
+                        id={`inv-row-${String(inv.id)}`}
+                        className={
+                          "odd:bg-white even:bg-gray-50 hover:bg-blue-50 transition-colors " +
+                          (isHighlighted ? "ring-2 ring-indigo-500 bg-indigo-50" : "")
+                        }
+                      >
+                        <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="truncate font-medium">{inv.code}</div>
+                            {returnedBadge}
+                          </div>
+                        </td>
 
-                  const isHighlighted = highlightInvoiceId && String(inv.id) === String(highlightInvoiceId);
-                  const returnedBadge = renderReturnBadge(inv);
+                        <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap">
+                          {formatDateDisplay(inv.date)}
+                        </td>
 
-                  // ✅ Option A: Nút điều chỉnh riêng
-                  const canAdjust = isAdmin && inv.status === "APPROVED" && isInCurrentMonth(inv.date);
+                        <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap truncate">{inv.partnerName}</td>
 
-                  return (
-                    <tr
-                      key={inv.id}
-                      id={`inv-row-${String(inv.id)}`}
-                      className={
-                        "odd:bg-white even:bg-gray-50 hover:bg-blue-50 transition-colors " +
-                        (isHighlighted ? "ring-2 ring-indigo-500 bg-indigo-50" : "")
-                      }
-                    >
-                      <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <div className="truncate font-medium">{inv.code}</div>
-                          {returnedBadge}
-                        </div>
-                      </td>
+                        <td className="px-3 py-2 border-t border-gray-200 text-right whitespace-nowrap">
+                          <div className="flex flex-col items-end leading-tight gap-0.5">
+                            <div className="font-medium">{formatMoney(grossTotal)} đ</div>
+                          </div>
+                        </td>
 
-                      <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap">
-                        {formatDateDisplay(inv.date)}
-                      </td>
+                        <td className="px-3 py-2 border-t border-gray-200 text-center">{renderPaymentBadge(inv)}</td>
+                        <td className="px-3 py-2 border-t border-gray-200 text-center">{renderStatusBadge(inv.status)}</td>
 
-                      <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap truncate">{inv.partnerName}</td>
+                        {showStaffWorkflowColumns && (
+                          <>
+                            <td className="px-3 py-2 border-t border-gray-200 text-center">
+                              <button
+                                type="button"
+                                className="px-2 py-1 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-xs"
+                                onClick={() => navigate(`/invoices/${inv.id}`)}
+                              >
+                                Xem
+                              </button>
+                            </td>
 
-                      <td className="px-3 py-2 border-t border-gray-200 text-right whitespace-nowrap">
-                        <div className="flex flex-col items-end leading-tight gap-0.5">
-                          <div className="font-medium">{formatMoney(grossTotal)} đ</div>
-                        </div>
-                      </td>
+                            <td className="px-3 py-2 border-t border-gray-200 text-center">
+                              <button
+                                type="button"
+                                disabled={!showSubmitBtn}
+                                className={
+                                  "px-2 py-1 rounded-md text-xs font-medium " +
+                                  (showSubmitBtn
+                                    ? "bg-orange-600 text-white hover:bg-orange-700"
+                                    : "bg-gray-200 text-gray-400 cursor-not-allowed")
+                                }
+                                onClick={() => handleSubmit(inv)}
+                              >
+                                Gửi
+                              </button>
+                            </td>
 
-                      <td className="px-3 py-2 border-t border-gray-200 text-center">{renderPaymentBadge(inv)}</td>
-                      <td className="px-3 py-2 border-t border-gray-200 text-center">{renderStatusBadge(inv.status)}</td>
+                            <td className="px-3 py-2 border-t border-gray-200 text-center">
+                              <button
+                                type="button"
+                                disabled={!showRecallBtn}
+                                className={
+                                  "px-2 py-1 rounded-md text-xs font-medium " +
+                                  (showRecallBtn
+                                    ? "bg-gray-700 text-white hover:bg-gray-800"
+                                    : "bg-gray-200 text-gray-400 cursor-not-allowed")
+                                }
+                                onClick={() => handleRecall(inv)}
+                              >
+                                Hủy
+                              </button>
+                            </td>
+                          </>
+                        )}
 
-                      {showStaffWorkflowColumns && (
-                        <>
+                        {showApprovalColumn && (
                           <td className="px-3 py-2 border-t border-gray-200 text-center">
+                            <div className="flex items-center justify-center gap-2">
+                              <button
+                                type="button"
+                                className="px-2 py-1 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-xs"
+                                onClick={() => navigate(`/invoices/${inv.id}`)}
+                              >
+                                Xem
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={!showApproveBtn}
+                                className={
+                                  "px-2 py-1 rounded-md text-xs font-medium " +
+                                  (showApproveBtn
+                                    ? "bg-green-600 text-white hover:bg-green-700"
+                                    : "bg-gray-200 text-gray-400 cursor-not-allowed")
+                                }
+                                onClick={() => handleApprove(inv)}
+                              >
+                                Duyệt
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={!showRejectBtn}
+                                className={
+                                  "px-2 py-1 rounded-md text-xs font-medium " +
+                                  (showRejectBtn
+                                    ? "bg-red-600 text-white hover:bg-red-700"
+                                    : "bg-gray-200 text-gray-400 cursor-not-allowed")
+                                }
+                                onClick={() => handleReject(inv)}
+                              >
+                                Từ chối
+                              </button>
+                            </div>
+                          </td>
+                        )}
+
+                        <td className="px-3 py-2 border-t border-gray-200">
+                          <div className="flex flex-wrap items-center gap-3 text-xs">
                             <button
                               type="button"
-                              className="px-2 py-1 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-xs"
+                              className={
+                                "hover:underline " +
+                                (inv.status === "DRAFT" ? "text-blue-600" : "text-gray-400 cursor-not-allowed")
+                              }
+                              disabled={inv.status !== "DRAFT"}
                               onClick={() => navigate(`/invoices/${inv.id}`)}
                             >
-                              Xem
+                              Sửa
                             </button>
-                          </td>
 
-                          <td className="px-3 py-2 border-t border-gray-200 text-center">
                             <button
                               type="button"
-                              disabled={!showSubmitBtn}
-                              className={
-                                "px-2 py-1 rounded-md text-xs font-medium " +
-                                (showSubmitBtn
-                                  ? "bg-orange-600 text-white hover:bg-orange-700"
-                                  : "bg-gray-200 text-gray-400 cursor-not-allowed")
+                              className={"hover:underline " + (canAdjust ? "text-indigo-600" : "text-gray-400 cursor-not-allowed")}
+                              disabled={!canAdjust}
+                              onClick={() => handleAdjustApproved(inv)}
+                              title={
+                                canAdjust
+                                  ? "Mở lại hóa đơn đã duyệt để sửa"
+                                  : !(isAdmin || isAccountant)
+                                  ? "Chỉ ADMIN / KẾ TOÁN"
+                                  : "Chỉ áp dụng cho hóa đơn ĐÃ DUYỆT"
                               }
-                              onClick={() => handleSubmit(inv)}
                             >
-                              Gửi
+                              Điều chỉnh
                             </button>
-                          </td>
 
-                          <td className="px-3 py-2 border-t border-gray-200 text-center">
                             <button
                               type="button"
-                              disabled={!showRecallBtn}
+                              className="text-blue-600 hover:underline"
+                              onClick={() => window.open(`/invoices/${inv.id}/print`, "_blank", "noopener,noreferrer")}
+                            >
+                              In
+                            </button>
+
+                            {canPay && (
+                              <button
+                                type="button"
+                                className="text-indigo-600 hover:underline"
+                                onClick={() => openPayModal(inv)}
+                                title={`Còn lại: ${formatMoney(remainingNormal)} đ`}
+                              >
+                                Thanh toán
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              disabled={!canDelete(inv)}
                               className={
-                                "px-2 py-1 rounded-md text-xs font-medium " +
-                                (showRecallBtn
-                                  ? "bg-gray-700 text-white hover:bg-gray-800"
-                                  : "bg-gray-200 text-gray-400 cursor-not-allowed")
+                                "hover:underline " + (canDelete(inv) ? "text-red-600" : "text-gray-400 cursor-not-allowed")
                               }
-                              onClick={() => handleRecall(inv)}
+                              onClick={() => handleDelete(inv)}
                             >
-                              Hủy
-                            </button>
-                          </td>
-                        </>
-                      )}
-
-                      {showApprovalColumn && (
-                        <td className="px-3 py-2 border-t border-gray-200 text-center">
-                          <div className="flex items-center justify-center gap-2">
-                            <button
-                              type="button"
-                              className="px-2 py-1 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-xs"
-                              onClick={() => navigate(`/invoices/${inv.id}`)}
-                            >
-                              Xem
-                            </button>
-
-                            <button
-                              type="button"
-                              disabled={!showApproveBtn}
-                              className={
-                                "px-2 py-1 rounded-md text-xs font-medium " +
-                                (showApproveBtn
-                                  ? "bg-green-600 text-white hover:bg-green-700"
-                                  : "bg-gray-200 text-gray-400 cursor-not-allowed")
-                              }
-                              onClick={() => handleApprove(inv)}
-                            >
-                              Duyệt
-                            </button>
-
-                            <button
-                              type="button"
-                              disabled={!showRejectBtn}
-                              className={
-                                "px-2 py-1 rounded-md text-xs font-medium " +
-                                (showRejectBtn
-                                  ? "bg-red-600 text-white hover:bg-red-700"
-                                  : "bg-gray-200 text-gray-400 cursor-not-allowed")
-                              }
-                              onClick={() => handleReject(inv)}
-                            >
-                              Từ chối
+                              Xóa
                             </button>
                           </div>
                         </td>
-                      )}
-
-                      <td className="px-3 py-2 border-t border-gray-200">
-                        <div className="flex flex-wrap items-center gap-3 text-xs">
-                          {/* ✅ Sửa: chỉ DRAFT như cũ */}
-                          <button
-                            type="button"
-                            className={
-                              "hover:underline " +
-                              (inv.status === "DRAFT" ? "text-blue-600" : "text-gray-400 cursor-not-allowed")
-                            }
-                            disabled={inv.status !== "DRAFT"}
-                            onClick={() => navigate(`/invoices/${inv.id}`)}
-                          >
-                            Sửa
-                          </button>
-
-                          {/* ✅ NEW: Điều chỉnh riêng (ADMIN + APPROVED + trong tháng) */}
-                          <button
-                            type="button"
-                            className={"hover:underline " + (canAdjust ? "text-indigo-600" : "text-gray-400 cursor-not-allowed")}
-                            disabled={!canAdjust}
-                            onClick={() => handleAdjustApproved(inv)}
-                            title={
-                              canAdjust
-                                ? "Mở lại hóa đơn đã duyệt để sửa"
-                                : !isAdmin
-                                ? "Chỉ ADMIN"
-                                : inv.status !== "APPROVED"
-                                ? "Chỉ áp dụng cho hóa đơn ĐÃ DUYỆT"
-                                : "Chỉ được trong tháng hiện tại"
-                            }
-                          >
-                            Điều chỉnh
-                          </button>
-
-                          <button
-                            type="button"
-                            className="text-blue-600 hover:underline"
-                            onClick={() => window.open(`/invoices/${inv.id}/print`, "_blank", "noopener,noreferrer")}
-                          >
-                            In
-                          </button>
-
-                          {canPay && (
-                            <button
-                              type="button"
-                              className="text-indigo-600 hover:underline"
-                              onClick={() => openPayModal(inv)}
-                              title={`Còn lại: ${formatMoney(remainingNormal)} đ`}
-                            >
-                              Thanh toán
-                            </button>
-                          )}
-
-                          <button
-                            type="button"
-                            disabled={!canDelete(inv)}
-                            className={
-                              "hover:underline " +
-                              (canDelete(inv) ? "text-red-600" : "text-gray-400 cursor-not-allowed")
-                            }
-                            onClick={() => handleDelete(inv)}
-                          >
-                            Xóa
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-            </tbody>
-          </table>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {showRoleWarning && (
@@ -1340,7 +1478,7 @@ const InvoicesPage: React.FC = () => {
                     message: `Hóa đơn ${rejectTarget.code} đã bị từ chối.`,
                   });
                   setRejectOpen(false);
-                  await fetchInvoices(search.trim(), from, to, typeFilter);
+                  await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
                 } catch (e: any) {
                   toast.push({
                     type: "error",
@@ -1516,8 +1654,6 @@ const InvoicesPage: React.FC = () => {
                       onChange={(e) => {
                         const v = e.target.value;
                         setPayAccountId(v);
-
-                        // ✅ chỉ lưu khi user chọn tài khoản thật
                         if (v) {
                           try {
                             localStorage.setItem(LS_LAST_PAY_ACCOUNT, String(v));
@@ -1527,7 +1663,6 @@ const InvoicesPage: React.FC = () => {
                       className="w-full border border-gray-300 rounded-md px-2 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
                       disabled={!isAdmin || accountsLoading || paySubmitting}
                     >
-                      {/* ✅ placeholder bắt buộc chọn */}
                       <option value="" disabled>
                         -- Chọn tài khoản --
                       </option>

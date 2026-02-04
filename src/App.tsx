@@ -29,73 +29,94 @@ import PaymentAccountsPage from "./pages/PaymentAccountsPage";
 import MySalesDashboardPage from "./pages/MySalesDashboardPage";
 import AuditLogsPage from "./pages/AuditLogsPage";
 import StockInOutReportPage from "./pages/StockInOutReportPage";
-
 import InvoiceStatusAdminPage from "./pages/InvoiceStatusAdminPage";
+
+// ✅ NEW: movements page
+import MovementsPage from "./pages/MovementsPage";
+
+// ✅ NEW: simple role guard (admin/accountant only)
+import { useAuth } from "./context/AuthContext";
+const RequireRole: React.FC<{ roles: string[]; children: any }> = ({ roles, children }) => {
+  const { user } = useAuth();
+  const role = user?.role;
+  if (!role) return <Navigate to="/login" replace />;
+  if (!roles.includes(role)) return <Navigate to="/" replace />;
+  return children;
+};
 
 const App: React.FC = () => {
   return (
     <>
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
 
-      <Route
-        path="/"
-        element={
-          <RequireAuth>
-            <Layout />
-          </RequireAuth>
-        }
-      >
-        <Route index element={<Navigate to="/part-stocks" replace />} />
+        <Route
+          path="/"
+          element={
+            <RequireAuth>
+              <Layout />
+            </RequireAuth>
+          }
+        >
+          <Route index element={<Navigate to="/part-stocks" replace />} />
 
-        {/* master */}
-        <Route path="items" element={<ItemsPage />} />
-        <Route path="items-master" element={<ItemsMasterPage />} />
-        <Route path="partners" element={<PartnersPage />} />
-        <Route path="partners/:id" element={<CustomerDetailPage />} />
+          {/* master */}
+          <Route path="items" element={<ItemsPage />} />
+          <Route path="items-master" element={<ItemsMasterPage />} />
+          <Route path="partners" element={<PartnersPage />} />
+          <Route path="partners/:id" element={<CustomerDetailPage />} />
 
-        {/* invoices */}
-        <Route path="invoices" element={<InvoicesPage />} />
-        <Route path="invoices/new" element={<InvoiceDetailPage />} />
-        <Route path="invoices/:id" element={<InvoiceDetailPage />} />
-        <Route path="invoice-status" element={<InvoiceStatusAdminPage />} />
-        {/* returns */}
-        <Route path="sales-returns" element={<SalesReturnsPage />} />
-        <Route path="sales-returns/new" element={<SalesReturnFormPage />} />
-        <Route path="sales-returns/:id" element={<SalesReturnFormPage />} />
+          {/* invoices */}
+          <Route path="invoices" element={<InvoicesPage />} />
+          <Route path="invoices/new" element={<InvoiceDetailPage />} />
+          <Route path="invoices/:id" element={<InvoiceDetailPage />} />
+          <Route path="invoice-status" element={<InvoiceStatusAdminPage />} />
 
-        {/* stocks */}
-        <Route path="part-stocks" element={<PartStocksPage />} />
-        <Route path="stock-counts" element={<StockCountListPage />} />
-        <Route path="stock-counts/:id" element={<StockCountDetailPage />} />
-        <Route path="stock-import-opening" element={<StockOpeningImportPage />} />
+          {/* ✅ NEW: movements (admin | accountant only) */}
+          <Route
+            path="movements"
+            element={
+              <RequireRole roles={["admin", "accountant"]}>
+                <MovementsPage />
+              </RequireRole>
+            }
+          />
 
-        {/* machines */}
-        <Route path="machines" element={<MachinesPage />} />
-        <Route path="machine-stocks" element={<MachineStocksPage />} />
+          {/* returns */}
+          <Route path="sales-returns" element={<SalesReturnsPage />} />
+          <Route path="sales-returns/new" element={<SalesReturnFormPage />} />
+          <Route path="sales-returns/:id" element={<SalesReturnFormPage />} />
 
-        {/* users */}
-        <Route path="users" element={<UserManagementPage />} />
-        <Route path="change-password" element={<ChangePasswordPage />} />
+          {/* stocks */}
+          <Route path="part-stocks" element={<PartStocksPage />} />
+          <Route path="stock-counts" element={<StockCountListPage />} />
+          <Route path="stock-counts/:id" element={<StockCountDetailPage />} />
+          <Route path="stock-import-opening" element={<StockOpeningImportPage />} />
 
-        {/* reports */}
-        <Route path="revenue" element={<RevenuePage />} />
-        <Route path="debts/by-sale" element={<ReceivablesReport />} />
-        <Route path="reports/ledger" element={<LedgerPage />} />
-        <Route path="reports/sales-ledger" element={<SalesLedgerReportPage />} />
-        <Route path="payment-accounts" element={<PaymentAccountsPage />}/>
-        <Route path="/me/sales" element={<MySalesDashboardPage />} />
-        <Route path="audit-logs" element={<AuditLogsPage />} />
-        <Route path="reports/stock-inout" element={<StockInOutReportPage />} />
-        
-      </Route>
-      <Route path="invoices/:id/print" element={<InvoicePrintPage />} />
-      <Route path="*" element={<div className="p-4">404 Not Found</div>} />
-      
-    </Routes>
-    
+          {/* machines */}
+          <Route path="machines" element={<MachinesPage />} />
+          <Route path="machine-stocks" element={<MachineStocksPage />} />
+
+          {/* users */}
+          <Route path="users" element={<UserManagementPage />} />
+          <Route path="change-password" element={<ChangePasswordPage />} />
+
+          {/* reports */}
+          <Route path="revenue" element={<RevenuePage />} />
+          <Route path="debts/by-sale" element={<ReceivablesReport />} />
+          <Route path="reports/ledger" element={<LedgerPage />} />
+          <Route path="reports/sales-ledger" element={<SalesLedgerReportPage />} />
+          <Route path="payment-accounts" element={<PaymentAccountsPage />} />
+          <Route path="/me/sales" element={<MySalesDashboardPage />} />
+          <Route path="audit-logs" element={<AuditLogsPage />} />
+          <Route path="reports/stock-inout" element={<StockInOutReportPage />} />
+        </Route>
+
+        <Route path="invoices/:id/print" element={<InvoicePrintPage />} />
+        <Route path="*" element={<div className="p-4">404 Not Found</div>} />
+      </Routes>
     </>
-
   );
 };
+
 export default App;

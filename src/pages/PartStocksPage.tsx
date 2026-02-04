@@ -83,6 +83,7 @@ const PartStocksPage: React.FC = () => {
   const [page, setPage] = useState(1);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
 
   const totalItems = rows.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
@@ -128,13 +129,21 @@ const PartStocksPage: React.FC = () => {
   // ✅ NEW: view note
   const [viewNote, setViewNote] = useState<ViewNoteState>({ open: false });
 
-  const scrollToTop = () => {
+    const scrollToTop = () => {
+    // ✅ ưu tiên kéo scroll bên trong bảng về đầu
+    if (tableScrollRef.current) {
+      tableScrollRef.current.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
+    // fallback cũ
     if (containerRef.current) {
       containerRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     } else {
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
   };
+
 
   const showToast = (type: "success" | "error", message: string) => {
     setToast({ type, message });
@@ -252,39 +261,38 @@ const PartStocksPage: React.FC = () => {
   };
 
   const handleExport = async () => {
-  try {
-    const res = await api.get("/stocks/summary-by-item/export", {
-      params: {
-        kind: "PART",
-        q: q?.trim() || undefined,
-      },
-      responseType: "blob",
-    });
+    try {
+      const res = await api.get("/stocks/summary-by-item/export", {
+        params: {
+          kind: "PART",
+          q: q?.trim() || undefined,
+        },
+        responseType: "blob",
+      });
 
-    const suffix = q?.trim() ? `_${q.trim().replace(/\s+/g, "_")}` : "";
-    const filename = `ton-kho-linh-kien${suffix}.xlsx`;
+      const suffix = q?.trim() ? `_${q.trim().replace(/\s+/g, "_")}` : "";
+      const filename = `ton-kho-linh-kien${suffix}.xlsx`;
 
-    const blob = new Blob([res.data], {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    });
+      const blob = new Blob([res.data], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
 
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(url);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
 
-    showToast("success", "Đã xuất Excel tồn linh kiện.");
-  } catch (e: any) {
-    console.error("export part stock error", e);
-    const msg = e?.response?.data?.message || e?.message || "Xuất Excel thất bại.";
-    showToast("error", msg);
-  }
-};
-
+      showToast("success", "Đã xuất Excel tồn linh kiện.");
+    } catch (e: any) {
+      console.error("export part stock error", e);
+      const msg = e?.response?.data?.message || e?.message || "Xuất Excel thất bại.";
+      showToast("error", msg);
+    }
+  };
 
   const goToPage = (p: number) => {
     if (p < 1 || p > totalPages) return;
@@ -302,6 +310,9 @@ const PartStocksPage: React.FC = () => {
     return Array.from({ length: totalPages }, (_, i) => i + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [totalPages, page, isMobile]);
+
+  // ✅ NEW: maxHeight cho vùng table để sticky header hoạt động đúng khi vuốt xuống
+  const tableMaxHeight = isMobile ? "70vh" : "72vh";
 
   const handleCreatePart = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -614,6 +625,15 @@ const PartStocksPage: React.FC = () => {
   const B_HDR = "1px solid #e5e7eb";
   const B_ROW = "1px solid #f1f5f9";
 
+  // ✅ style chung cho sticky header cell (UI-only)
+  const stickyTh: React.CSSProperties = {
+    position: "sticky",
+    top: 0,
+    zIndex: 5,
+    backgroundColor: "#f9fafb",
+    borderBottom: B_HDR,
+  };
+
   return (
     <div className="page-container" ref={containerRef}>
       <div className="page-subtitle">Tồn kho theo linh kiện</div>
@@ -667,7 +687,10 @@ const PartStocksPage: React.FC = () => {
             <span style={{ fontSize: 11, color: "#6b7280" }}>(Chỉ dành cho Admin)</span>
           </div>
 
-          <form onSubmit={handleCreatePart} style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
+          <form
+            onSubmit={handleCreatePart}
+            style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}
+          >
             <div style={{ minWidth: 180, flex: "1 1 180px" }}>
               <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
                 Mã linh kiện
@@ -859,48 +882,125 @@ const PartStocksPage: React.FC = () => {
 
       {error && <div style={{ marginBottom: 8, color: "#b91c1c", fontSize: 14 }}>Lỗi: {error}</div>}
 
-      {/* ✅ Table wrapper scroll ngang (mobile) + FIX kẻ dọc */}
+      {/* ✅ Table wrapper: scroll ngang + scroll dọc + sticky header (UI-only) */}
       <div style={{ border: B_HDR, borderRadius: 8, overflow: "hidden", backgroundColor: "#fff" }}>
-        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+        <div
+        ref={tableScrollRef}
+          style={{ 
+            overflowX: "auto",
+            overflowY: "auto", // ✅ scroll dọc trong bảng
+            maxHeight: tableMaxHeight, // ✅ để vuốt xuống không mất đầu mục
+            WebkitOverflowScrolling: "touch",
+          }}
+        >
           <table
             style={{
               width: "100%",
               minWidth: isAdmin ? 1180 : 860, // có cột note nên rộng hơn
-              borderCollapse: "collapse",
+              borderCollapse: "separate", // ✅ sticky ổn định hơn so với collapse
+              borderSpacing: 0,
               fontSize: 14,
             }}
           >
-            <thead style={{ backgroundColor: "#f9fafb", borderBottom: B_HDR }}>
+            <thead style={{ backgroundColor: "#f9fafb" }}>
               <tr>
-                <th style={{ textAlign: "left", padding: "8px 10px", borderRight: B_HDR, width: 160, whiteSpace: "nowrap" }}>
+                <th
+                  style={{
+                    ...stickyTh,
+                    textAlign: "left",
+                    padding: "8px 10px",
+                    borderRight: B_HDR,
+                    width: 160,
+                    whiteSpace: "nowrap",
+                  }}
+                >
                   Mã
                 </th>
-                <th style={{ textAlign: "left", padding: "8px 10px", borderRight: B_HDR }}>
+                <th
+                  style={{
+                    ...stickyTh,
+                    textAlign: "left",
+                    padding: "8px 10px",
+                    borderRight: B_HDR,
+                  }}
+                >
                   Tên linh kiện
                 </th>
 
-                <th style={{ textAlign: "left", padding: "8px 10px", borderRight: B_HDR, width: noteColWidth }}>
+                <th
+                  style={{
+                    ...stickyTh,
+                    textAlign: "left",
+                    padding: "8px 10px",
+                    borderRight: B_HDR,
+                    width: noteColWidth,
+                  }}
+                >
                   Ghi chú
                 </th>
 
-                <th style={{ textAlign: "center", padding: "8px 10px", borderRight: B_HDR, width: 110, whiteSpace: "nowrap" }}>
+                <th
+                  style={{
+                    ...stickyTh,
+                    textAlign: "center",
+                    padding: "8px 10px",
+                    borderRight: B_HDR,
+                    width: 110,
+                    whiteSpace: "nowrap",
+                  }}
+                >
                   ĐVT
                 </th>
 
-                {/* ✅ FIX: thêm borderRight cho Tồn kho */}
-                <th style={{ textAlign: "right", padding: "8px 10px", borderRight: B_HDR, width: 120, whiteSpace: "nowrap" }}>
+                <th
+                  style={{
+                    ...stickyTh,
+                    textAlign: "right",
+                    padding: "8px 10px",
+                    borderRight: B_HDR,
+                    width: 120,
+                    whiteSpace: "nowrap",
+                  }}
+                >
                   Tồn kho
                 </th>
 
                 {isAdmin && (
                   <>
-                    <th style={{ textAlign: "right", padding: "8px 10px", borderRight: B_HDR, width: 140, whiteSpace: "nowrap" }}>
+                    <th
+                      style={{
+                        ...stickyTh,
+                        textAlign: "right",
+                        padding: "8px 10px",
+                        borderRight: B_HDR,
+                        width: 140,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
                       Giá vốn TB
                     </th>
-                    <th style={{ textAlign: "right", padding: "8px 10px", borderRight: B_HDR, width: 160, whiteSpace: "nowrap" }}>
+                    <th
+                      style={{
+                        ...stickyTh,
+                        textAlign: "right",
+                        padding: "8px 10px",
+                        borderRight: B_HDR,
+                        width: 160,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
                       Giá trị tồn
                     </th>
-                    <th style={{ textAlign: "center", padding: "8px 10px", width: 120, whiteSpace: "nowrap" }}>
+                    <th
+                      style={{
+                        ...stickyTh,
+                        zIndex: 6, // ✅ hơi cao hơn để không bị “lụi” khi scroll
+                        textAlign: "center",
+                        padding: "8px 10px",
+                        width: 120,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
                       Cập nhật
                     </th>
                   </>
@@ -935,7 +1035,14 @@ const PartStocksPage: React.FC = () => {
 
                   return (
                     <tr key={row.itemId || row.sku || row.name}>
-                      <td style={{ padding: "8px 10px", borderTop: B_ROW, borderRight: B_ROW, whiteSpace: "nowrap" }}>
+                      <td
+                        style={{
+                          padding: "8px 10px",
+                          borderTop: B_ROW,
+                          borderRight: B_ROW,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
                         {row.sku}
                       </td>
 
@@ -1019,7 +1126,14 @@ const PartStocksPage: React.FC = () => {
                             </button>
                           </div>
                         ) : (
-                          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "flex-start",
+                              justifyContent: "space-between",
+                              gap: 8,
+                            }}
+                          >
                             <div
                               style={{
                                 color: "#334155",
@@ -1082,24 +1196,63 @@ const PartStocksPage: React.FC = () => {
                         )}
                       </td>
 
-                      <td style={{ padding: "8px 10px", borderTop: B_ROW, borderRight: B_ROW, textAlign: "center", whiteSpace: "nowrap" }}>
+                      <td
+                        style={{
+                          padding: "8px 10px",
+                          borderTop: B_ROW,
+                          borderRight: B_ROW,
+                          textAlign: "center",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
                         {renderUnitCell(row)}
                       </td>
 
-                      {/* ✅ FIX: thêm borderRight cho Tồn kho ở body */}
-                      <td style={{ padding: "8px 10px", borderTop: B_ROW, borderRight: B_ROW, textAlign: "right", whiteSpace: "nowrap", fontWeight: 600 }}>
+                      <td
+                        style={{
+                          padding: "8px 10px",
+                          borderTop: B_ROW,
+                          borderRight: B_ROW,
+                          textAlign: "right",
+                          whiteSpace: "nowrap",
+                          fontWeight: 600,
+                        }}
+                      >
                         {fmtQty(row.totalQty)}
                       </td>
 
                       {isAdmin && (
                         <>
-                          <td style={{ padding: "8px 10px", borderTop: B_ROW, borderRight: B_ROW, textAlign: "right", whiteSpace: "nowrap" }}>
+                          <td
+                            style={{
+                              padding: "8px 10px",
+                              borderTop: B_ROW,
+                              borderRight: B_ROW,
+                              textAlign: "right",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
                             {fmtMoney(row.avgCost || 0)}
                           </td>
-                          <td style={{ padding: "8px 10px", borderTop: B_ROW, borderRight: B_ROW, textAlign: "right", whiteSpace: "nowrap" }}>
+                          <td
+                            style={{
+                              padding: "8px 10px",
+                              borderTop: B_ROW,
+                              borderRight: B_ROW,
+                              textAlign: "right",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
                             {fmtMoney(row.stockValue || 0)}
                           </td>
-                          <td style={{ padding: "8px 10px", borderTop: B_ROW, textAlign: "center", whiteSpace: "nowrap" }}>
+                          <td
+                            style={{
+                              padding: "8px 10px",
+                              borderTop: B_ROW,
+                              textAlign: "center",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
                             <button
                               type="button"
                               onClick={() => openEdit(row)}
@@ -1129,7 +1282,17 @@ const PartStocksPage: React.FC = () => {
       </div>
 
       {/* ✅ Pagination responsive */}
-      <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, flexWrap: "wrap", gap: 8 }}>
+      <div
+        style={{
+          marginTop: 10,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          fontSize: 13,
+          flexWrap: "wrap",
+          gap: 8,
+        }}
+      >
         <div>
           Trang {page}/{totalPages} – Tổng {totalItems} linh kiện
         </div>
@@ -1534,7 +1697,11 @@ const PartStocksPage: React.FC = () => {
                   wordBreak: "break-word",
                 }}
               >
-                {viewNote.note ? viewNote.note : <span style={{ color: "#94a3b8" }}>Không có ghi chú.</span>}
+                {viewNote.note ? (
+                  viewNote.note
+                ) : (
+                  <span style={{ color: "#94a3b8" }}>Không có ghi chú.</span>
+                )}
               </div>
             </div>
 

@@ -12,6 +12,9 @@ type MachineStockRow = {
   unitName?: string; // unitName (Cái, Cặp, Mét...)
   totalQty: number;
 
+  // ✅ NEW: note của item (từ BE summary-by-item)
+  note?: string | null;
+
   // ✅ admin-only
   avgCost?: number;
   stockValue?: number;
@@ -42,6 +45,19 @@ type EditState =
     }
   | { open: false };
 
+// ✅ NEW: inline note editor state per row
+type NoteDraft = {
+  editing: boolean;
+  value: string;
+  original: string;
+  saving: boolean;
+};
+
+// ✅ NEW: view full note modal
+type ViewNoteState =
+  | { open: true; sku: string; name: string; note: string }
+  | { open: false };
+
 const PAGE_SIZE = 30;
 
 function normalizeForMachineSort(name: string) {
@@ -55,6 +71,7 @@ function normalizeForMachineSort(name: string) {
 const MachineStocksPage: React.FC = () => {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const canEditNote = user?.role === "admin" || user?.role === "accountant";
 
   const [rows, setRows] = useState<MachineStockRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -65,6 +82,9 @@ const MachineStocksPage: React.FC = () => {
 
   const [page, setPage] = useState(1);
   const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // ✅ NEW: ref cho vùng scroll dọc của table (để đổi trang auto về đầu bảng)
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
 
   const totalItems = rows.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
@@ -86,6 +106,12 @@ const MachineStocksPage: React.FC = () => {
   const [edit, setEdit] = useState<EditState>({ open: false });
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
+  // ✅ NEW: note drafts keyed by itemId
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, NoteDraft>>({});
+
+  // ✅ NEW: view note
+  const [viewNote, setViewNote] = useState<ViewNoteState>({ open: false });
+
   const unitById = useMemo(() => {
     const m = new Map<string, UnitOption>();
     units.forEach((u) => m.set(u.id, u));
@@ -104,6 +130,13 @@ const MachineStocksPage: React.FC = () => {
   }, [units]);
 
   const scrollToTop = () => {
+    // ✅ ưu tiên kéo scroll bên trong bảng về đầu (sticky header + table scroll)
+    if (tableScrollRef.current) {
+      tableScrollRef.current.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
+    // fallback cũ
     if (containerRef.current) {
       containerRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     } else {
@@ -139,6 +172,10 @@ const MachineStocksPage: React.FC = () => {
         unit: r.unit ?? "",
         unitName: r.unitName ?? "",
         totalQty: Number(r.totalQty ?? 0),
+
+        // ✅ NEW: note
+        note: r.note ?? null,
+
         avgCost: r.avgCost != null ? Number(r.avgCost) : 0,
         stockValue: r.stockValue != null ? Number(r.stockValue) : 0,
       }));
@@ -154,6 +191,20 @@ const MachineStocksPage: React.FC = () => {
       setRows(mapped);
       setPage(1);
       scrollToTop();
+
+      // ✅ reset note drafts theo dữ liệu mới
+      const nextDrafts: Record<string, NoteDraft> = {};
+      for (const it of mapped) {
+        if (!it.itemId) continue;
+        const orig = String(it.note ?? "");
+        nextDrafts[it.itemId] = {
+          editing: false,
+          value: orig,
+          original: orig,
+          saving: false,
+        };
+      }
+      setNoteDrafts(nextDrafts);
     } catch (e: any) {
       console.error(e);
       const msg = e?.response?.data?.message || e?.message || "Lỗi tải dữ liệu";
@@ -196,42 +247,46 @@ const MachineStocksPage: React.FC = () => {
     setQ(searchText);
   };
 
- const handleExport = async () => {
-  try {
-    // gọi qua axios instance (api) để có Authorization header
-    const res = await api.get("/stocks/summary-by-item/export", {
-      params: { kind: "MACHINE", q: q?.trim() || undefined },
-      responseType: "blob",
-    });
+  const handleExport = async () => {
+    try {
+      // gọi qua axios instance (api) để có Authorization header
+      const res = await api.get("/stocks/summary-by-item/export", {
+        params: { kind: "MACHINE", q: q?.trim() || undefined },
+        responseType: "blob",
+      });
 
-    // tạo file name gọn gàng
-    const suffix = q?.trim() ? `_${q.trim().replace(/\s+/g, "_")}` : "";
-    const filename = `ton-kho-may${suffix}.xlsx`;
+      // tạo file name gọn gàng
+      const suffix = q?.trim() ? `_${q.trim().replace(/\s+/g, "_")}` : "";
+      const filename = `ton-kho-may${suffix}.xlsx`;
 
-    const blob = new Blob([res.data], {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    });
+      const blob = new Blob([res.data], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
 
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(url);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
 
-    showToast("success", "Đã xuất Excel tồn máy.");
-  } catch (e: any) {
-    console.error("export error", e);
-    const msg = e?.response?.data?.message || e?.message || "Xuất Excel thất bại.";
-    showToast("error", msg);
-  }
-};
+      showToast("success", "Đã xuất Excel tồn máy.");
+    } catch (e: any) {
+      console.error("export error", e);
+      const msg = e?.response?.data?.message || e?.message || "Xuất Excel thất bại.";
+      showToast("error", msg);
+    }
+  };
 
   const goToPage = (p: number) => {
     if (p < 1 || p > totalPages) return;
     setPage(p);
+
+    // ✅ reset ngay lập tức scroll của bảng (tránh cảm giác “kéo mãi vẫn ở giữa”)
+    if (tableScrollRef.current) tableScrollRef.current.scrollTop = 0;
+
     scrollToTop();
   };
 
@@ -384,9 +439,173 @@ const MachineStocksPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [totalPages, page, isMobile]);
 
+  // ✅ NEW: maxHeight cho vùng table để sticky header hoạt động đúng khi vuốt xuống
+  const tableMaxHeight = isMobile ? "70vh" : "72vh";
+
   // ===== common borders =====
   const B_HDR = "1px solid #e5e7eb";
   const B_ROW = "1px solid #f1f5f9";
+
+  // ✅ NEW: note column width
+  const noteColWidth = 260;
+
+  // ✅ style chung cho sticky header cell (UI-only)
+  const stickyTh: React.CSSProperties = {
+    position: "sticky",
+    top: 0,
+    zIndex: 5,
+    backgroundColor: "#f9fafb",
+    borderBottom: B_HDR,
+  };
+
+  // ========================= NOTE INLINE EDIT (Y HỆT LINH KIỆN) =========================
+
+  const ensureDraft = (itemId: string, currentNote: string) => {
+    setNoteDrafts((prev) => {
+      if (prev[itemId]) return prev;
+      return {
+        ...prev,
+        [itemId]: { editing: false, value: currentNote, original: currentNote, saving: false },
+      };
+    });
+  };
+
+  const startEditNote = (row: MachineStockRow) => {
+    if (!canEditNote) return;
+    if (!row.itemId) {
+      showToast("error", "Dòng này thiếu itemId từ BE. Không thể lưu ghi chú.");
+      return;
+    }
+    const itemId = row.itemId;
+    const current = String(row.note ?? "");
+    ensureDraft(itemId, current);
+
+    setNoteDrafts((prev) => ({
+      ...prev,
+      [itemId]: {
+        ...(prev[itemId] || { editing: false, value: current, original: current, saving: false }),
+        editing: true,
+        value: prev[itemId]?.value ?? current,
+        original: prev[itemId]?.original ?? current,
+      },
+    }));
+  };
+
+  const cancelEditNote = (itemId: string) => {
+    setNoteDrafts((prev) => {
+      const d = prev[itemId];
+      if (!d) return prev;
+      return {
+        ...prev,
+        [itemId]: { ...d, editing: false, value: d.original, saving: false },
+      };
+    });
+  };
+
+  const changeNoteValue = (itemId: string, value: string) => {
+    setNoteDrafts((prev) => {
+      const d = prev[itemId];
+      if (!d) return prev;
+      return { ...prev, [itemId]: { ...d, value } };
+    });
+  };
+
+  const getNoteUi = (row: MachineStockRow) => {
+    const itemId = row.itemId;
+    if (!itemId) return null;
+    return noteDrafts[itemId];
+  };
+
+  const saveNote = async (row: MachineStockRow) => {
+    if (!canEditNote) return;
+    if (!row.itemId) {
+      showToast("error", "Dòng này thiếu itemId từ BE. Không thể lưu ghi chú.");
+      return;
+    }
+
+    const itemId = row.itemId;
+    const draft = noteDrafts[itemId];
+    const value = (draft?.value ?? String(row.note ?? "")).trim();
+    const original = draft?.original ?? String(row.note ?? "");
+
+    if (value === original.trim()) {
+      setNoteDrafts((prev) => {
+        const d = prev[itemId];
+        if (!d) return prev;
+        return { ...prev, [itemId]: { ...d, editing: false, saving: false } };
+      });
+      return;
+    }
+
+    try {
+      setNoteDrafts((prev) => {
+        const d = prev[itemId];
+        if (!d) return prev;
+        return { ...prev, [itemId]: { ...d, saving: true } };
+      });
+
+      await api.put(`/items/${itemId}`, {
+        note: value ? value : null,
+      });
+
+      setRows((prev) => prev.map((r) => (r.itemId === itemId ? { ...r, note: value || null } : r)));
+
+      setNoteDrafts((prev) => {
+        const d = prev[itemId] || { editing: false, value, original, saving: false };
+        return {
+          ...prev,
+          [itemId]: { ...d, editing: false, saving: false, value, original: value },
+        };
+      });
+
+      showToast("success", "Đã lưu ghi chú.");
+    } catch (e: any) {
+      console.error("save note error", e);
+      const msg = e?.response?.data?.message || e?.message || "Lưu ghi chú thất bại.";
+      showToast("error", msg);
+
+      setNoteDrafts((prev) => {
+        const d = prev[itemId];
+        if (!d) return prev;
+        return { ...prev, [itemId]: { ...d, saving: false } };
+      });
+    }
+  };
+
+  const onNoteKeyDown = (ev: React.KeyboardEvent<HTMLInputElement>, row: MachineStockRow) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      saveNote(row);
+    }
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      if (row.itemId) cancelEditNote(row.itemId);
+    }
+  };
+
+  // ========================= VIEW NOTE MODAL =========================
+
+  const openViewNote = (row: MachineStockRow) => {
+    const note = String(row.note ?? "").trim();
+    setViewNote({
+      open: true,
+      sku: String(row.sku ?? ""),
+      name: String(row.name ?? ""),
+      note,
+    });
+  };
+
+  const closeViewNote = () => setViewNote({ open: false });
+
+  const copyNote = async () => {
+    if (!viewNote.open) return;
+    try {
+      await navigator.clipboard.writeText(viewNote.note || "");
+      showToast("success", "Đã copy ghi chú.");
+    } catch {
+      showToast("error", "Không copy được (trình duyệt chặn clipboard).");
+    }
+  };
 
   return (
     <div className="page-container" ref={containerRef}>
@@ -543,7 +762,7 @@ const MachineStocksPage: React.FC = () => {
         </div>
       )}
 
-      {/* ✅ Search + Export responsive (no minWidth forcing overflow) */}
+      {/* ✅ Search + Export responsive */}
       <div
         style={{
           display: "flex",
@@ -619,29 +838,31 @@ const MachineStocksPage: React.FC = () => {
 
       {error && <div style={{ marginBottom: 8, color: "#b91c1c", fontSize: 14 }}>Lỗi: {error}</div>}
 
-      {/* ✅ Table wrapper: scroll ngang riêng table (mobile mượt, không vỡ page) */}
-      <div
-        style={{
-          border: B_HDR,
-          borderRadius: 8,
-          overflow: "hidden",
-          backgroundColor: "#fff",
-        }}
-      >
-        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
-          {/* minWidth để giữ cột không co quá nhỏ, nhưng scroll ngang trong wrapper */}
+      {/* ✅ Table wrapper: scroll ngang + scroll dọc + sticky header (y như tồn linh kiện) */}
+      <div style={{ border: B_HDR, borderRadius: 8, overflow: "hidden", backgroundColor: "#fff" }}>
+        <div
+          ref={tableScrollRef}
+          style={{
+            overflowX: "auto",
+            overflowY: "auto",
+            maxHeight: tableMaxHeight,
+            WebkitOverflowScrolling: "touch",
+          }}
+        >
           <table
             style={{
               width: "100%",
-              minWidth: isAdmin ? 980 : 560,
-              borderCollapse: "collapse",
+              minWidth: isAdmin ? 1120 : 880, // có cột note nên rộng hơn
+              borderCollapse: "separate",
+              borderSpacing: 0,
               fontSize: 14,
             }}
           >
-            <thead style={{ backgroundColor: "#f9fafb", borderBottom: B_HDR }}>
+            <thead style={{ backgroundColor: "#f9fafb" }}>
               <tr>
                 <th
                   style={{
+                    ...stickyTh,
                     textAlign: "left",
                     padding: "8px 10px",
                     borderRight: B_HDR,
@@ -651,11 +872,34 @@ const MachineStocksPage: React.FC = () => {
                 >
                   Mã
                 </th>
-                <th style={{ textAlign: "left", padding: "8px 10px", borderRight: B_HDR }}>
-                  Tên máy
-                </th>
+
                 <th
                   style={{
+                    ...stickyTh,
+                    textAlign: "left",
+                    padding: "8px 10px",
+                    borderRight: B_HDR,
+                  }}
+                >
+                  Tên máy
+                </th>
+
+                {/* ✅ NEW: Ghi chú */}
+                <th
+                  style={{
+                    ...stickyTh,
+                    textAlign: "left",
+                    padding: "8px 10px",
+                    borderRight: B_HDR,
+                    width: noteColWidth,
+                  }}
+                >
+                  Ghi chú
+                </th>
+
+                <th
+                  style={{
+                    ...stickyTh,
                     textAlign: "center",
                     padding: "8px 10px",
                     borderRight: B_HDR,
@@ -666,9 +910,9 @@ const MachineStocksPage: React.FC = () => {
                   ĐVT
                 </th>
 
-                {/* ✅ FIX: thêm borderRight cho Tồn kho để có line giữa Tồn kho & Giá vốn TB */}
                 <th
                   style={{
+                    ...stickyTh,
                     textAlign: "right",
                     padding: "8px 10px",
                     borderRight: B_HDR,
@@ -683,6 +927,7 @@ const MachineStocksPage: React.FC = () => {
                   <>
                     <th
                       style={{
+                        ...stickyTh,
                         textAlign: "right",
                         padding: "8px 10px",
                         borderRight: B_HDR,
@@ -694,6 +939,7 @@ const MachineStocksPage: React.FC = () => {
                     </th>
                     <th
                       style={{
+                        ...stickyTh,
                         textAlign: "right",
                         padding: "8px 10px",
                         borderRight: B_HDR,
@@ -705,6 +951,8 @@ const MachineStocksPage: React.FC = () => {
                     </th>
                     <th
                       style={{
+                        ...stickyTh,
+                        zIndex: 6,
                         textAlign: "center",
                         padding: "8px 10px",
                         width: 120,
@@ -721,119 +969,270 @@ const MachineStocksPage: React.FC = () => {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={isAdmin ? 7 : 4} style={{ padding: 12, textAlign: "center" }}>
+                  <td colSpan={isAdmin ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
                     Đang tải dữ liệu...
                   </td>
                 </tr>
               ) : pagedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={isAdmin ? 7 : 4} style={{ padding: 12, textAlign: "center" }}>
+                  <td colSpan={isAdmin ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
                     Không có dòng máy nào thỏa điều kiện.
                   </td>
                 </tr>
               ) : (
-                pagedRows.map((row) => (
-                  <tr key={row.itemId || row.sku || row.name}>
-                    <td
-                      style={{
-                        padding: "8px 10px",
-                        borderTop: B_ROW,
-                        borderRight: B_ROW,
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {row.sku}
-                    </td>
+                pagedRows.map((row) => {
+                  const id = row.itemId || "";
+                  const draft = id ? getNoteUi(row) : undefined;
+                  const noteText = String(row.note ?? "");
+                  const isEditing = !!draft?.editing;
+                  const isSaving = !!draft?.saving;
+                  const val = draft ? draft.value : noteText;
+                  const dirty = draft ? draft.value.trim() !== draft.original.trim() : false;
+                  const showEye = noteText.trim().length > 60;
 
-                    <td
-                      style={{
-                        padding: "8px 10px",
-                        borderTop: B_ROW,
-                        borderRight: B_ROW,
-                      }}
-                    >
-                      {row.name}
-                    </td>
+                  return (
+                    <tr key={row.itemId || row.sku || row.name}>
+                      <td
+                        style={{
+                          padding: "8px 10px",
+                          borderTop: B_ROW,
+                          borderRight: B_ROW,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {row.sku}
+                      </td>
 
-                    <td
-                      style={{
-                        padding: "8px 10px",
-                        borderTop: B_ROW,
-                        borderRight: B_ROW,
-                        textAlign: "center",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {renderUnitCell(row)}
-                    </td>
+                      <td style={{ padding: "8px 10px", borderTop: B_ROW, borderRight: B_ROW }}>
+                        {row.name}
+                      </td>
 
-                    {/* ✅ FIX: thêm borderRight cho Tồn kho ở body để line không mất */}
-                    <td
-                      style={{
-                        padding: "8px 10px",
-                        borderTop: B_ROW,
-                        borderRight: B_ROW,
-                        textAlign: "right",
-                        whiteSpace: "nowrap",
-                        fontWeight: 600,
-                      }}
-                    >
-                      {fmtQty(row.totalQty)}
-                    </td>
-
-                    {isAdmin && (
-                      <>
-                        <td
-                          style={{
-                            padding: "8px 10px",
-                            borderTop: B_ROW,
-                            borderRight: B_ROW,
-                            textAlign: "right",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {fmtMoney(row.avgCost || 0)}
-                        </td>
-                        <td
-                          style={{
-                            padding: "8px 10px",
-                            borderTop: B_ROW,
-                            borderRight: B_ROW,
-                            textAlign: "right",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {fmtMoney(row.stockValue || 0)}
-                        </td>
-                        <td
-                          style={{
-                            padding: "8px 10px",
-                            borderTop: B_ROW,
-                            textAlign: "center",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => openEdit(row)}
+                      {/* ✅ NEW: Ghi chú (inline edit y như linh kiện) */}
+                      <td style={{ padding: "8px 10px", borderTop: B_ROW, borderRight: B_ROW }}>
+                        {!canEditNote || !row.itemId ? (
+                          <div
                             style={{
-                              padding: "6px 10px",
-                              borderRadius: 6,
-                              border: "1px solid #2563eb",
-                              backgroundColor: "#eff6ff",
-                              color: "#1d4ed8",
+                              color: "#334155",
                               fontSize: 13,
-                              fontWeight: 700,
-                              cursor: "pointer",
+                              lineHeight: 1.35,
+                              display: "-webkit-box",
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: "vertical" as any,
+                              overflow: "hidden",
+                              wordBreak: "break-word",
+                            }}
+                            title={noteText || ""}
+                          >
+                            {noteText ? noteText : <span style={{ color: "#94a3b8" }}>—</span>}
+                          </div>
+                        ) : isEditing ? (
+                          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            <input
+                              value={val}
+                              onChange={(e) => changeNoteValue(row.itemId!, e.target.value)}
+                              onKeyDown={(e) => onNoteKeyDown(e, row)}
+                              disabled={isSaving}
+                              placeholder="Nhập ghi chú..."
+                              style={{
+                                width: "100%",
+                                padding: "6px 8px",
+                                borderRadius: 6,
+                                border: "1px solid #cbd5e1",
+                                fontSize: 13,
+                                outline: "none",
+                              }}
+                            />
+
+                            <button
+                              type="button"
+                              onClick={() => saveNote(row)}
+                              disabled={isSaving || !dirty}
+                              title="Lưu (Enter)"
+                              style={{
+                                padding: "6px 10px",
+                                borderRadius: 6,
+                                border: "1px solid #16a34a",
+                                backgroundColor: isSaving || !dirty ? "#dcfce7" : "#16a34a",
+                                color: isSaving || !dirty ? "#166534" : "#fff",
+                                fontSize: 12,
+                                fontWeight: 800,
+                                cursor: isSaving || !dirty ? "default" : "pointer",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {isSaving ? "..." : "Lưu"}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => cancelEditNote(row.itemId!)}
+                              disabled={isSaving}
+                              title="Hủy (Esc)"
+                              style={{
+                                padding: "6px 10px",
+                                borderRadius: 6,
+                                border: "1px solid #e5e7eb",
+                                backgroundColor: "#fff",
+                                color: "#334155",
+                                fontSize: 12,
+                                fontWeight: 800,
+                                cursor: isSaving ? "default" : "pointer",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              Hủy
+                            </button>
+                          </div>
+                        ) : (
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "flex-start",
+                              justifyContent: "space-between",
+                              gap: 8,
                             }}
                           >
-                            Sửa
-                          </button>
-                        </td>
-                      </>
-                    )}
-                  </tr>
-                ))
+                            <div
+                              style={{
+                                color: "#334155",
+                                fontSize: 13,
+                                lineHeight: 1.35,
+                                display: "-webkit-box",
+                                WebkitLineClamp: 2,
+                                WebkitBoxOrient: "vertical" as any,
+                                overflow: "hidden",
+                                wordBreak: "break-word",
+                                flex: 1,
+                              }}
+                              title={noteText || ""}
+                            >
+                              {noteText ? noteText : <span style={{ color: "#94a3b8" }}>—</span>}
+                            </div>
+
+                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                              {showEye && (
+                                <button
+                                  type="button"
+                                  onClick={() => openViewNote(row)}
+                                  style={{
+                                    padding: "4px 8px",
+                                    borderRadius: 999,
+                                    border: "1px solid #cbd5e1",
+                                    backgroundColor: "#fff",
+                                    color: "#0f172a",
+                                    fontSize: 12,
+                                    fontWeight: 900,
+                                    cursor: "pointer",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                  title="Xem đầy đủ"
+                                >
+                                  👁
+                                </button>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => startEditNote(row)}
+                                style={{
+                                  padding: "4px 8px",
+                                  borderRadius: 999,
+                                  border: "1px solid #cbd5e1",
+                                  backgroundColor: "#fff",
+                                  color: "#0f172a",
+                                  fontSize: 12,
+                                  fontWeight: 900,
+                                  cursor: "pointer",
+                                  whiteSpace: "nowrap",
+                                }}
+                                title="Sửa ghi chú"
+                              >
+                                ✎
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </td>
+
+                      <td
+                        style={{
+                          padding: "8px 10px",
+                          borderTop: B_ROW,
+                          borderRight: B_ROW,
+                          textAlign: "center",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {renderUnitCell(row)}
+                      </td>
+
+                      <td
+                        style={{
+                          padding: "8px 10px",
+                          borderTop: B_ROW,
+                          borderRight: B_ROW,
+                          textAlign: "right",
+                          whiteSpace: "nowrap",
+                          fontWeight: 600,
+                        }}
+                      >
+                        {fmtQty(row.totalQty)}
+                      </td>
+
+                      {isAdmin && (
+                        <>
+                          <td
+                            style={{
+                              padding: "8px 10px",
+                              borderTop: B_ROW,
+                              borderRight: B_ROW,
+                              textAlign: "right",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {fmtMoney(row.avgCost || 0)}
+                          </td>
+                          <td
+                            style={{
+                              padding: "8px 10px",
+                              borderTop: B_ROW,
+                              borderRight: B_ROW,
+                              textAlign: "right",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {fmtMoney(row.stockValue || 0)}
+                          </td>
+                          <td
+                            style={{
+                              padding: "8px 10px",
+                              borderTop: B_ROW,
+                              textAlign: "center",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => openEdit(row)}
+                              style={{
+                                padding: "6px 10px",
+                                borderRadius: 6,
+                                border: "1px solid #2563eb",
+                                backgroundColor: "#eff6ff",
+                                color: "#1d4ed8",
+                                fontSize: 13,
+                                fontWeight: 700,
+                                cursor: "pointer",
+                              }}
+                            >
+                              Sửa
+                            </button>
+                          </td>
+                        </>
+                      )}
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -1144,6 +1543,134 @@ const MachineStocksPage: React.FC = () => {
         </div>
       )}
       {/* ========================= END MODAL ========================= */}
+
+      {/* ========================= VIEW NOTE MODAL ========================= */}
+      {viewNote.open && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) closeViewNote();
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            backgroundColor: "rgba(0,0,0,0.45)",
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: "min(720px, 96vw)",
+              maxHeight: "90vh",
+              backgroundColor: "#fff",
+              borderRadius: 12,
+              border: "1px solid #e5e7eb",
+              overflow: "hidden",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <div
+              style={{
+                padding: "12px 14px",
+                borderBottom: "1px solid #e5e7eb",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 900 }}>Ghi chú</div>
+                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                  <b>{viewNote.sku}</b> — {viewNote.name}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeViewNote}
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 8,
+                  border: "1px solid #e5e7eb",
+                  backgroundColor: "#fff",
+                  cursor: "pointer",
+                  fontWeight: 900,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ padding: 14, overflow: "auto", flex: 1 }}>
+              <div
+                style={{
+                  padding: 12,
+                  borderRadius: 10,
+                  border: "1px solid #e2e8f0",
+                  backgroundColor: "#f8fafc",
+                  fontSize: 14,
+                  lineHeight: 1.6,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                }}
+              >
+                {viewNote.note ? viewNote.note : <span style={{ color: "#94a3b8" }}>Không có ghi chú.</span>}
+              </div>
+            </div>
+
+            <div
+              style={{
+                padding: 12,
+                borderTop: "1px solid #e5e7eb",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-end",
+                gap: 8,
+                backgroundColor: "#fff",
+              }}
+            >
+              <button
+                type="button"
+                onClick={copyNote}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #cbd5e1",
+                  backgroundColor: "#fff",
+                  cursor: "pointer",
+                  fontWeight: 900,
+                }}
+              >
+                Copy
+              </button>
+
+              <button
+                type="button"
+                onClick={closeViewNote}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  border: "1px solid #e5e7eb",
+                  backgroundColor: "#fff",
+                  cursor: "pointer",
+                  fontWeight: 900,
+                }}
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ========================= END VIEW NOTE MODAL ========================= */}
     </div>
   );
 };
