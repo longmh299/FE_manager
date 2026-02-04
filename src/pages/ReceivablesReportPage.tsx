@@ -605,6 +605,20 @@ const ReceivablesReportPage: React.FC = () => {
       e?.stopPropagation?.();
     } catch {}
   }
+function ensureAccountSelected() {
+  if (!accounts || accounts.length === 0) {
+    push({
+      type: "error",
+      message: "Chưa có tài khoản nhận tiền. Vui lòng cấu hình tài khoản trước khi thu.",
+    });
+    return false;
+  }
+  if (!accountId) {
+    push({ type: "error", message: "Vui lòng chọn tài khoản nhận tiền trước khi thu." });
+    return false;
+  }
+  return true;
+}
 
   /* ======================= Collect WARRANTY Modal ======================= */
 
@@ -660,7 +674,7 @@ const ReceivablesReportPage: React.FC = () => {
       push({ type: "error", message: "Ghi chú là bắt buộc. Vui lòng chọn mẫu hoặc nhập ghi chú." });
       return;
     }
-
+    if (!ensureAccountSelected()) return;
     try {
       setLoadingPay(true);
 
@@ -669,7 +683,7 @@ const ReceivablesReportPage: React.FC = () => {
         partnerId,
         type: "RECEIPT",
         amount: amt,
-        accountId: accountId || undefined,
+        accountId: accountId,
         note,
         allocations: [{ invoiceId: whRow.invoiceId, amount: amt, kind: "WARRANTY_HOLD" }],
       });
@@ -742,7 +756,7 @@ const ReceivablesReportPage: React.FC = () => {
       push({ type: "error", message: "Ghi chú là bắt buộc. Vui lòng chọn mẫu hoặc nhập ghi chú." });
       return;
     }
-
+    if (!ensureAccountSelected()) return;
     try {
       setLoadingPay(true);
 
@@ -751,7 +765,7 @@ const ReceivablesReportPage: React.FC = () => {
         partnerId,
         type: "RECEIPT",
         amount: amt,
-        accountId: accountId || undefined,
+        accountId: accountId,
         note,
         allocations: [{ invoiceId: nRow.invoiceId, amount: amt, kind: "NORMAL" }],
       });
@@ -1032,22 +1046,32 @@ const ReceivablesReportPage: React.FC = () => {
                   </div>
                 </div>
 
-                <div style={field}>
-                  <div style={fieldLabel}>Tài khoản nhận</div>
-                  <select value={accountId} onChange={(e) => setAccountId(e.target.value)} style={{ ...input, cursor: "pointer" }} disabled={loadingPay}>
-                    <option value="">Không chọn</option>
-                    {accounts.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name} {a.code ? `(${a.code})` : ""}
-                      </option>
-                    ))}
-                  </select>
-                  {accounts.length === 0 ? (
-                    <div style={{ fontSize: 12, opacity: 0.65, marginTop: 4 }}>
-                      (Chưa có API danh sách tài khoản hoặc chưa cấu hình — vẫn thu được nếu không chọn.)
-                    </div>
-                  ) : null}
+                <div style={fieldLabel}>
+                  Tài khoản nhận <span style={{ color: "#dc2626", fontWeight: 900 }}>*</span>
                 </div>
+
+                <select
+                  value={accountId}
+                  onChange={(e) => setAccountId(e.target.value)}
+                  style={{ ...input, cursor: "pointer" }}
+                  disabled={loadingPay}
+                >
+                  <option value="" disabled>
+                    — Chọn tài khoản —
+                  </option>
+                  {accounts.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name} {a.code ? `(${a.code})` : ""}
+                    </option>
+                  ))}
+                </select>
+
+                {accounts.length === 0 ? (
+                  <div style={{ fontSize: 12, opacity: 0.85, marginTop: 4, color: "#dc2626", fontWeight: 800 }}>
+                    Chưa có tài khoản nhận tiền → không thể thu.
+                  </div>
+                ) : null}
+
 
                 <div style={{ ...field, gridColumn: "1 / -1" }}>
                   <div style={fieldLabel}>Mẫu ghi chú</div>

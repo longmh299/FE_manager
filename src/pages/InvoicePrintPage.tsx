@@ -39,6 +39,13 @@ function stripBracketPart(name: string): string {
   return name.replace(/\s*\[[^\]]*]/g, "");
 }
 
+// ✅ NEW: lấy mã trong [...] (lấy cái [] đầu tiên)
+function extractBracketCode(name: string): string {
+  if (!name) return "";
+  const m = name.match(/\[([^\]]+)\]/);
+  return m ? String(m[1]).trim() : "";
+}
+
 function numberToVietnamese(amount: number): string {
   if (isNaN(amount as any)) return "";
   const n = Math.round(amount);
@@ -333,6 +340,7 @@ type ApiInvoice = {
 
 type Line = {
   id: string;
+  code?: string; // ✅ NEW
   name: string;
   unit?: string;
   qty: number;
@@ -549,9 +557,14 @@ const InvoicePrintPage: React.FC = () => {
       const unitFromInvoice = String(l.item?.unit ?? l.unit ?? "").trim();
       const unitFromItem = String(unitByItemId[String(l.itemId || "")] ?? "").trim();
 
+      const rawName = String(l.item?.name ?? l.itemName ?? "");
+      const code = extractBracketCode(rawName);
+      const cleanName = stripBracketPart(rawName);
+
       return {
         id: l.id,
-        name: stripBracketPart(l.item?.name ?? l.itemName ?? ""),
+        code,
+        name: cleanName,
         unit: unitFromInvoice || unitFromItem || "",
         qty,
         price,
@@ -560,7 +573,7 @@ const InvoicePrintPage: React.FC = () => {
     });
   }, [invoice, unitByItemId]);
 
-  const linesKey = useMemo(() => lines.map((x) => `${x.id}|${x.qty}|${x.price}|${x.amount}`).join("||"), [lines]);
+  const linesKey = useMemo(() => lines.map((x) => `${x.id}|${x.qty}|${x.price}|${x.amount}|${x.code}`).join("||"), [lines]);
 
   // ✅ Auto: ít dòng => thử slot A5 ngang; nếu tràn => A4 full
   useLayoutEffect(() => {
@@ -767,17 +780,19 @@ const InvoicePrintPage: React.FC = () => {
           <thead>
             <tr>
               <th style={{ ...thStyle, width: "6%" }}>STT</th>
-              <th style={{ ...thStyle, width: "40%" }}>Tên hàng hóa</th>
+              <th style={{ ...thStyle, width: "14%" }}>Mã hàng</th>
+              <th style={{ ...thStyle, width: "32%" }}>Tên hàng hóa</th>
               <th style={{ ...thStyle, width: "8%" }}>ĐVT</th>
               <th style={{ ...thStyle, width: "8%" }}>Số lượng</th>
-              <th style={{ ...thStyle, width: "15%" }}>Đơn giá</th>
-              <th style={{ ...thStyle, width: "15%" }}>Thành tiền</th>
+              <th style={{ ...thStyle, width: "16%" }}>Đơn giá</th>
+              <th style={{ ...thStyle, width: "16%" }}>Thành tiền</th>
             </tr>
           </thead>
           <tbody>
             {lines.map((l, idx) => (
               <tr key={l.id}>
                 <td style={{ ...tdStyle, ...styles.tdCenter }}>{idx + 1}</td>
+                <td style={{ ...tdStyle, ...styles.tdCenter }}>{l.code || "-"}</td>
                 <td style={tdStyle}>{l.name}</td>
                 <td style={{ ...tdStyle, ...styles.tdCenter }}>{l.unit}</td>
                 <td style={{ ...tdStyle, ...styles.tdCenter }}>{l.qty}</td>
@@ -787,7 +802,7 @@ const InvoicePrintPage: React.FC = () => {
             ))}
 
             <tr>
-              <td colSpan={5} style={moneyRowLabelStyle}>
+              <td colSpan={6} style={moneyRowLabelStyle}>
                 Tạm tính
               </td>
               <td colSpan={1} style={moneyRowValueStyle}>
@@ -797,7 +812,7 @@ const InvoicePrintPage: React.FC = () => {
 
             {hasTax && (
               <tr>
-                <td colSpan={5} style={moneyRowLabelStyle}>
+                <td colSpan={6} style={moneyRowLabelStyle}>
                   Thuế GTGT ({taxPercentStr}%)
                 </td>
                 <td colSpan={1} style={moneyRowValueStyle}>
@@ -807,7 +822,7 @@ const InvoicePrintPage: React.FC = () => {
             )}
 
             <tr>
-              <td colSpan={5} style={moneyRowLabelStyle}>
+              <td colSpan={6} style={moneyRowLabelStyle}>
                 Tổng cộng
               </td>
               <td colSpan={1} style={moneyRowValueStyle}>

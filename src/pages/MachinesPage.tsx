@@ -36,7 +36,9 @@ const MachinesPage: React.FC = () => {
   const { user } = useAuth();
   const role = user?.role;
   const isAdmin = role === "admin";
-  const canEdit = isAdmin; // chỉ admin được sửa/xóa/thêm
+  const isAccountant = role === "accountant";
+
+  const canEdit = isAdmin || isAccountant;
 
   const [machines, setMachines] = useState<Machine[]>([]);
   const [loadingMachines, setLoadingMachines] = useState(false);

@@ -1,5 +1,5 @@
 // src/pages/InvoiceDetailPage.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import api from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
@@ -115,6 +115,26 @@ type PaymentRow = {
   account?: { id: string; code?: string; name?: string } | null;
   allocations?: PaymentAllocation[];
 };
+
+function validatePurchasePrice(inv: Invoice) {
+  if (inv.type !== "PURCHASE") return { ok: true as const };
+
+  const badIndex = inv.lines.findIndex((l) => {
+    const qty = Number(l.qty || 0);
+    const price = Number(l.price || 0);
+    return qty > 0 && price <= 0;
+  });
+
+  if (badIndex >= 0) {
+    return {
+      ok: false as const,
+      message: `Hóa đơn nhập: Dòng #${badIndex + 1} chưa nhập giá. 
+Bắt buộc nhập giá để tránh sai giá vốn trung bình.`,
+    };
+  }
+
+  return { ok: true as const };
+}
 
 /** ========================= Money input helpers ========================= **/
 function fmtMoneyInput(v: number | string | null | undefined) {
@@ -831,11 +851,12 @@ const InvoiceDetailPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [reopenBusy, setReopenBusy] = useState(false);
 
-    /** ========================= Early stock check (FE warning only) ========================= **/
-const [, setStockCheckLoading] = useState(false);
-const [, setStockCheckError] = useState<string | null>(null);
-const [, setStockQtyMap] = useState<Record<string, number>>({}); // itemId -> qty
+  /** ========================= Early stock check (FE warning only) ========================= **/
+  const [, setStockCheckLoading] = useState(false);
+  const [, setStockCheckError] = useState<string | null>(null);
+  const [, setStockQtyMap] = useState<Record<string, number>>({}); // itemId -> qty
 
+  const partnerInputRef = useRef<HTMLInputElement | null>(null);
 
   function uniqStr(arr: (string | null | undefined)[]) {
     const s = new Set<string>();
@@ -1070,7 +1091,8 @@ const [, setStockQtyMap] = useState<Record<string, number>>({}); // itemId -> qt
     init();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
-    useEffect(() => {
+
+  useEffect(() => {
     if (!invoice) return;
     if ((invoice.status ?? "DRAFT") !== "DRAFT") {
       // không check khi đã submitted/approved để tránh hiểu nhầm
@@ -1163,17 +1185,18 @@ const [, setStockQtyMap] = useState<Record<string, number>>({}); // itemId -> qt
       console.error("loadItems error", err);
     }
   }
-const goBackToInvoices = () => {
-  // ✅ Ưu tiên back thật (giữ filter/type/page đúng như lúc vào)
-  if (window.history.length > 1) {
-    navigate(-1);
-    return;
-  }
 
-  // ✅ Fallback: nếu user vào thẳng link detail (không có history)
-  const s = (location.state as any)?.returnSearch || "";
-  navigate(`/invoices${s}`);
-};
+  const goBackToInvoices = () => {
+    // ✅ Ưu tiên back thật (giữ filter/type/page đúng như lúc vào)
+    if (window.history.length > 1) {
+      navigate(-1);
+      return;
+    }
+
+    // ✅ Fallback: nếu user vào thẳng link detail (không có history)
+    const s = (location.state as any)?.returnSearch || "";
+    navigate(`/invoices${s}`);
+  };
 
   async function loadStaffs() {
     try {
@@ -1573,11 +1596,42 @@ const goBackToInvoices = () => {
     return { payload, hasWarrantyHold, warrantyHoldAmount };
   }
 
+  /** ✅ NEW: rule bắt buộc chọn/lưu khách hàng trước khi lưu hóa đơn */
+  function isPartnerValid(inv: Invoice) {
+    const pid = safeId(inv.partnerId);
+    if (!pid) return false;
+    return partners.some((p) => String(p.id) === String(pid));
+  }
+  function blockSaveIfPartnerMissing(): boolean {
+    if (!invoice) return false;
+
+    const st = (invoice.status ?? "DRAFT") as InvoiceStatus;
+    // chỉ enforce ở trạng thái draft (đúng flow nhập liệu)
+    if (st !== "DRAFT") return true;
+
+    if (isPartnerValid(invoice)) return true;
+
+    toastError(
+      "Bạn chưa chọn / chưa lưu khách hàng vào danh sách đối tác. Vui lòng chọn từ dropdown hoặc bấm “Lưu khách hàng vào danh sách đối tác” trước khi lưu hóa đơn.",
+      "Thiếu khách hàng"
+    );
+    setShowPartnerSuggest(true);
+    setTimeout(() => partnerInputRef.current?.focus(), 0);
+    return false;
+  }
+
   async function handleSave() {
     if (!invoice) return;
 
-    const status = (invoice.status ?? "DRAFT") as InvoiceStatus;
+    // ✅ chặn lưu hoá đơn nếu chưa có partnerId hợp lệ
+    if (!blockSaveIfPartnerMissing()) return;
 
+    const status = (invoice.status ?? "DRAFT") as InvoiceStatus;
+    const vPrice = validatePurchasePrice(invoice);
+    if (!vPrice.ok) {
+      toastError(vPrice.message, "Thiếu giá nhập");
+      return;
+    }
     const allowAdjustApprovedEdit = isAdmin && isAdjustMode && status === "APPROVED" && !isCreate && !!invoice.id;
 
     // ✅ luật: bình thường chỉ DRAFT mới save; riêng admin adjust-mode cho phép save khi APPROVED
@@ -1716,6 +1770,13 @@ const goBackToInvoices = () => {
       return;
     }
     if (dirtySinceLastSave) {
+      // ❗️BẮT BUỘC GIÁ CHO HÓA ĐƠN NHẬP
+      const vPrice = validatePurchasePrice(invoice);
+      if (!vPrice.ok) {
+        toastError(vPrice.message, "Thiếu giá nhập");
+        return;
+      }
+
       const text = "Bạn vừa sửa hóa đơn nhưng chưa lưu. Vui lòng bấm 'Lưu' trước khi 'Gửi duyệt'.";
       setMessage({ type: "error", text });
       toastError(text, "Chưa lưu thay đổi");
@@ -1889,7 +1950,9 @@ const goBackToInvoices = () => {
   const debtNow = Math.max(0, collectible - Math.max(0, toNum(invoice.paidAmount)));
 
   const derivedHoldPct =
-    invoice.hasWarrantyHold && Number(invoice.subtotal || 0) > 0 ? ((hold * 100) / Number(invoice.subtotal || 0)).toFixed(2) : "0.00";
+    invoice.hasWarrantyHold && Number(invoice.subtotal || 0) > 0
+      ? ((hold * 100) / Number(invoice.subtotal || 0)).toFixed(2)
+      : "0.00";
 
   const returnState = getReturnState(invoice);
   const returnColor = returnState === "FULL" ? "#7c3aed" : returnState === "PARTIAL" ? "#6d28d9" : "#6b7280";
@@ -1906,6 +1969,8 @@ const goBackToInvoices = () => {
     return "Lưu hóa đơn";
   })();
 
+  const partnerOk = status !== "DRAFT" ? true : isPartnerValid(invoice);
+
   return (
     <div style={styles.page}>
       <div style={styles.header}>
@@ -1915,9 +1980,8 @@ const goBackToInvoices = () => {
       <div style={styles.body}>
         <div style={styles.content}>
           <button type="button" style={styles.backBtn} onClick={goBackToInvoices}>
-  ← Quay lại danh sách hóa đơn
-</button>
-
+            ← Quay lại danh sách hóa đơn
+          </button>
 
           {/* APPROVED notice */}
           {status === "APPROVED" && !canEditApprovedAdjust && (
@@ -1948,7 +2012,8 @@ const goBackToInvoices = () => {
           {/* Adjust-mode notice */}
           {status === "APPROVED" && canEditApprovedAdjust && (
             <div style={{ ...styles.notice, background: "#ecfeff", border: "1px solid #67e8f9", color: "#155e75" }}>
-              Bạn đang ở chế độ <b>ĐIỀU CHỈNH</b> (admin). Bấm <b>{saveLabel}</b> sẽ tự rollback movement cũ, lưu lại nội dung mới và post tồn kho lại (auto <b>APPROVED</b>).
+              Bạn đang ở chế độ <b>ĐIỀU CHỈNH</b> (admin). Bấm <b>{saveLabel}</b> sẽ tự rollback movement cũ, lưu lại nội dung
+              mới và post tồn kho lại (auto <b>APPROVED</b>).
               <div style={{ marginTop: 6, fontSize: 12.5, color: "#0e7490" }}>
                 (Link: <code>?adjust=1</code>)
               </div>
@@ -2052,6 +2117,7 @@ const goBackToInvoices = () => {
               >
                 <label style={styles.label}>Tên khách hàng (gõ để tìm)</label>
                 <input
+                  ref={partnerInputRef}
                   style={styles.input}
                   value={invoice.partnerName}
                   disabled={locked || status !== "DRAFT"} // policy: approved adjust-mode không cho đổi khách ở đây (đỡ rủi ro)
@@ -2059,6 +2125,15 @@ const goBackToInvoices = () => {
                   onFocus={() => setShowPartnerSuggest(true)}
                   placeholder="Nhập tên khách hàng..."
                 />
+
+                {/* ✅ warning inline để nhân viên khỏi quên bấm lưu khách */}
+                {status === "DRAFT" && !locked && !partnerOk && (
+                  <div style={{ marginTop: 6, fontSize: 12.5, color: "#b91c1c" }}>
+                    * Chưa chọn/chưa lưu khách hàng vào danh sách đối tác. Hãy chọn từ dropdown hoặc bấm “Lưu khách hàng vào
+                    danh sách đối tác” trước khi lưu hóa đơn.
+                  </div>
+                )}
+
                 {showPartnerSuggest && !locked && status === "DRAFT" && partnerSuggestions.length > 0 && (
                   <div style={styles.suggestBox}>
                     {partnerSuggestions.map((p) => (
@@ -2252,7 +2327,6 @@ const goBackToInvoices = () => {
                         placeholder="Gõ mã hoặc tên sản phẩm..."
                       />
 
-
                       {openItemSuggestIndex === idx && !locked && line.itemName.length > 0 && (
                         <div style={styles.suggestBox}>
                           {itemSuggestions.length > 0 ? (
@@ -2312,7 +2386,6 @@ const goBackToInvoices = () => {
               <button type="button" style={styles.addLineBtn} disabled={locked} onClick={addLine}>
                 + Thêm dòng sản phẩm
               </button>
-              
 
               {/* Summary */}
               <div style={{ marginTop: 8 }}>
@@ -2543,7 +2616,7 @@ const goBackToInvoices = () => {
                   />
                 </div>
               </div>
-              
+
               {message && (
                 <div style={{ ...styles.notice, ...(message.type === "success" ? styles.noticeSuccess : styles.noticeError) }}>
                   {message.text}
@@ -2648,15 +2721,32 @@ const goBackToInvoices = () => {
 
                       {!paymentHistoryLoading &&
                         paymentHistoryRows.map((p) => {
-                          const accText = p.account ? `${p.account.code || ""}${p.account.name ? " - " + p.account.name : ""}` : "-";
+                          const accText = p.account
+                            ? `${p.account.code || ""}${p.account.name ? " - " + p.account.name : ""}`
+                            : "-";
                           const note = p.note || "";
                           const timeStr = formatDateTimeDisplay(p.createdAt || p.date);
 
                           return (
                             <tr key={p.id}>
-                              <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6", whiteSpace: "nowrap" }}>{timeStr}</td>
+                              <td
+                                style={{
+                                  padding: "8px 8px",
+                                  borderBottom: "1px solid #f3f4f6",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {timeStr}
+                              </td>
                               <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6" }}>{accText || "-"}</td>
-                              <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6", textAlign: "right", fontWeight: 600 }}>
+                              <td
+                                style={{
+                                  padding: "8px 8px",
+                                  borderBottom: "1px solid #f3f4f6",
+                                  textAlign: "right",
+                                  fontWeight: 600,
+                                }}
+                              >
                                 {formatMoney((p as any).allocatedAmount || 0)} đ
                               </td>
                               <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6", textAlign: "right" }}>
@@ -2678,7 +2768,16 @@ const goBackToInvoices = () => {
               </button>
 
               {canEdit ? (
-                <button type="submit" style={styles.primaryBtn} disabled={saving || locked}>
+                <button
+                  type="submit"
+                  style={{
+                    ...styles.primaryBtn,
+                    background: status === "DRAFT" && !partnerOk ? "rgba(22, 163, 74, 0.45)" : styles.primaryBtn.background,
+                    cursor: status === "DRAFT" && !partnerOk ? "not-allowed" : "pointer",
+                  }}
+                  disabled={saving || locked || (status === "DRAFT" && !partnerOk)}
+                  title={status === "DRAFT" && !partnerOk ? "Bạn cần chọn/lưu khách hàng trước khi lưu hóa đơn." : ""}
+                >
                   {saveLabel}
                 </button>
               ) : (

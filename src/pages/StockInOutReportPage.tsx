@@ -56,6 +56,12 @@ const FALLBACK_UNIT_LABEL: Record<string, string> = {
 };
 
 const PAGE_SIZE = 30;
+type ColDef = {
+  key: string;
+  label: string;
+  cls: string;
+  color?: string; // ✅ optional
+};
 
 type LoadOpts = { silent?: boolean };
 
@@ -356,6 +362,18 @@ const StockInOutReportPage: React.FC = () => {
     }
   }
 
+  // ✅ Cấu hình cột để header + body luôn khớp nhau
+    const COLS: ColDef[] = [
+    { key: "sku", label: "SKU", cls: "text-left w-[180px]" },
+    { key: "name", label: "Tên hàng", cls: "text-left min-w-[420px]" },
+    { key: "unit", label: "ĐVT", cls: "text-center w-[110px]" },
+    { key: "open", label: "Tồn đầu", cls: "text-right w-[120px]" },
+    { key: "in", label: "Nhập", cls: "text-right w-[120px]", color: "text-green-600" },
+    { key: "out", label: "Xuất", cls: "text-right w-[120px]", color: "text-red-600" },
+    { key: "close", label: "Tồn cuối", cls: "text-right w-[120px]" },
+  ];
+
+
   return (
     <div className="space-y-4">
       <ToastHost toasts={toasts} onClose={remove} />
@@ -369,7 +387,6 @@ const StockInOutReportPage: React.FC = () => {
               value={from}
               onChange={(e) => setFrom(e.target.value)}
               className="border border-slate-300 rounded px-3 py-2"
-
             />
           </div>
 
@@ -389,11 +406,11 @@ const StockInOutReportPage: React.FC = () => {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                if (!loading) load();
-              }
-            }}
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (!loading) load();
+                }
+              }}
               placeholder="Nhập tên hàng hoặc SKU..."
               className="w-full border border-slate-300 rounded px-3 py-2"
             />
@@ -433,41 +450,46 @@ const StockInOutReportPage: React.FC = () => {
         ) : null}
       </div>
 
+      {/* ===== TABLE (Header sticky chắc chắn) ===== */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        <div className="overflow-auto">
-          <table className="min-w-[980px] w-full text-sm">
-            <thead className="bg-slate-50">
-              <tr className="text-left">
-                <th className="px-4 py-3 border-b border-slate-200">SKU</th>
-                <th className="px-4 py-3 border-b border-slate-200">Tên hàng</th>
-                <th className="px-4 py-3 border-b border-slate-200 text-center">ĐVT</th>
-                <th className="px-4 py-3 border-b border-slate-200 text-right">Tồn đầu</th>
-                <th className="px-4 py-3 border-b border-slate-200 text-right">
-                  <span className="text-green-600">Nhập</span>
-                </th>
-                <th className="px-4 py-3 border-b border-slate-200 text-right">
-                  <span className="text-red-600">Xuất</span>
-                </th>
-                <th className="px-4 py-3 border-b border-slate-200 text-right">Tồn cuối</th>
-              </tr>
-            </thead>
+        {/* ✅ scroll ngang chung header + body */}
+        <div className="overflow-auto max-h-[70vh]">
+          {/* ✅ HEADER STICKY */}
+          <div className="sticky top-0 z-30 bg-white">
+            <table className="min-w-[980px] w-full text-sm table-fixed border-separate border-spacing-0">
+              <thead>
+                <tr>
+                  {COLS.map((c) => (
+                    <th
+                      key={c.key}
+                      className={`bg-slate-50 shadow-sm px-4 py-3 border-b border-slate-200 ${c.cls}`}
+                    >
+                      {c.color ? <span className={c.color}>{c.label}</span> : c.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+            </table>
+          </div>
 
+          {/* ✅ BODY */}
+          <table className="min-w-[980px] w-full text-sm table-fixed border-separate border-spacing-0">
             <tbody>
               {pagedRows.map((r) => (
                 <tr key={r.itemId} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 border-b border-slate-100 whitespace-nowrap">{r.sku}</td>
-                  <td className="px-4 py-3 border-b border-slate-100">{r.name}</td>
-                  <td className="px-4 py-3 border-b border-slate-100 text-center whitespace-nowrap">
+                  <td className="px-4 py-3 border-b border-slate-100 whitespace-nowrap w-[180px]">{r.sku}</td>
+                  <td className="px-4 py-3 border-b border-slate-100 min-w-[420px]">{r.name}</td>
+                  <td className="px-4 py-3 border-b border-slate-100 text-center whitespace-nowrap w-[110px]">
                     {unitLabel(r.unitCode, r.unitName)}
                   </td>
-                  <td className="px-4 py-3 border-b border-slate-100 text-right">{fmtQty(r.openingQty)}</td>
-                  <td className="px-4 py-3 border-b border-slate-100 text-right text-green-600 font-medium">
+                  <td className="px-4 py-3 border-b border-slate-100 text-right w-[120px]">{fmtQty(r.openingQty)}</td>
+                  <td className="px-4 py-3 border-b border-slate-100 text-right text-green-600 font-medium w-[120px]">
                     {fmtQty(r.inQty)}
                   </td>
-                  <td className="px-4 py-3 border-b border-slate-100 text-right text-red-600 font-medium">
+                  <td className="px-4 py-3 border-b border-slate-100 text-right text-red-600 font-medium w-[120px]">
                     {fmtQty(r.outQty)}
                   </td>
-                  <td className="px-4 py-3 border-b border-slate-100 text-right">{fmtQty(r.closingQty)}</td>
+                  <td className="px-4 py-3 border-b border-slate-100 text-right w-[120px]">{fmtQty(r.closingQty)}</td>
                 </tr>
               ))}
 

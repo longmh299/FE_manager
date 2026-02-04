@@ -361,35 +361,35 @@ const LedgerPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="overflow-auto">
+      <div className="overflow-auto max-h-[70vh]">
           <table className="min-w-[1100px] w-full text-sm">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200">
+                <th className="sticky top-0 z-10 bg-gray-50 px-3 py-2 text-left text-xs font-semibold border-b border-gray-200">
                   Thời gian
                 </th>
-                <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200">
+                <th className="sticky top-0 z-10 bg-gray-50 px-3 py-2 text-left text-xs font-semibold border-b border-gray-200">
                   Chứng từ
                 </th>
-                <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200">
+                <th className="sticky top-0 z-10 bg-gray-50 px-3 py-2 text-center text-xs font-semibold border-b border-gray-200">
                   Loại
                 </th>
-                <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200">
+                <th className="sticky top-0 z-10 bg-gray-50 px-3 py-2 text-left text-xs font-semibold border-b border-gray-200">
                   Mã hàng
                 </th>
-                <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200">
+                <th className="sticky top-0 z-10 bg-gray-50 px-3 py-2 text-left text-xs font-semibold border-b border-gray-200">
                   Tên hàng
                 </th>
-                <th className="px-3 py-2 text-right text-xs font-semibold border-b border-gray-200">
+                <th className="sticky top-0 z-10 bg-gray-50 px-3 py-2 text-right text-xs font-semibold border-b border-gray-200">
                   SL (+/-)
                 </th>
-                <th className="px-3 py-2 text-right text-xs font-semibold border-b border-gray-200">
+                <th className="sticky top-0 z-10 bg-gray-50 px-3 py-2 text-right text-xs font-semibold border-b border-gray-200">
                   Giá vốn
                 </th>
-                <th className="px-3 py-2 text-right text-xs font-semibold border-b border-gray-200">
+                <th className="sticky top-0 z-10 bg-gray-50 px-3 py-2 text-right text-xs font-semibold border-b border-gray-200">
                   Thành tiền vốn
                 </th>
-                <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200">
+                <th className="sticky top-0 z-10 bg-gray-50 px-3 py-2 text-left text-xs font-semibold border-b border-gray-200">
                   Ghi chú
                 </th>
               </tr>

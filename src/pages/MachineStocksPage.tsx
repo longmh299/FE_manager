@@ -70,7 +70,8 @@ function normalizeForMachineSort(name: string) {
 
 const MachineStocksPage: React.FC = () => {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  // isPrivileged = admin OR accountant => được quyền tương tự admin
+  const isPrivileged = user?.role === "admin" || user?.role === "accountant";
   const canEditNote = user?.role === "admin" || user?.role === "accountant";
 
   const [rows, setRows] = useState<MachineStockRow[]>([]);
@@ -214,8 +215,8 @@ const MachineStocksPage: React.FC = () => {
     }
   }
 
-  async function fetchUnitsIfAdmin() {
-    if (!isAdmin) return;
+  async function fetchUnitsIfPrivileged() {
+    if (!isPrivileged) return;
     try {
       setUnitsLoading(true);
       const res = await api.get("/items/units");
@@ -238,9 +239,9 @@ const MachineStocksPage: React.FC = () => {
   }, [q]);
 
   useEffect(() => {
-    fetchUnitsIfAdmin();
+    fetchUnitsIfPrivileged();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin]);
+  }, [isPrivileged]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -303,7 +304,7 @@ const MachineStocksPage: React.FC = () => {
 
   // ========= Edit flow =========
   const openEdit = async (row: MachineStockRow) => {
-    if (!isAdmin) return;
+    if (!isPrivileged) return;
 
     if (!row.itemId) {
       showToast("error", "Dòng này thiếu itemId từ BE. Hãy kiểm tra API summary-by-item.");
@@ -311,7 +312,7 @@ const MachineStocksPage: React.FC = () => {
     }
 
     if (units.length === 0 && !unitsLoading) {
-      await fetchUnitsIfAdmin();
+      await fetchUnitsIfPrivileged();
     }
 
     const code = String(row.unit || "").trim().toLowerCase();
@@ -337,7 +338,7 @@ const MachineStocksPage: React.FC = () => {
   const closeEdit = () => setEdit({ open: false });
 
   const saveEdit = async () => {
-    if (!isAdmin) return;
+    if (!isPrivileged) return;
     if (!edit.open) return;
     if (edit.loading) return;
 
@@ -389,7 +390,7 @@ const MachineStocksPage: React.FC = () => {
 
   const handleCreateMachine = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isAdmin) return;
+    if (!isPrivileged) return;
 
     if (!newName.trim()) {
       showToast("error", "Vui lòng nhập TÊN máy.");
@@ -634,8 +635,8 @@ const MachineStocksPage: React.FC = () => {
         </div>
       )}
 
-      {/* ✅ Admin create card (responsive) */}
-      {isAdmin && (
+      {/* ✅ Admin/Accountant create card (responsive) */}
+      {isPrivileged && (
         <div
           style={{
             marginBottom: 12,
@@ -657,7 +658,7 @@ const MachineStocksPage: React.FC = () => {
             }}
           >
             <span>Tạo mới máy nhanh</span>
-            <span style={{ fontSize: 11, color: "#6b7280" }}>(Chỉ dành cho Admin)</span>
+            <span style={{ fontSize: 11, color: "#6b7280" }}>(Dành cho Admin / Accountant)</span>
           </div>
 
           <form
@@ -852,7 +853,7 @@ const MachineStocksPage: React.FC = () => {
           <table
             style={{
               width: "100%",
-              minWidth: isAdmin ? 1120 : 880, // có cột note nên rộng hơn
+              minWidth: isPrivileged ? 1120 : 880, // có cột note nên rộng hơn
               borderCollapse: "separate",
               borderSpacing: 0,
               fontSize: 14,
@@ -923,7 +924,7 @@ const MachineStocksPage: React.FC = () => {
                   Tồn kho
                 </th>
 
-                {isAdmin && (
+                {isPrivileged && (
                   <>
                     <th
                       style={{
@@ -969,13 +970,13 @@ const MachineStocksPage: React.FC = () => {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={isAdmin ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
+                  <td colSpan={isPrivileged ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
                     Đang tải dữ liệu...
                   </td>
                 </tr>
               ) : pagedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={isAdmin ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
+                  <td colSpan={isPrivileged ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
                     Không có dòng máy nào thỏa điều kiện.
                   </td>
                 </tr>
@@ -1179,7 +1180,7 @@ const MachineStocksPage: React.FC = () => {
                         {fmtQty(row.totalQty)}
                       </td>
 
-                      {isAdmin && (
+                      {isPrivileged && (
                         <>
                           <td
                             style={{
@@ -1330,7 +1331,7 @@ const MachineStocksPage: React.FC = () => {
       </div>
 
       {/* ========================= EDIT MODAL ========================= */}
-      {edit.open && isAdmin && (
+      {edit.open && isPrivileged && (
         <div
           role="dialog"
           aria-modal="true"

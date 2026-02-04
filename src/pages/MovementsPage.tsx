@@ -58,6 +58,16 @@ async function apiTry(reqs: Array<() => Promise<any>>) {
   throw lastErr;
 }
 
+/** ✅ debounce hook (để auto search khi dừng gõ) */
+function useDebounce<T>(value: T, delay = 350) {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return v;
+}
+
 /** ========================= Types ========================= **/
 type Location = {
   id: string;
@@ -96,25 +106,23 @@ type Movement = {
 /** ========================= Styles ========================= **/
 const styles: Record<string, React.CSSProperties> = {
   page: {
-    minHeight: "100vh", // ✅ quan trọng: đừng height:100%
+    minHeight: "100vh",
     height: "auto",
     display: "flex",
     flexDirection: "column",
     background: "#f3f4f6",
     overflowX: "hidden",
-    overflowY: "auto", // ✅ cho scroll dọc
+    overflowY: "auto",
     WebkitOverflowScrolling: "touch",
   },
   header: { padding: "12px 16px", borderBottom: "1px solid #e5e7eb", background: "#fff" },
   headerTitle: { margin: 0, fontSize: 18, fontWeight: 800 },
 
-  // ✅ Desktop: 2 cột, full height để đáy 2 card bằng nhau
   body: {
     flex: 1,
     minHeight: 0,
     padding: 12,
     display: "grid",
-    // list rộng hơn ~30% so với bản cũ (420 -> 560)
     gridTemplateColumns: "560px 1fr",
     gap: 12,
     overflow: "hidden",
@@ -140,7 +148,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   cardBody: {
     padding: 12,
-    overflow: "hidden", // ✅ thân card không tự scroll, chia vùng con scroll
+    overflow: "hidden",
     minHeight: 0,
     display: "flex",
     flexDirection: "column",
@@ -226,10 +234,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#374151",
   },
 
-  // ✅ autocomplete giống InvoiceDetail
   autoWrapper: { position: "relative" },
-
-  // ✅ NEW: suggestBox render bằng portal -> không bị che bởi overflow
   suggestBoxFixed: {
     position: "fixed",
     background: "#fff",
@@ -243,7 +248,6 @@ const styles: Record<string, React.CSSProperties> = {
   suggestItem: { padding: "8px 10px", fontSize: 13, cursor: "pointer" },
   suggestItemMuted: { padding: "8px 10px", fontSize: 12.5, color: "#9ca3af" },
 
-  // ✅ list table
   listTableWrap: {
     border: "1px solid #e5e7eb",
     borderRadius: 12,
@@ -255,7 +259,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   listHeaderRow: {
     display: "grid",
-    gridTemplateColumns: "110px 140px 1fr 120px", // đủ chỗ status
+    gridTemplateColumns: "110px 140px 1fr 120px",
     gap: 8,
     padding: 10,
     background: "#f9fafb",
@@ -269,7 +273,6 @@ const styles: Record<string, React.CSSProperties> = {
     maxHeight: "100%",
   },
 
-  // ✅ lines table: cho phép scroll ngang khi cần
   linesWrap: {
     border: "1px solid #e5e7eb",
     borderRadius: 12,
@@ -297,7 +300,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#f9fafb",
     borderBottom: "1px solid #f3f4f6",
     alignItems: "center",
-    minWidth: 720, // ✅ để không bóp nát trên mobile
+    minWidth: 720,
   },
   gridRow: {
     display: "grid",
@@ -392,9 +395,12 @@ const MovementsPage: React.FC = () => {
 
   const today = new Date().toISOString().slice(0, 10);
 
-  // filters
-  const [fType, setFType] = useState<string>(""); // "" | ADJUST | REVALUE
+  // filters (UI state)
+  const [fType, setFType] = useState<string>("");
   const [fRef, setFRef] = useState<string>("");
+
+  // ✅ debounce text để auto-search
+  const debouncedRef = useDebounce(fRef, 350);
 
   const [listLoading, setListLoading] = useState(false);
   const [listErr, setListErr] = useState<string | null>(null);
@@ -416,9 +422,12 @@ const MovementsPage: React.FC = () => {
   const [openItemSuggestIndex, setOpenItemSuggestIndex] = useState<number | null>(null);
   const pageRef = useRef<HTMLDivElement | null>(null);
 
-  // ✅ NEW: portal dropdown position + input refs (fix dropdown bị che)
+  // portal dropdown position + input refs (fix dropdown bị che)
   const itemInputRefs = useRef<Array<HTMLInputElement | null>>([]);
   const [suggestPos, setSuggestPos] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  // ✅ Ignore response cũ khi user search liên tục
+  const listReqIdRef = useRef(0);
 
   function syncSuggestPos(idx: number) {
     const el = itemInputRefs.current[idx];
@@ -440,7 +449,6 @@ const MovementsPage: React.FC = () => {
     return () => window.removeEventListener("mousedown", onDown);
   }, []);
 
-  // ✅ NEW: update vị trí dropdown khi scroll/resize (kể cả scroll trong div)
   useEffect(() => {
     const onReflow = () => {
       if (openItemSuggestIndex == null) return;
@@ -503,25 +511,27 @@ const MovementsPage: React.FC = () => {
     }
   }
 
-  async function loadList() {
+  /** ✅ loadList nhận override để: Enter search ngay + auto load theo debounce */
+  async function loadList(override?: { type?: string; q?: string; resetPick?: boolean }) {
+    const reqId = ++listReqIdRef.current;
+
     setListLoading(true);
     setListErr(null);
 
     try {
+      const type = override?.type ?? fType;
+      const q = override?.q ?? fRef;
+
       const params: any = { page: 1, pageSize: 50 };
-      if (fType) params.type = fType;
-      if (fRef.trim()) params.q = fRef.trim();
+      if (type) params.type = type;
+      if (String(q || "").trim()) params.q = String(q || "").trim();
 
       const res = await apiTry([
         () => api.get("/movements", { params }),
         () => api.get("/movements/list", { params }),
       ]);
-
       const data = unwrap<any>(res);
 
-      // ✅ normalize response:
-      // routes/movements.routes.ts -> { ok, total, page, pageSize, data }
-      // service style khác -> { rows } / { items } ...
       const arr: any[] =
         (Array.isArray(data?.data) && data.data) ||
         (Array.isArray(data?.rows) && data.rows) ||
@@ -529,18 +539,28 @@ const MovementsPage: React.FC = () => {
         (Array.isArray(data) && data) ||
         [];
 
+      // ✅ nếu có request mới hơn -> bỏ qua response cũ
+      if (reqId !== listReqIdRef.current) return;
+
       setRows(arr);
 
-      if (!selectedId && arr.length) {
-        const id = safeId(arr[0]?.id);
-        if (id) setSelectedId(id);
+      const firstId = safeId(arr?.[0]?.id);
+      const stillExists =
+        selectedId && arr.some((x: any) => safeId(x?.id) && safeId(x?.id) === selectedId);
+
+      if (override?.resetPick) {
+        setSelectedId(firstId || null);
+      } else {
+        if (!selectedId && firstId) setSelectedId(firstId);
+        else if (selectedId && !stillExists) setSelectedId(firstId || null);
       }
     } catch (e: any) {
+      if (reqId !== listReqIdRef.current) return;
       console.error("loadList error", e);
       setRows([]);
       setListErr(e?.response?.data?.message || e?.message || "Không tải được danh sách phiếu.");
     } finally {
-      setListLoading(false);
+      if (reqId === listReqIdRef.current) setListLoading(false);
     }
   }
 
@@ -595,10 +615,20 @@ const MovementsPage: React.FC = () => {
     loadLocations();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ✅ initial load (1 lần)
   useEffect(() => {
-    loadList();
+    loadList({ resetPick: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ✅ AUTO LOAD: đổi loại / search debounce -> load list luôn
+  useEffect(() => {
+    // Khi đổi filter/search: ưu tiên load lại list, và pick lại item đầu (đỡ “giữ detail cũ sai filter”)
+    loadList({ type: fType, q: debouncedRef, resetPick: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fType, debouncedRef]);
+
   useEffect(() => {
     if (selectedId) loadDetail(selectedId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -659,35 +689,69 @@ const MovementsPage: React.FC = () => {
     });
   }
 
-  async function createDraftServer() {
+  /** ========================= Server actions (KHÔNG đổi API) ========================= **/
+  async function createDraftServerReturnId(): Promise<string> {
     setMsg(null);
     setErr(null);
-    setLoading(true);
 
-    try {
-      const payload = {
-        type: movement?.type || "ADJUST",
-        refNo: "",
-        note: movement?.note ?? "",
-        occurredAt: movement?.date ? movement.date : today,
-        warehouseId: safeId(movement?.warehouseId) ?? locations?.[0]?.id ?? null,
+    const payload = {
+      type: movement?.type || "ADJUST",
+      refNo: "",
+      note: movement?.note ?? "",
+      occurredAt: movement?.date ? movement.date : today,
+      warehouseId: safeId(movement?.warehouseId) ?? locations?.[0]?.id ?? null,
+    };
+
+    const res = await apiTry([() => api.post("/movements", payload), () => api.post("/movement", payload)]);
+    const x = unwrap<any>(res) || {};
+    const newId = safeId(x?.id ?? x?.data?.id);
+    if (!newId) throw new Error("Tạo phiếu thành công nhưng không nhận được id.");
+
+    // reload list + select
+    await loadList();
+    setSelectedId(newId);
+
+    return newId;
+  }
+
+  async function saveLinesFor(mvId: string) {
+    if (!movement) return;
+
+    const hasAnyLine = (movement.lines || []).length > 0;
+    if (!hasAnyLine) throw new Error("Chưa có dòng nào. Bấm “+ Thêm dòng” rồi nhập sản phẩm.");
+
+    for (const line of movement.lines) {
+      const itemId = safeId(line.itemId);
+      if (!itemId) continue;
+
+      const payload: any = {
+        itemId,
+        note: line.note ?? "",
       };
 
-      const res = await apiTry([() => api.post("/movements", payload), () => api.post("/movement", payload)]);
-      const x = unwrap<any>(res) || {};
-      const newId = safeId(x?.id ?? x?.data?.id);
-      await loadList();
-      if (newId) setSelectedId(newId);
-      setMsg({ type: "ok", text: "Đã tạo phiếu trên hệ thống." });
-    } catch (e: any) {
-      console.error("createDraftServer error", e);
-      setMsg({ type: "err", text: e?.response?.data?.message || e?.message || "Tạo phiếu thất bại." });
-    } finally {
-      setLoading(false);
+      if (movement.type === "REVALUE") {
+        payload.unitCost = toNum(line.unitCost);
+      } else {
+        const q = toNum(line.qty);
+        if (q === 0) throw new Error("Điều chỉnh tồn: SL (+/-) phải khác 0.");
+        payload.qty = q;
+        payload.unitCost = line.unitCost == null ? null : toNum(line.unitCost);
+      }
+
+      const lineId = safeId(line.id);
+      if (!lineId) {
+        await api.post(`/movements/${mvId}/lines`, payload);
+      } else {
+        await api.put(`/movements/lines/${lineId}`, payload);
+      }
     }
   }
 
-  async function saveLines() {
+  async function postMovementId(mvId: string) {
+    await apiTry([() => api.post(`/movements/${mvId}/post`), () => api.post(`/movement/${mvId}/post`)]);
+  }
+
+  async function handlePostSmart() {
     if (!movement) return;
 
     setMsg(null);
@@ -695,65 +759,50 @@ const MovementsPage: React.FC = () => {
     setLoading(true);
 
     try {
-      const mvId = safeId(movement.id);
-      if (!mvId) throw new Error("Chưa tạo phiếu trên hệ thống. Bấm “Đã tạo server” trước.");
+      if (locked) throw new Error("Phiếu đã ghi sổ, không thể thao tác.");
 
-      for (const line of movement.lines) {
-        const itemId = safeId(line.itemId);
-        if (!itemId) continue;
-
-        const payload: any = {
-          itemId,
-          note: line.note ?? "",
-        };
-
-        if (movement.type === "REVALUE") {
-          payload.unitCost = toNum(line.unitCost);
-          // ❌ không gửi qty
-        } else {
-          // ✅ ADJUST: qtyDelta phải khác 0 (FE chặn trước cho đỡ khó hiểu)
-          const q = toNum(line.qty);
-          if (q === 0) throw new Error("ADJUST: SL (+/-) phải khác 0.");
-          payload.qty = q;
-          payload.unitCost = line.unitCost == null ? null : toNum(line.unitCost);
-        }
-
-        const lineId = safeId(line.id);
-        if (!lineId) {
-          await api.post(`/movements/${mvId}/lines`, payload);
-        } else {
-          await api.put(`/movements/lines/${lineId}`, payload);
-        }
+      let mvId = safeId(movement.id);
+      if (!mvId) {
+        mvId = await createDraftServerReturnId();
       }
 
-      setMsg({ type: "ok", text: "Đã lưu dòng phiếu." });
+      await saveLinesFor(mvId);
+      await postMovementId(mvId);
+
+      setMsg({ type: "ok", text: "Đã tạo phiếu (nếu cần), lưu dòng và ghi sổ / Post." });
       await loadDetail(mvId);
       await loadList();
     } catch (e: any) {
-      console.error("saveLines error", e);
-      setMsg({ type: "err", text: e?.response?.data?.message || e?.message || "Lưu thất bại." });
+      console.error("handlePostSmart error", e);
+      setMsg({ type: "err", text: e?.response?.data?.message || e?.message || "Ghi sổ thất bại." });
     } finally {
       setLoading(false);
     }
   }
 
-  async function postMovement() {
-    if (!movement?.id) {
-      setMsg({ type: "err", text: "Chưa tạo phiếu trên server." });
-      return;
-    }
+  async function handleSaveDraftSmart() {
+    if (!movement) return;
+
     setMsg(null);
     setErr(null);
     setLoading(true);
+
     try {
-      const id = String(movement.id);
-      await apiTry([() => api.post(`/movements/${id}/post`), () => api.post(`/movement/${id}/post`)]);
-      setMsg({ type: "ok", text: "Đã ghi sổ / Post phiếu." });
-      await loadDetail(id);
+      if (locked) throw new Error("Phiếu đã ghi sổ, không thể thao tác.");
+
+      let mvId = safeId(movement.id);
+      if (!mvId) {
+        mvId = await createDraftServerReturnId();
+      }
+
+      await saveLinesFor(mvId);
+
+      setMsg({ type: "ok", text: "Đã lưu nháp (tự tạo phiếu nếu cần)." });
+      await loadDetail(mvId);
       await loadList();
     } catch (e: any) {
-      console.error("post error", e);
-      setMsg({ type: "err", text: e?.response?.data?.message || e?.message || "Ghi sổ thất bại." });
+      console.error("handleSaveDraftSmart error", e);
+      setMsg({ type: "err", text: e?.response?.data?.message || e?.message || "Lưu thất bại." });
     } finally {
       setLoading(false);
     }
@@ -780,13 +829,10 @@ const MovementsPage: React.FC = () => {
     return "Chỉnh tồn: nhập SL (+/-). Dương = tăng tồn, Âm = giảm tồn. Giá vốn có thể để trống (tùy nghiệp vụ).";
   }, [movement?.type]);
 
-  // lines columns config
   const gridCols = useMemo(() => {
     if ((movement?.type || "ADJUST") === "REVALUE") {
-      // Sản phẩm | SL (disabled) | Giá vốn mới | Ghi chú | Xóa
       return "4fr 1.1fr 1.6fr 2.4fr 84px";
     }
-    // ADJUST: Sản phẩm | SL (+/-) | Giá vốn (tuỳ chọn) | Ghi chú | Xóa
     return "4fr 1.1fr 1.6fr 2.4fr 84px";
   }, [movement?.type]);
 
@@ -813,12 +859,20 @@ const MovementsPage: React.FC = () => {
                 <div style={styles.row2}>
                   <div>
                     <div style={styles.label}>Loại</div>
-                    <select style={styles.select} value={fType} onChange={(e) => setFType(e.target.value)}>
+                    <select
+                      style={styles.select}
+                      value={fType}
+                      onChange={(e) => {
+                        setFType(e.target.value);
+                        // ✅ auto-load do useEffect; không cần gọi loadList ở đây
+                      }}
+                    >
                       <option value="">Tất cả</option>
                       <option value="ADJUST">Điều chỉnh tồn</option>
                       <option value="REVALUE">Điều chỉnh giá vốn</option>
                     </select>
                   </div>
+
                   <div>
                     <div style={styles.label}>Tìm (số phiếu / ghi chú)</div>
                     <input
@@ -826,12 +880,25 @@ const MovementsPage: React.FC = () => {
                       value={fRef}
                       onChange={(e) => setFRef(e.target.value)}
                       placeholder="VD: MV-... hoặc ghi chú"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          // ✅ Enter = search ngay (không chờ debounce)
+                          loadList({ type: fType, q: fRef, resetPick: true });
+                        }
+                      }}
                     />
                   </div>
                 </div>
 
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <button style={styles.btn} onClick={loadList} disabled={listLoading}>
+                  {/* vẫn giữ nút tìm cho người quen dùng, nhưng giờ không bắt buộc */}
+                  <button
+                    style={styles.btn}
+                    onClick={() => loadList({ type: fType, q: fRef, resetPick: true })}
+                    disabled={listLoading}
+                    title="Bạn có thể Enter hoặc dừng gõ để tự tìm"
+                  >
                     {listLoading ? "Đang tải..." : "Tìm"}
                   </button>
                 </div>
@@ -917,19 +984,20 @@ const MovementsPage: React.FC = () => {
                 <span>Chi tiết phiếu</span>
                 <span style={statusChipStyle}>{movement ? statusText : "Chưa chọn"}</span>
               </div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button style={styles.btn} type="button" onClick={() => setMovement(createEmpty())} disabled={loading}>
-                  Tạo form mới (local)
-                </button>
-              </div>
             </div>
 
             <div style={styles.cardBody} className="mv-detail-body">
               {err ? <div style={{ ...styles.notice, ...styles.noticeErr }}>{err}</div> : null}
-              {msg ? <div style={{ ...styles.notice, ...(msg.type === "ok" ? styles.noticeOk : styles.noticeErr) }}>{msg.text}</div> : null}
+              {msg ? (
+                <div style={{ ...styles.notice, ...(msg.type === "ok" ? styles.noticeOk : styles.noticeErr) }}>
+                  {msg.text}
+                </div>
+              ) : null}
 
               {!movement ? (
-                <div style={{ ...styles.notice, ...styles.noticeInfo }}>Chọn 1 phiếu bên trái hoặc bấm “+ Tạo phiếu mới”.</div>
+                <div style={{ ...styles.notice, ...styles.noticeInfo }}>
+                  Chọn 1 phiếu bên trái hoặc bấm “+ Tạo phiếu mới”.
+                </div>
               ) : (
                 <>
                   <div style={{ ...styles.notice, ...styles.noticeInfo }}>{guideText}</div>
@@ -942,7 +1010,7 @@ const MovementsPage: React.FC = () => {
                         <select
                           style={styles.select}
                           value={movement.type}
-                          disabled={!!movement.id || loading} // ✅ đã tạo server thì không đổi type
+                          disabled={!!movement.id || loading}
                           onChange={(e) => updateMovement({ type: e.target.value as any })}
                         >
                           <option value="ADJUST">Điều chỉnh tồn</option>
@@ -961,7 +1029,7 @@ const MovementsPage: React.FC = () => {
                           style={styles.input}
                           type="date"
                           value={movement.date || ""}
-                          disabled={locked || loading || !!movement.id} // chưa có PUT header
+                          disabled={locked || loading || !!movement.id}
                           onChange={(e) => updateMovement({ date: e.target.value })}
                         />
                       </div>
@@ -978,7 +1046,7 @@ const MovementsPage: React.FC = () => {
                         <select
                           style={styles.select}
                           value={movement.warehouseId || ""}
-                          disabled={locked || loading || !!movement.id} // chưa có PUT header
+                          disabled={locked || loading || !!movement.id}
                           onChange={(e) => updateMovement({ warehouseId: safeId(e.target.value) })}
                         >
                           <option value="">-- (Không chọn thì hệ thống tự dùng kho đầu) --</option>
@@ -998,7 +1066,7 @@ const MovementsPage: React.FC = () => {
                         <input
                           style={styles.input}
                           value={movement.note || ""}
-                          disabled={locked || loading || !!movement.id} // chưa có PUT header
+                          disabled={locked || loading || !!movement.id}
                           onChange={(e) => updateMovement({ note: e.target.value })}
                           placeholder="Ghi chú phiếu..."
                         />
@@ -1054,7 +1122,6 @@ const MovementsPage: React.FC = () => {
 
                         return (
                           <div key={line.id ?? `line-${idx}`} style={{ ...styles.gridRow, gridTemplateColumns: gridCols }}>
-                            {/* Product */}
                             <div style={styles.autoWrapper}>
                               <input
                                 ref={(el) => (itemInputRefs.current[idx] = el)}
@@ -1072,7 +1139,6 @@ const MovementsPage: React.FC = () => {
                                 placeholder="Gõ mã hoặc tên sản phẩm..."
                               />
 
-                              {/* ✅ FIX: dropdown render bằng portal (không bị che bởi overflow) */}
                               {openItemSuggestIndex === idx &&
                                 !locked &&
                                 !loading &&
@@ -1109,18 +1175,16 @@ const MovementsPage: React.FC = () => {
                                 )}
                             </div>
 
-                            {/* Qty */}
                             <div>
                               <input
                                 style={{ ...styles.smallInput, textAlign: "center", opacity: isRevalue ? 0.7 : 1 }}
                                 type="number"
                                 value={toNum(line.qty)}
-                                disabled={locked || loading || isRevalue} // ✅ REVALUE giữ nguyên qty
+                                disabled={locked || loading || isRevalue}
                                 onChange={(e) => updateLine(idx, "qty", toNum(e.target.value))}
                               />
                             </div>
 
-                            {/* unitCost */}
                             <div>
                               <LineCostInput
                                 value={toNum(line.unitCost)}
@@ -1129,7 +1193,6 @@ const MovementsPage: React.FC = () => {
                               />
                             </div>
 
-                            {/* note */}
                             <div>
                               <input
                                 style={styles.smallInput}
@@ -1155,22 +1218,26 @@ const MovementsPage: React.FC = () => {
                       })}
                     </div>
 
-                    <div style={{ padding: 12, borderTop: "1px solid #f3f4f6", display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      <button style={styles.btn} type="button" disabled={loading} onClick={createDraftServer}>
-                        {movement?.id ? "Đã tạo server" : "Tạo phiếu (server)"}
+                    <div
+                      style={{
+                        padding: 12,
+                        borderTop: "1px solid #f3f4f6",
+                        display: "flex",
+                        gap: 8,
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <button style={styles.btn} type="button" disabled={loading || locked} onClick={handleSaveDraftSmart}>
+                        Lưu nháp
                       </button>
 
-                      <button style={styles.btn} type="button" disabled={loading || locked} onClick={saveLines}>
-                        Lưu dòng
-                      </button>
-
-                      <button style={styles.btnPrimary} type="button" disabled={loading || locked} onClick={postMovement}>
-                        Ghi sổ / Post
+                      <button style={styles.btnPrimary} type="button" disabled={loading || locked} onClick={handlePostSmart}>
+                        {loading ? "Đang xử lý..." : "Ghi sổ / Post"}
                       </button>
                     </div>
 
                     <div style={{ padding: "0 12px 12px", fontSize: 12.5, color: "#6b7280" }}>
-                      * Flow: Tạo phiếu (local) → chọn loại/kho/ngày → Tạo phiếu (server) → nhập dòng → Lưu dòng → Post.
+                      * Cách dùng: nhập dòng → bấm <b>Ghi sổ / Post</b> (hệ thống sẽ tự tạo phiếu nếu chưa có, rồi lưu dòng và ghi sổ).
                     </div>
                   </div>
                 </>
@@ -1179,13 +1246,10 @@ const MovementsPage: React.FC = () => {
           </div>
         </div>
 
-        {/* ✅ Responsive + Mobile layout theo yêu cầu */}
         <style>{`
-          /* Desktop: đảm bảo 2 card cùng cao, sát đáy */
           .mv-grid { align-items: stretch; }
           .mv-card { height: 100%; }
 
-          /* Mobile: list ở trên, scroll trong table; chi tiết ở dưới */
           @media (max-width: 980px) {
             .mv-grid {
               grid-template-columns: 1fr !important;
@@ -1193,26 +1257,25 @@ const MovementsPage: React.FC = () => {
               align-content: start;
             }
             .mv-detail-card {
-              height: auto !important;      /* ✅ ADD: đừng khóa chiều cao */
-              min-height: unset !important; /* ✅ ADD */
+              height: auto !important;
+              min-height: unset !important;
             }
 
             .mv-detail-body {
-              overflow: visible !important; /* ✅ ADD: cho page scroll xuống hết form */
+              overflow: visible !important;
             }
 
             .mv-grid {
-              overflow: auto !important;      /* ✅ đã có */
+              overflow: auto !important;
               min-height: 0;
             }
 
             .mv-page {
-              overflow: auto !important;      /* ✅ ADD */
+              overflow: auto !important;
             }
 
-            /* list cố định ở trên: set chiều cao để table scroll bên trong */
             .mv-list-card {
-              height: 44vh;           /* ✅ cố định phần list */
+              height: 44vh;
               min-height: 360px;
             }
 
@@ -1226,23 +1289,19 @@ const MovementsPage: React.FC = () => {
               -webkit-overflow-scrolling: touch;
             }
 
-            /* detail ở dưới: full phần còn lại, cho page scroll */
             .mv-detail-card {
               min-height: 56vh;
             }
 
-            /* form header stack dọc cho gọn */
             .mv-detail-grid, .mv-detail-grid2 {
               grid-template-columns: 1fr !important;
             }
 
-            /* lines: cho scroll ngang mượt */
             .mv-lines-scrollx {
               -webkit-overflow-scrolling: touch;
             }
           }
 
-          /* iOS momentum scroll fix */
           .mv-list-scroll, .mv-lines-scrollx {
             -webkit-overflow-scrolling: touch;
           }

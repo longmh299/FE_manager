@@ -872,27 +872,27 @@ const SalesLedgerReportPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="overflow-auto">
+        <div className="overflow-auto max-h-[70vh]">
           <table className="min-w-[1320px] w-full text-sm">
             <thead className="bg-slate-50">
               <tr className="text-left">
-                <th className="px-4 py-3 border-b border-slate-200 whitespace-nowrap">Ngày</th>
-                <th className="px-4 py-3 border-b border-slate-200 whitespace-nowrap">Số chứng từ</th>
-                <th className="px-4 py-3 border-b border-slate-200">Tên khách hàng</th>
-                <th className="px-4 py-3 border-b border-slate-200">Tên sản phẩm</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 whitespace-nowrap">Ngày</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 whitespace-nowrap">Số chứng từ</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200">Tên khách hàng</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200">Tên sản phẩm</th>
 
-                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đơn giá</th>
-                <th className="px-4 py-3 border-b border-slate-200 text-center whitespace-nowrap">Số lượng bán</th>
-                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Thành tiền</th>
-                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đơn giá vốn</th>
-                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Giá vốn TB (kỳ)</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đơn giá</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-center whitespace-nowrap">Số lượng bán</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Thành tiền</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đơn giá vốn</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Giá vốn TB (kỳ)</th>
 
-                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Thành tiền vốn</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Thành tiền vốn</th>
 
-                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đã thanh toán</th>
-                <th className="px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Còn nợ</th>
-                <th className="px-4 py-3 border-b border-slate-200 whitespace-nowrap">NV sale</th>
-                <th className="px-4 py-3 border-b border-slate-200 whitespace-nowrap">Kỹ thuật</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đã thanh toán</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Còn nợ</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 whitespace-nowrap">NV sale</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 whitespace-nowrap">Kỹ thuật</th>
               </tr>
             </thead>
 

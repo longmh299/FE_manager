@@ -71,7 +71,8 @@ function sortNameKey(name: string) {
 
 const PartStocksPage: React.FC = () => {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  // ✅ admin OR accountant => quyền như admin
+  const isPrivileged = user?.role === "admin" || user?.role === "accountant";
   const canEditNote = user?.role === "admin" || user?.role === "accountant";
 
   const [rows, setRows] = useState<PartStockRow[]>([]);
@@ -112,7 +113,7 @@ const PartStocksPage: React.FC = () => {
     return pcs?.id || (units[0]?.id ?? "");
   }, [units]);
 
-  // ===== Create quick part (admin) =====
+  // ===== Create quick part (admin/accountant) =====
   const [newSku, setNewSku] = useState("");
   const [newName, setNewName] = useState("");
   const [newUnitId, setNewUnitId] = useState<string>("");
@@ -129,7 +130,7 @@ const PartStocksPage: React.FC = () => {
   // ✅ NEW: view note
   const [viewNote, setViewNote] = useState<ViewNoteState>({ open: false });
 
-    const scrollToTop = () => {
+  const scrollToTop = () => {
     // ✅ ưu tiên kéo scroll bên trong bảng về đầu
     if (tableScrollRef.current) {
       tableScrollRef.current.scrollTo({ top: 0, behavior: "smooth" });
@@ -143,7 +144,6 @@ const PartStocksPage: React.FC = () => {
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
   };
-
 
   const showToast = (type: "success" | "error", message: string) => {
     setToast({ type, message });
@@ -163,8 +163,8 @@ const PartStocksPage: React.FC = () => {
     return "pcs";
   };
 
-  async function fetchUnitsIfAdmin() {
-    if (!isAdmin) return;
+  async function fetchUnitsIfPrivileged() {
+    if (!isPrivileged) return;
     try {
       setUnitsLoading(true);
       const res = await api.get("/items/units");
@@ -251,9 +251,9 @@ const PartStocksPage: React.FC = () => {
   }, [q]);
 
   useEffect(() => {
-    fetchUnitsIfAdmin();
+    fetchUnitsIfPrivileged();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin]);
+  }, [isPrivileged]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -297,6 +297,10 @@ const PartStocksPage: React.FC = () => {
   const goToPage = (p: number) => {
     if (p < 1 || p > totalPages) return;
     setPage(p);
+
+    // ✅ reset scroll bảng khi chuyển trang
+    if (tableScrollRef.current) tableScrollRef.current.scrollTop = 0;
+
     scrollToTop();
   };
 
@@ -316,7 +320,7 @@ const PartStocksPage: React.FC = () => {
 
   const handleCreatePart = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isAdmin) return;
+    if (!isPrivileged) return;
 
     if (!newName.trim()) {
       showToast("error", "Vui lòng nhập TÊN linh kiện.");
@@ -365,7 +369,7 @@ const PartStocksPage: React.FC = () => {
 
   // ===== edit (modal) =====
   const openEdit = async (row: PartStockRow) => {
-    if (!isAdmin) return;
+    if (!isPrivileged) return;
 
     if (!row.itemId) {
       showToast("error", "Dòng này thiếu itemId từ BE. Hãy kiểm tra API summary-by-item.");
@@ -373,7 +377,7 @@ const PartStocksPage: React.FC = () => {
     }
 
     if (units.length === 0 && !unitsLoading) {
-      await fetchUnitsIfAdmin();
+      await fetchUnitsIfPrivileged();
     }
 
     const code = String(row.unit || "").trim().toLowerCase();
@@ -403,7 +407,7 @@ const PartStocksPage: React.FC = () => {
   const closeEdit = () => setEdit({ open: false });
 
   const saveEdit = async () => {
-    if (!isAdmin) return;
+    if (!isPrivileged) return;
     if (!edit.open) return;
     if (edit.loading) return;
 
@@ -662,7 +666,7 @@ const PartStocksPage: React.FC = () => {
       )}
 
       {/* ✅ Create card responsive */}
-      {isAdmin && (
+      {isPrivileged && (
         <div
           style={{
             marginBottom: 12,
@@ -684,7 +688,7 @@ const PartStocksPage: React.FC = () => {
             }}
           >
             <span>Tạo mới linh kiện nhanh</span>
-            <span style={{ fontSize: 11, color: "#6b7280" }}>(Chỉ dành cho Admin)</span>
+            <span style={{ fontSize: 11, color: "#6b7280" }}>(Dành cho Admin / Accountant)</span>
           </div>
 
           <form
@@ -885,19 +889,19 @@ const PartStocksPage: React.FC = () => {
       {/* ✅ Table wrapper: scroll ngang + scroll dọc + sticky header (UI-only) */}
       <div style={{ border: B_HDR, borderRadius: 8, overflow: "hidden", backgroundColor: "#fff" }}>
         <div
-        ref={tableScrollRef}
-          style={{ 
+          ref={tableScrollRef}
+          style={{
             overflowX: "auto",
-            overflowY: "auto", // ✅ scroll dọc trong bảng
-            maxHeight: tableMaxHeight, // ✅ để vuốt xuống không mất đầu mục
+            overflowY: "auto",
+            maxHeight: tableMaxHeight,
             WebkitOverflowScrolling: "touch",
           }}
         >
           <table
             style={{
               width: "100%",
-              minWidth: isAdmin ? 1180 : 860, // có cột note nên rộng hơn
-              borderCollapse: "separate", // ✅ sticky ổn định hơn so với collapse
+              minWidth: isPrivileged ? 1180 : 860,
+              borderCollapse: "separate",
               borderSpacing: 0,
               fontSize: 14,
             }}
@@ -965,7 +969,7 @@ const PartStocksPage: React.FC = () => {
                   Tồn kho
                 </th>
 
-                {isAdmin && (
+                {isPrivileged && (
                   <>
                     <th
                       style={{
@@ -994,7 +998,7 @@ const PartStocksPage: React.FC = () => {
                     <th
                       style={{
                         ...stickyTh,
-                        zIndex: 6, // ✅ hơi cao hơn để không bị “lụi” khi scroll
+                        zIndex: 6,
                         textAlign: "center",
                         padding: "8px 10px",
                         width: 120,
@@ -1011,13 +1015,13 @@ const PartStocksPage: React.FC = () => {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={isAdmin ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
+                  <td colSpan={isPrivileged ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
                     Đang tải dữ liệu...
                   </td>
                 </tr>
               ) : pagedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={isAdmin ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
+                  <td colSpan={isPrivileged ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
                     Không có linh kiện nào thỏa điều kiện.
                   </td>
                 </tr>
@@ -1221,7 +1225,7 @@ const PartStocksPage: React.FC = () => {
                         {fmtQty(row.totalQty)}
                       </td>
 
-                      {isAdmin && (
+                      {isPrivileged && (
                         <>
                           <td
                             style={{
@@ -1371,8 +1375,8 @@ const PartStocksPage: React.FC = () => {
         </div>
       </div>
 
-      {/* ========================= EDIT MODAL (GIỮ NGUYÊN LOGIC) ========================= */}
-      {edit.open && isAdmin && (
+      {/* ========================= EDIT MODAL ========================= */}
+      {edit.open && isPrivileged && (
         <div
           role="dialog"
           aria-modal="true"
@@ -1438,7 +1442,7 @@ const PartStocksPage: React.FC = () => {
               </button>
             </div>
 
-            {/* phần body + footer modal giữ nguyên như bạn gửi (mình không đụng nữa) */}
+            {/* body + footer giữ nguyên như logic bạn đang dùng */}
             <div style={{ padding: 14, overflow: "auto", flex: 1 }}>
               <div
                 style={{

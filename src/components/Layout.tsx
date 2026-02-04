@@ -25,7 +25,7 @@ const Layout: React.FC = () => {
   const canSeeAuditLogs = isAdmin || isAccountant;
 
   // ✅ chỉ admin/accountant thấy phiếu kho
-  const canSeeMovements = isAdmin || isAccountant;
+  const canSeeMovements = isAdmin;
 
   const location = useLocation();
 
@@ -69,20 +69,16 @@ const Layout: React.FC = () => {
     list.push({ to: "invoices", label: "Quản lý hóa đơn" });
 
     // ✅ chỉ admin/accountant mới thấy
-    if (canSeeMovements) list.push({ to: "movements", label: "Phiếu kho" });
+    if (canSeeMovements) list.push({ to: "movements", label: "Phiếu điều chỉnh" });
 
-    if (isAdmin) list.push({ to: "/sales-returns", label: "Khách trả hàng" });
+    if (isAdmin|| isAccountant) list.push({ to: "/sales-returns", label: "Khách trả hàng" });
     return list;
   }, [isAdmin, canSeeMovements]);
 
-  const partnerLinks = useMemo(
-    () => [{ to: "partners", label: "Khách hàng" }],
-    []
-  );
 
   const opsLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
-    if (isAdmin) list.push({ to: "stock-counts", label: "Kiểm kê tồn" });
+    if (isAdmin|| isAccountant) list.push({ to: "stock-counts", label: "Kiểm kê tồn" });
     if (isAdmin)
       list.push({ to: "stock-import-opening", label: "Khởi tạo tồn đầu" });
     return list;
@@ -90,9 +86,9 @@ const Layout: React.FC = () => {
 
   const reportLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
-    if (isAdmin) list.push({ to: "debts/by-sale", label: "Công Nợ" });
-    if (isAdmin) list.push({ to: "/reports/ledger", label: "Sổ kho" });
-    if (isAdmin) list.push({ to: "/reports/sales-ledger", label: "Bảng kê bán" });
+    if (isAdmin|| isAccountant) list.push({ to: "debts/by-sale", label: "Công Nợ" });
+    if (isAdmin|| isAccountant) list.push({ to: "/reports/ledger", label: "Sổ kho" });
+    if (isAdmin|| isAccountant) list.push({ to: "/reports/sales-ledger", label: "Bảng kê bán" });
     if (isAdmin || isAccountant)
       list.push({ to: "/reports/stock-inout", label: "Báo cáo XNT" });
     return list;
@@ -101,14 +97,18 @@ const Layout: React.FC = () => {
   const adminLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
     if (isAdmin) list.push({ to: "users", label: "Quản lý tài khoản" });
-    if (isAdmin)
+    if (isAdmin|| isAccountant)
       list.push({ to: "payment-accounts", label: "Thêm tài khoản thanh toán" });
     if (canSeeAuditLogs)
       list.push({ to: "audit-logs", label: "Lịch sử thao tác" });
-    if (isAdmin)
-      list.push({ to: "invoice-status", label: "Sửa trạng thái hóa đơn" });
+    // if (isAdmin)
+    //   list.push({ to: "invoice-status", label: "Sửa trạng thái hóa đơn" });
     return list;
   }, [isAdmin, canSeeAuditLogs]);
+  const partnerLinks = useMemo(
+    () => [{ to: "partners", label: "Khách hàng" }],
+    []
+  );
 
   const accountLinks = useMemo(
     () => [{ to: "change-password", label: "Đổi mật khẩu" }],
@@ -289,14 +289,14 @@ const Layout: React.FC = () => {
           <div>
             <Group k="inventory" title={desktopCollapsed ? "TK" : "Tồn kho"} links={invLinks} />
             <Group k="sales" title={desktopCollapsed ? "BH" : "Bán hàng"} links={salesLinks} />
-            <Group k="partner" title={desktopCollapsed ? "DT" : "Đối tác"} links={partnerLinks} />
-            <Group k="ops" title={desktopCollapsed ? "VH" : "Vận hành"} links={opsLinks} />
             <Group
               k="reports"
               title={desktopCollapsed ? "BC" : "Báo cáo & công nợ"}
               links={reportLinks}
             />
+             <Group k="ops" title={desktopCollapsed ? "VH" : "Vận hành"} links={opsLinks} />
             <Group k="admin" title={desktopCollapsed ? "QT" : "Quản trị"} links={adminLinks} />
+             <Group k="partner" title={desktopCollapsed ? "DT" : "Đối tác"} links={partnerLinks} />
             <Group k="account" title={desktopCollapsed ? "TK" : "Tài khoản"} links={accountLinks} />
           </div>
         )}
@@ -361,7 +361,7 @@ const Layout: React.FC = () => {
             title="Mở/thu nhỏ menu"
           >
             <span className="text-sm font-semibold">
-              {isDesktop ? (desktopCollapsed ? "☰" : "⇤") : mobileMenuOpen ? "✕" : "☰"}
+              {isDesktop ? (desktopCollapsed ? "☰" : "☰") : mobileMenuOpen ? "✕" : "☰"}
             </span>
           </button>
 
