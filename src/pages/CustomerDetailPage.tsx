@@ -2,200 +2,316 @@ import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 
-type InvoiceHistory = {
-  id: string;
-  code: string | null;
-  issueDate: string;
-  total: number;
-};
-
-type PartnerDetail = {
-  id: string;
-  name: string;
-  taxCode?: string | null;
-  phone?: string | null;
-  address?: string | null;
-  createdAt?: string;
-  updatedAt?: string;
-  invoices?: InvoiceHistory[];
-};
-
-const PartnerDetailPage: React.FC = () => {
-  const { id } = useParams<{ id: string }>();
+const CustomerDetailPage: React.FC = () => {
+  const { id } = useParams();
   const navigate = useNavigate();
 
-  const [data, setData] = useState<PartnerDetail | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<any>(null);
+  const [activityModal, setActivityModal] = useState<any>(null);
+  const [editModal, setEditModal] = useState<any>(null);
+  const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null); // 🔥 NEW
 
-  const formatDate = (d?: string) => {
-    if (!d) return "-";
-    return new Date(d).toLocaleString("vi-VN");
+  const fetchData = async () => {
+    try {
+      const res = await api.get(`/customers/${id}`);
+      setData(res.data.data);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   useEffect(() => {
-    if (!id) return;
-
-    const fetchDetail = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await api.get(`/partners/${id}`);
-        // BE trả { ok, data }
-        const partner: PartnerDetail = res.data?.data ?? res.data;
-        setData(partner);
-      } catch (err: any) {
-        console.error("Fetch partner detail error", err);
-        setError(
-          err?.response?.data?.error ||
-            err?.response?.data?.message ||
-            "Không tải được thông tin khách hàng"
-        );
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchDetail();
+    fetchData();
   }, [id]);
 
-  if (loading) {
-    return (
-      <div className="p-6 text-sm text-slate-700">
-        Đang tải thông tin khách hàng...
-      </div>
-    );
-  }
+  const submitActivity = async () => {
+    try {
+      await api.post(`/customers/${id}/activity`, activityModal);
+      setActivityModal(null);
+      fetchData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
-  if (error) {
-    return (
-      <div className="p-6 text-sm">
-        <div className="mb-4 text-red-600">{error}</div>
-        <button
-          onClick={() => navigate("/partners")}
-          className="px-4 py-2 rounded bg-slate-800 text-white text-xs"
-        >
-          ← Quay lại danh sách khách hàng
-        </button>
-      </div>
-    );
-  }
+  const openEdit = (field: string, value: string) => {
+    setEditModal({
+      field,
+      value: value || "",
+    });
+  };
 
-  if (!data) {
-    return (
-      <div className="p-6 text-sm text-slate-700">
-        Không tìm thấy dữ liệu khách hàng.
-      </div>
-    );
-  }
+  const handleUpdateField = async () => {
+    try {
+      await api.put(`/customers/${id}`, {
+        [editModal.field]: editModal.value,
+      });
 
-  const invoices = data.invoices ?? [];
+      setEditModal(null);
+      fetchData();
+    } catch (err) {
+      alert("Update thất bại");
+    }
+  };
+
+  if (!data) return <div className="p-6">Loading...</div>;
 
   return (
-    <div className="p-6 text-sm">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-xl font-semibold text-slate-800 mb-1">
-            Thông tin khách hàng
-          </h2>
-          <p className="text-slate-500">
-            Xem thông tin cơ bản và lịch sử hóa đơn của khách hàng.
-          </p>
-        </div>
+    <div className="p-6 space-y-6 text-sm">
+      {/* HEADER */}
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-semibold">{data.name}</h2>
         <button
           onClick={() => navigate("/partners")}
-          className="px-4 py-2 rounded bg-slate-800 text-white text-xs"
+          className="text-xs bg-black text-white px-3 py-1 rounded"
         >
-          ← Quay lại danh sách
+          ← Quay lại
         </button>
       </div>
 
-      {/* Thông tin cơ bản */}
-      <div className="bg-white rounded-lg shadow mb-6 p-4">
-        <h3 className="font-semibold text-slate-800 mb-3 text-base">
-          Thông tin cơ bản
-        </h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
+      {/* INFO */}
+      <div className="bg-white p-4 rounded-xl shadow space-y-3">
+        <div className="flex justify-between items-center">
           <div>
-            <div className="text-slate-500">Tên khách hàng</div>
-            <div className="font-medium text-slate-800">{data.name}</div>
+            📞{" "}
+            <span className={!data.phone ? "text-red-500" : ""}>
+              {data.phone || "Chưa có SĐT"}
+            </span>
           </div>
+          <button
+            className="text-xs text-blue-600"
+            onClick={() => openEdit("phone", data.phone)}
+          >
+            {data.phone ? "Sửa" : "Bổ sung"}
+          </button>
+        </div>
+
+        <div className="flex justify-between items-center">
           <div>
-            <div className="text-slate-500">Mã số thuế</div>
-            <div className="font-medium text-slate-800">
-              {data.taxCode || "-"}
-            </div>
+            ✉️{" "}
+            <span className={!data.email ? "text-red-500" : ""}>
+              {data.email || "Chưa có email"}
+            </span>
           </div>
+          <button
+            className="text-xs text-blue-600"
+            onClick={() => openEdit("email", data.email)}
+          >
+            {data.email ? "Sửa" : "Bổ sung"}
+          </button>
+        </div>
+
+        <div className="flex justify-between items-center">
+          <div>🏢 {data.address || "-"}</div>
+          <button
+            className="text-xs text-blue-600"
+            onClick={() => openEdit("address", data.address)}
+          >
+            Sửa
+          </button>
+        </div>
+
+        <div className="flex justify-between items-center">
           <div>
-            <div className="text-slate-500">Điện thoại</div>
-            <div className="font-medium text-slate-800">
-              {data.phone || "-"}
-            </div>
+            🧾 MST:{" "}
+            <span className={!data.taxCode ? "text-red-500" : ""}>
+              {data.taxCode || "Chưa có"}
+            </span>
           </div>
-          <div>
-            <div className="text-slate-500">Ngày tạo</div>
-            <div className="font-medium text-slate-800">
-              {formatDate(data.createdAt)}
-            </div>
-          </div>
-          <div className="md:col-span-2">
-            <div className="text-slate-500">Địa chỉ</div>
-            <div className="font-medium text-slate-800">
-              {data.address || "-"}
-            </div>
-          </div>
+          <button
+            className="text-xs text-blue-600"
+            onClick={() => openEdit("taxCode", data.taxCode)}
+          >
+            {data.taxCode ? "Sửa" : "Bổ sung"}
+          </button>
         </div>
       </div>
 
-      {/* Lịch sử hóa đơn */}
-      <div className="bg-white rounded-lg shadow p-4">
-        <h3 className="font-semibold text-slate-800 mb-3 text-base">
-          Lịch sử mua hàng
-        </h3>
+      {/* MÁY */}
+      <div className="bg-white p-4 rounded-xl shadow">
+        <h3 className="font-semibold mb-2">Máy đang sử dụng</h3>
 
-        {invoices.length === 0 && (
-          <div className="text-slate-500">
-            Khách hàng này chưa có hóa đơn nào.
-          </div>
+        {!data.invoices?.length && (
+          <div className="text-gray-400">Chưa có dữ liệu</div>
         )}
 
-        {invoices.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-xs">
-              <thead>
-                <tr className="bg-slate-100 text-slate-600">
-                  <th className="px-3 py-2 text-left font-medium">Mã HĐ</th>
-                  <th className="px-3 py-2 text-left font-medium">Ngày HĐ</th>
-                  <th className="px-3 py-2 text-right font-medium">
-                    Tổng tiền
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {invoices.map((inv) => (
-                  <tr
-                    key={inv.id}
-                    className="border-b last:border-b-0 hover:bg-slate-50"
-                  >
-                    <td className="px-3 py-2">{inv.code || `HD#${inv.id}`}</td>
-                    <td className="px-3 py-2">
-                      {formatDate(inv.issueDate as any)}
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      {inv.total != null
-                        ? inv.total.toLocaleString("vi-VN")
-                        : "-"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {data.invoices?.flatMap((inv: any) =>
+          inv.lines?.map((line: any) => (
+            <div key={line.id} className="border-b py-2">
+              <div className="font-medium">
+                {line.item?.name || "Không rõ máy"}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="bg-white p-4 rounded-xl shadow">
+        <h3 className="font-semibold mb-3">Liên hệ nhanh</h3>
+
+        {!data.phone ? (
+          <div className="text-red-500 text-sm">
+            ⚠️ Khách chưa có số điện thoại
+          </div>
+        ) : (
+          <div className="flex gap-3">
+            {/* CALL */}
+            <a
+              href={`tel:${data.phone}`}
+              className="flex-1 text-center bg-green-500 hover:bg-green-600 text-white py-2 rounded-lg text-sm font-medium"
+            >
+              📞 Gọi
+            </a>
+
+            {/* ZALO */}
+            <a
+              href={`https://zalo.me/${data.phone}`}
+              target="_blank"
+              rel="noreferrer"
+              className="flex-1 text-center bg-blue-500 hover:bg-blue-600 text-white py-2 rounded-lg text-sm font-medium"
+            >
+              💬 Zalo
+            </a>
           </div>
         )}
       </div>
+      {/* 🔥 LỊCH SỬ MUA (UPGRADE) */}
+      <div className="bg-white p-4 rounded-xl shadow">
+        <h3 className="font-semibold mb-2">Lịch sử mua</h3>
+
+        {!data.invoices?.length && (
+          <div className="text-gray-400">Chưa có hóa đơn</div>
+        )}
+
+        {data.invoices?.map((inv: any) => {
+          const isOpen = openInvoiceId === inv.id;
+
+          return (
+            <div key={inv.id} className="border-b py-2">
+              {/* HEADER */}
+              <div
+                className="flex justify-between cursor-pointer"
+                onClick={() =>
+                  setOpenInvoiceId(isOpen ? null : inv.id)
+                }
+              >
+                <div>
+                  <div className="font-medium">
+                    {inv.code || "Hóa đơn"}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {new Date(inv.issueDate).toLocaleDateString()}
+                  </div>
+                </div>
+
+                <div className="font-semibold">
+                  {Number(inv.total).toLocaleString("vi-VN")} đ
+                </div>
+              </div>
+
+              {/* 🔥 EXPAND */}
+              {isOpen && (
+                <div className="mt-2 pl-3 border-l space-y-1 text-sm">
+                  {inv.lines?.map((line: any) => (
+                    <div
+                      key={line.id}
+                      className="flex justify-between"
+                    >
+                      <div>
+                        {line.item?.name || "Không rõ máy"}
+                      </div>
+
+                      <div className="text-gray-500">
+                        x{line.qty || 1}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* MODALS giữ nguyên */}
+      {activityModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center">
+          <div className="bg-white p-4 rounded w-[320px]">
+            <select
+              value={activityModal.type}
+              onChange={(e) =>
+                setActivityModal({
+                  ...activityModal,
+                  type: e.target.value,
+                })
+              }
+              className="w-full border mb-2"
+            >
+              <option value="CALL">Gọi</option>
+              <option value="MESSAGE">Nhắn</option>
+              <option value="VISIT">Gặp</option>
+              <option value="NOTE">Ghi chú</option>
+            </select>
+
+            <textarea
+              value={activityModal.content}
+              onChange={(e) =>
+                setActivityModal({
+                  ...activityModal,
+                  content: e.target.value,
+                })
+              }
+              className="w-full border mb-2"
+            />
+
+            <button
+              onClick={submitActivity}
+              className="w-full bg-black text-white py-1"
+            >
+              Lưu
+            </button>
+          </div>
+        </div>
+      )}
+
+      {editModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white p-5 rounded-xl w-[320px] space-y-3">
+            <h3 className="font-semibold capitalize">
+              Sửa {editModal.field}
+            </h3>
+
+            <input
+              value={editModal.value}
+              onChange={(e) =>
+                setEditModal({
+                  ...editModal,
+                  value: e.target.value,
+                })
+              }
+              className="w-full border rounded px-3 py-2 text-sm"
+            />
+
+            <div className="flex justify-end gap-2">
+              <button
+                className="px-3 py-1 text-sm bg-gray-100 rounded"
+                onClick={() => setEditModal(null)}
+              >
+                Huỷ
+              </button>
+
+              <button
+                className="px-3 py-1 text-sm bg-blue-600 text-white rounded"
+                onClick={handleUpdateField}
+              >
+                Lưu
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
-export default PartnerDetailPage;
+export default CustomerDetailPage;

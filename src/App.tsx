@@ -8,7 +8,7 @@ import ItemsPage from "./pages/ItemsPage";
 import ItemsMasterPage from "./pages/ItemsMasterPage";
 import RevenuePage from "./pages/RevenuePage";
 import InvoicesPage from "./pages/InvoicesPage";
-import PartnersPage from "./pages/PartnersPage";
+import PartnersPage from "./pages/CustomersPage";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
 import MachinesPage from "./pages/MachinesPage";
 import MachineStocksPage from "./pages/MachineStocksPage";
@@ -36,6 +36,7 @@ import MovementsPage from "./pages/MovementsPage";
 
 // ✅ NEW: simple role guard (admin/accountant only)
 import { useAuth } from "./context/AuthContext";
+import CustomersPage from "./pages/CustomersPage";
 const RequireRole: React.FC<{ roles: string[]; children: any }> = ({ roles, children }) => {
   const { user } = useAuth();
   const role = user?.role;
@@ -63,9 +64,9 @@ const App: React.FC = () => {
           {/* master */}
           <Route path="items" element={<ItemsPage />} />
           <Route path="items-master" element={<ItemsMasterPage />} />
-          <Route path="partners" element={<PartnersPage />} />
+          <Route path="partners" element={<CustomersPage />} />
           <Route path="partners/:id" element={<CustomerDetailPage />} />
-
+          <Route path="/customers/:id" element={<CustomerDetailPage />} />
           {/* invoices */}
           <Route path="invoices" element={<InvoicesPage />} />
           <Route path="invoices/new" element={<InvoiceDetailPage />} />
