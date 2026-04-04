@@ -827,7 +827,10 @@ const InvoiceDetailPage: React.FC = () => {
   const toastSuccess = (message: string, title = "Thành công") => push({ type: "success", title, message });
   const toastError = (message: string, title = "Có lỗi") => push({ type: "error", title, message });
 
-  const gotoListSoon = () => setTimeout(() => navigate("/invoices"), 350);
+  // const gotoListSoon = () => setTimeout(() => navigate("/invoices"), 350);
+
+  const gotoListSoon = (type: string) =>
+  setTimeout(() => navigate(`/invoices?type=${type}`), 350);
 
   // ✅ detect adjust-mode by query (?adjust=1 | ?adjust=true | ?mode=adjust)
   const isAdjustMode = useMemo(() => {
@@ -1669,14 +1672,14 @@ const InvoiceDetailPage: React.FC = () => {
           toastSuccess("Đã lưu & gửi duyệt (auto).");
           setDirtySinceLastSave(false);
           setMessage(null);
-          gotoListSoon();
+          gotoListSoon(invoice.type);
           return;
         }
 
         toastSuccess("Đã tạo hóa đơn.");
         setDirtySinceLastSave(false);
         setMessage(null);
-        gotoListSoon();
+       gotoListSoon(invoice.type);
         return;
       }
 
@@ -1690,7 +1693,7 @@ const InvoiceDetailPage: React.FC = () => {
         setMessage(null);
         toastSuccess("Đã điều chỉnh & post lại hóa đơn (auto APPROVED).");
         await loadInvoiceIfNeeded();
-        gotoListSoon();
+       gotoListSoon(invoice.type);
         return;
       }
 
@@ -1704,7 +1707,7 @@ const InvoiceDetailPage: React.FC = () => {
         setDirtySinceLastSave(false);
         setMessage(null);
         toastSuccess("Đã lưu & gửi duyệt (auto).");
-        gotoListSoon();
+        gotoListSoon(invoice.type);
         return;
       }
 
@@ -1712,7 +1715,7 @@ const InvoiceDetailPage: React.FC = () => {
       setDirtySinceLastSave(false);
       setMessage(null);
       toastSuccess("Đã lưu hóa đơn.");
-      gotoListSoon();
+      gotoListSoon(invoice.type);
     } catch (err: any) {
       console.error("Save invoice error", err);
       toastError(err?.response?.data?.message || err?.response?.data?.error || err?.message || "Lưu hoá đơn thất bại.");
@@ -1800,7 +1803,7 @@ const InvoiceDetailPage: React.FC = () => {
           setMessage({ type: "success", text: "Đã gửi duyệt." });
           toastSuccess("Đã gửi duyệt.");
           closeConfirm();
-          gotoListSoon();
+          gotoListSoon(invoice.type);
         } catch (err: any) {
           console.error("submit error", err);
           const msg = err?.response?.data?.message || "Gửi duyệt thất bại.";
