@@ -34,6 +34,9 @@ import InvoiceStatusAdminPage from "./pages/InvoiceStatusAdminPage";
 // ✅ NEW: movements page
 import MovementsPage from "./pages/MovementsPage";
 
+// ✅ NEW: best sellers report
+import BestSellersReportPage from "./pages/BestSellersReportPage";
+
 // ✅ NEW: simple role guard (admin/accountant only)
 import { useAuth } from "./context/AuthContext";
 import CustomersPage from "./pages/CustomersPage";
@@ -111,6 +114,16 @@ const App: React.FC = () => {
           <Route path="/me/sales" element={<MySalesDashboardPage />} />
           <Route path="audit-logs" element={<AuditLogsPage />} />
           <Route path="reports/stock-inout" element={<StockInOutReportPage />} />
+
+          {/* ✅ NEW: hàng bán chạy (admin only) */}
+          <Route
+            path="reports/best-sellers"
+            element={
+              <RequireRole roles={["admin"]}>
+                <BestSellersReportPage />
+              </RequireRole>
+            }
+          />
         </Route>
 
         <Route path="invoices/:id/print" element={<InvoicePrintPage />} />

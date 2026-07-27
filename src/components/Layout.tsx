@@ -91,6 +91,8 @@ const Layout: React.FC = () => {
     if (isAdmin|| isAccountant) list.push({ to: "/reports/sales-ledger", label: "Bảng kê bán" });
     if (isAdmin || isAccountant)
       list.push({ to: "/reports/stock-inout", label: "Báo cáo XNT" });
+    // ✅ chỉ admin xem được hàng bán chạy
+    if (isAdmin) list.push({ to: "/reports/best-sellers", label: "Hàng bán chạy" });
     return list;
   }, [isAdmin, isAccountant]);
 
