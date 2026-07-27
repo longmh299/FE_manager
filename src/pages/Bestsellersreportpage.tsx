@@ -1,4 +1,5 @@
 // src/pages/BestSellersReportPage.tsx
+
 import React, { useEffect, useMemo, useState } from "react";
 import api, { extractList } from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
@@ -6,6 +7,7 @@ import { ToastHost, useToast } from "../components/Toast";
 /* ======================= Types ======================= */
 
 type ItemKind = "PART" | "MACHINE";
+type FilterMode = "month" | "range";
 
 type InvoiceLine = {
   itemId: string;
@@ -44,10 +46,30 @@ function currentYm() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function monthRange(ym: string) {
+function todayYmd() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function firstDayOfMonthYmd() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+// tháng "YYYY-MM" -> { from, to } ISO (đầu tháng 00:00 -> cuối tháng 23:59:59.999)
+function monthToIsoRange(ym: string) {
   const [y, m] = ym.split("-").map(Number);
   const from = new Date(y, m - 1, 1, 0, 0, 0, 0);
-  const to = new Date(y, m, 0, 23, 59, 59, 999); // ngày cuối tháng
+  const to = new Date(y, m, 0, 23, 59, 59, 999);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
+// ngày "YYYY-MM-DD" -> { from, to } ISO (00:00 -> 23:59:59.999 của chính ngày đó)
+function ymdToIsoRange(fromYmd: string, toYmd: string) {
+  const [fy, fm, fd] = fromYmd.split("-").map(Number);
+  const [ty, tm, td] = toYmd.split("-").map(Number);
+  const from = new Date(fy, fm - 1, fd, 0, 0, 0, 0);
+  const to = new Date(ty, tm - 1, td, 23, 59, 59, 999);
   return { from: from.toISOString(), to: to.toISOString() };
 }
 
@@ -55,22 +77,43 @@ function fmtInt(n: number) {
   return Number(n || 0).toLocaleString("vi-VN");
 }
 
+function fmtYmdDisplay(ymd: string) {
+  const [y, m, d] = ymd.split("-");
+  return `${d}/${m}/${y}`;
+}
+
 /* ======================= Component ======================= */
 
 const BestSellersReportPage: React.FC = () => {
   const { toasts, push, remove } = useToast();
 
+  const [mode, setMode] = useState<FilterMode>("month");
+
+  // ----- chọn theo tháng -----
   const [ym, setYm] = useState(currentYm());
+
+  // ----- chọn theo khoảng ngày tùy ý -----
+  const [fromYmd, setFromYmd] = useState(firstDayOfMonthYmd());
+  const [toYmd, setToYmd] = useState(todayYmd());
+
   const [tab, setTab] = useState<ItemKind>("PART");
 
   const [loading, setLoading] = useState(false);
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
-  const [loadedYm, setLoadedYm] = useState<string | null>(null);
+  const [loadedLabel, setLoadedLabel] = useState<string | null>(null);
 
-  async function fetchMonth(targetYm: string) {
+const dateRangeInvalid = !!(mode === "range" && fromYmd && toYmd && fromYmd > toYmd);
+  async function fetchData() {
+    if (dateRangeInvalid) {
+      push({ type: "error", message: "Ngày bắt đầu phải trước hoặc bằng ngày kết thúc." });
+      return;
+    }
+
     setLoading(true);
     try {
-      const { from, to } = monthRange(targetYm);
+      const { from, to } =
+        mode === "month" ? monthToIsoRange(ym) : ymdToIsoRange(fromYmd, toYmd);
+
       const res = await api.get("/invoices", {
         params: {
           type: "SALES",
@@ -84,7 +127,13 @@ const BestSellersReportPage: React.FC = () => {
 
       const list = extractList<InvoiceRow>(res.data);
       setInvoices(list);
-      setLoadedYm(targetYm);
+
+      if (mode === "month") {
+        const [y, m] = ym.split("-");
+        setLoadedLabel(`Tháng ${parseInt(m, 10)}/${y}`);
+      } else {
+        setLoadedLabel(`${fmtYmdDisplay(fromYmd)} → ${fmtYmdDisplay(toYmd)}`);
+      }
     } catch (e: any) {
       const msg = e?.response?.data?.message || e?.message || "Không quét được dữ liệu hóa đơn.";
       push({ type: "error", message: msg });
@@ -94,7 +143,7 @@ const BestSellersReportPage: React.FC = () => {
   }
 
   useEffect(() => {
-    fetchMonth(ym);
+    fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -141,11 +190,6 @@ const BestSellersReportPage: React.FC = () => {
   const activeTotalQty = activeRanked.reduce((s, r) => s + r.qty, 0);
   const maxQty = activeRanked[0]?.qty || 1;
 
-  const monthLabelText = useMemo(() => {
-    const [y, m] = ym.split("-");
-    return `Tháng ${parseInt(m, 10)}/${y}`;
-  }, [ym]);
-
   return (
     <div style={{ padding: 16, maxWidth: 1000, margin: "0 auto" }}>
       <ToastHost toasts={toasts} onClose={remove} />
@@ -154,58 +198,84 @@ const BestSellersReportPage: React.FC = () => {
         <div>
           <div style={{ fontWeight: 900, fontSize: 18 }}>Hàng bán chạy</div>
           <div style={{ fontSize: 12.5, opacity: 0.7, marginTop: 2 }}>
-            Cộng dồn số lượng bán theo tháng, tách riêng Máy và Linh kiện — chỉ tính hóa đơn BÁN đã duyệt.
+            Cộng dồn số lượng bán theo khoảng thời gian, tách riêng Máy và Linh kiện — chỉ tính hóa đơn BÁN đã duyệt.
           </div>
         </div>
       </div>
 
       {/* ===== Filter bar ===== */}
       <div style={panel}>
+        {/* mode switch */}
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          <button type="button" onClick={() => setMode("month")} style={tabBtn(mode === "month")}>
+            Theo tháng
+          </button>
+          <button type="button" onClick={() => setMode("range")} style={tabBtn(mode === "range")}>
+            Khoảng ngày tùy chọn
+          </button>
+        </div>
+
         <div style={filtersRow}>
-          <div>
-            <label style={fieldLabel}>Chọn tháng</label>
-            <input
-              type="month"
-              value={ym}
-              onChange={(e) => setYm(e.target.value)}
-              style={monthInput}
-            />
-          </div>
+          {mode === "month" ? (
+            <div>
+              <label style={fieldLabel}>Chọn tháng</label>
+              <input type="month" value={ym} onChange={(e) => setYm(e.target.value)} style={monthInput} />
+            </div>
+          ) : (
+            <>
+              <div>
+                <label style={fieldLabel}>Từ ngày</label>
+                <input
+                  type="date"
+                  value={fromYmd}
+                  max={toYmd || undefined}
+                  onChange={(e) => setFromYmd(e.target.value)}
+                  style={monthInput}
+                />
+              </div>
+              <div>
+                <label style={fieldLabel}>Đến ngày</label>
+                <input
+                  type="date"
+                  value={toYmd}
+                  min={fromYmd || undefined}
+                  onChange={(e) => setToYmd(e.target.value)}
+                  style={monthInput}
+                />
+              </div>
+            </>
+          )}
 
           <button
             type="button"
-            onClick={() => fetchMonth(ym)}
-            disabled={loading}
-            style={primaryBtn(loading)}
+            onClick={fetchData}
+            disabled={loading || dateRangeInvalid}
+            style={primaryBtn(loading || dateRangeInvalid)}
           >
             {loading ? "Đang quét..." : "↻ Quét dữ liệu"}
           </button>
 
           <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-            <button
-              type="button"
-              onClick={() => setTab("PART")}
-              style={tabBtn(tab === "PART")}
-            >
+            <button type="button" onClick={() => setTab("PART")} style={tabBtn(tab === "PART")}>
               Linh kiện
             </button>
-            <button
-              type="button"
-              onClick={() => setTab("MACHINE")}
-              style={tabBtn(tab === "MACHINE")}
-            >
+            <button type="button" onClick={() => setTab("MACHINE")} style={tabBtn(tab === "MACHINE")}>
               Máy
             </button>
           </div>
         </div>
 
+        {dateRangeInvalid && (
+          <div style={{ marginTop: 8, fontSize: 12.5, color: "#dc2626", fontWeight: 700 }}>
+            Ngày bắt đầu phải trước hoặc bằng ngày kết thúc.
+          </div>
+        )}
+
         {/* ===== KPI strip ===== */}
         <div style={strip}>
           <div style={stripItem}>
-            <div style={stripLabel}>Tháng đang xem</div>
-            <div style={stripValue}>
-              {loadedYm ? monthLabelText : "Chưa quét"}
-            </div>
+            <div style={stripLabel}>Khoảng đang xem</div>
+            <div style={stripValue}>{loadedLabel || "Chưa quét"}</div>
           </div>
           <div style={stripItem}>
             <div style={stripLabel}>Số hóa đơn</div>
@@ -244,8 +314,8 @@ const BestSellersReportPage: React.FC = () => {
               {!loading && activeRanked.length === 0 && (
                 <tr>
                   <td colSpan={4} style={{ ...tdBase, textAlign: "center", padding: 24, opacity: 0.7 }}>
-                    {loadedYm
-                      ? `Không có hàng ${tab === "PART" ? "linh kiện" : "máy"} nào được bán trong ${monthLabelText}.`
+                    {loadedLabel
+                      ? `Không có hàng ${tab === "PART" ? "linh kiện" : "máy"} nào được bán trong khoảng thời gian này.`
                       : 'Bấm "Quét dữ liệu" để xem thống kê.'}
                   </td>
                 </tr>
