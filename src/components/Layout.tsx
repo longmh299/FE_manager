@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation, Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { LowStockBell } from "./LowStockBell";
-
+import { ChatWidget } from "./ChatWidget";
 type GroupKey =
   | "inventory"
   | "sales"
@@ -374,6 +374,7 @@ const Layout: React.FC = () => {
           <div className="flex items-center gap-2">
             <LowStockBell />
           </div>
+          <ChatWidget />
         </header>
 
         <div className="flex-1 p-4 overflow-auto">

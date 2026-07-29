@@ -10,6 +10,7 @@ const CustomerDetailPage: React.FC = () => {
   const [activityModal, setActivityModal] = useState<any>(null);
   const [editModal, setEditModal] = useState<any>(null);
   const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null); // 🔥 NEW
+  const [invoiceTab, setInvoiceTab] = useState<"approved" | "pending">("approved"); // 🔥 NEW
 
   const fetchData = async () => {
     try {
@@ -131,19 +132,21 @@ const CustomerDetailPage: React.FC = () => {
       <div className="bg-white p-4 rounded-xl shadow">
         <h3 className="font-semibold mb-2">Máy đang sử dụng</h3>
 
-        {!data.invoices?.length && (
+        {!data.invoices?.some((inv: any) => inv.status === "APPROVED" && inv.lines?.length) && (
           <div className="text-gray-400">Chưa có dữ liệu</div>
         )}
 
-        {data.invoices?.flatMap((inv: any) =>
-          inv.lines?.map((line: any) => (
-            <div key={line.id} className="border-b py-2">
-              <div className="font-medium">
-                {line.item?.name || "Không rõ máy"}
+        {data.invoices
+          ?.filter((inv: any) => inv.status === "APPROVED")
+          .flatMap((inv: any) =>
+            inv.lines?.map((line: any) => (
+              <div key={line.id} className="border-b py-2">
+                <div className="font-medium">
+                  {line.item?.name || "Không rõ máy"}
+                </div>
               </div>
-            </div>
-          ))
-        )}
+            ))
+          )}
       </div>
 
       <div className="bg-white p-4 rounded-xl shadow">
@@ -179,58 +182,96 @@ const CustomerDetailPage: React.FC = () => {
       <div className="bg-white p-4 rounded-xl shadow">
         <h3 className="font-semibold mb-2">Lịch sử mua</h3>
 
-        {!data.invoices?.length && (
-          <div className="text-gray-400">Chưa có hóa đơn</div>
-        )}
+        {/* Tab Đã duyệt / Chờ duyệt */}
+        <div className="flex gap-2 mb-3">
+          <button
+            onClick={() => setInvoiceTab("approved")}
+            className={`px-3 py-1 rounded-lg text-xs font-medium ${
+              invoiceTab === "approved"
+                ? "bg-black text-white"
+                : "bg-gray-100 text-gray-600"
+            }`}
+          >
+            Đã duyệt
+          </button>
+          <button
+            onClick={() => setInvoiceTab("pending")}
+            className={`px-3 py-1 rounded-lg text-xs font-medium ${
+              invoiceTab === "pending"
+                ? "bg-black text-white"
+                : "bg-gray-100 text-gray-600"
+            }`}
+          >
+            Chờ duyệt
+            {data.invoices?.filter((inv: any) => inv.status === "SUBMITTED" || inv.status === "DRAFT").length > 0 && (
+              <span className="ml-1 bg-orange-500 text-white rounded-full px-1.5">
+                {data.invoices.filter((inv: any) => inv.status === "SUBMITTED" || inv.status === "DRAFT").length}
+              </span>
+            )}
+          </button>
+        </div>
 
-        {data.invoices?.map((inv: any) => {
-          const isOpen = openInvoiceId === inv.id;
-
-          return (
-            <div key={inv.id} className="border-b py-2">
-              {/* HEADER */}
-              <div
-                className="flex justify-between cursor-pointer"
-                onClick={() =>
-                  setOpenInvoiceId(isOpen ? null : inv.id)
-                }
-              >
-                <div>
-                  <div className="font-medium">
-                    {inv.code || "Hóa đơn"}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {new Date(inv.issueDate).toLocaleDateString()}
-                  </div>
-                </div>
-
-                <div className="font-semibold">
-                  {Number(inv.total).toLocaleString("vi-VN")} đ
-                </div>
-              </div>
-
-              {/* 🔥 EXPAND */}
-              {isOpen && (
-                <div className="mt-2 pl-3 border-l space-y-1 text-sm">
-                  {inv.lines?.map((line: any) => (
-                    <div
-                      key={line.id}
-                      className="flex justify-between"
-                    >
-                      <div>
-                        {line.item?.name || "Không rõ máy"}
-                      </div>
-
-                      <div className="text-gray-500">
-                        x{line.qty || 1}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+        {(() => {
+          // Chỉ 2 nhóm: đã duyệt (mua thật) và chờ duyệt (nháp/chờ duyệt).
+          // Hóa đơn đã hủy/từ chối không tính vào "lịch sử mua" ở cả 2 tab.
+          const filtered = (data.invoices || []).filter((inv: any) =>
+            invoiceTab === "approved"
+              ? inv.status === "APPROVED"
+              : inv.status === "SUBMITTED" || inv.status === "DRAFT"
           );
-        })}
+
+          if (filtered.length === 0) {
+            return (
+              <div className="text-gray-400">
+                {invoiceTab === "approved" ? "Chưa có hóa đơn đã duyệt" : "Không có đơn nào đang chờ duyệt"}
+              </div>
+            );
+          }
+
+          return filtered.map((inv: any) => {
+            const isOpen = openInvoiceId === inv.id;
+
+            return (
+              <div key={inv.id} className="border-b py-2">
+                {/* HEADER */}
+                <div
+                  className="flex justify-between cursor-pointer"
+                  onClick={() => setOpenInvoiceId(isOpen ? null : inv.id)}
+                >
+                  <div>
+                    <div className="font-medium flex items-center gap-2">
+                      {inv.code || "Hóa đơn"}
+                      {invoiceTab === "pending" && (
+                        <span className="text-[10px] bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded">
+                          {inv.status === "DRAFT" ? "Nháp" : "Chờ duyệt"}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {new Date(inv.issueDate).toLocaleDateString()}
+                    </div>
+                  </div>
+
+                  <div className="font-semibold">
+                    {Number(inv.total).toLocaleString("vi-VN")} đ
+                  </div>
+                </div>
+
+                {/* 🔥 EXPAND */}
+                {isOpen && (
+                  <div className="mt-2 pl-3 border-l space-y-1 text-sm">
+                    {inv.lines?.map((line: any) => (
+                      <div key={line.id} className="flex justify-between">
+                        <div>{line.item?.name || "Không rõ máy"}</div>
+                        <div className="text-gray-500">x{line.qty || 1}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          });
+        })()}
       </div>
 
       {/* MODALS giữ nguyên */}
