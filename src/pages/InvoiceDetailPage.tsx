@@ -33,6 +33,7 @@ type Item = {
   name: string;
   unit?: string;
   price?: number;
+  stockQty?: number; // ✅ tổng tồn kho (tất cả kho) — hiện trong gợi ý + cảnh báo hết hàng
 };
 
 type InvoiceLine = {
@@ -311,6 +312,65 @@ function unwrap<T = any>(res: any): T {
   const body = res?.data;
   if (body && typeof body === "object" && "data" in body) return body.data as T;
   return body as T;
+}
+
+// ✅ Bỏ dấu tiếng Việt + chuẩn hoá khoảng trắng — dùng để tìm sản phẩm không phân biệt
+// có/không dấu, hoa/thường, thừa khoảng trắng (fix lỗi gõ "may ep" không ra "Máy ép").
+const VN_DIACRITIC_MAP: Record<string, string> = {
+  à: "a", á: "a", ạ: "a", ả: "a", ã: "a", â: "a", ầ: "a", ấ: "a", ậ: "a", ẩ: "a", ẫ: "a",
+  ă: "a", ằ: "a", ắ: "a", ặ: "a", ẳ: "a", ẵ: "a",
+  è: "e", é: "e", ẹ: "e", ẻ: "e", ẽ: "e", ê: "e", ề: "e", ế: "e", ệ: "e", ể: "e", ễ: "e",
+  ì: "i", í: "i", ị: "i", ỉ: "i", ĩ: "i",
+  ò: "o", ó: "o", ọ: "o", ỏ: "o", õ: "o", ô: "o", ồ: "o", ố: "o", ộ: "o", ổ: "o", ỗ: "o",
+  ơ: "o", ờ: "o", ớ: "o", ợ: "o", ở: "o", ỡ: "o",
+  ù: "u", ú: "u", ụ: "u", ủ: "u", ũ: "u", ư: "u", ừ: "u", ứ: "u", ự: "u", ử: "u", ữ: "u",
+  ỳ: "y", ý: "y", ỵ: "y", ỷ: "y", ỹ: "y",
+  đ: "d",
+};
+
+function normalizeVN(raw: string): string {
+  const lower = (raw || "").trim().toLowerCase();
+  const noDiacritic = lower.replace(/[à-ỹđ]/g, (c) => VN_DIACRITIC_MAP[c] || c);
+  return noDiacritic.replace(/\s+/g, " ").trim();
+}
+
+// ✅ Tô đậm phần khớp với từ khoá tìm kiếm, kể cả khi gõ không dấu.
+// Nhờ removeDiacritics là ánh xạ 1-ký-tự-đổi-1-ký-tự (không đổi độ dài chuỗi),
+// vị trí tìm được trên chuỗi ĐÃ bỏ dấu áp thẳng lại được lên chuỗi GỐC có dấu.
+function highlightMatches(original: string, tokens: string[]): React.ReactNode {
+  if (!original || tokens.length === 0) return original;
+  const normalized = normalizeVN(original);
+
+  const ranges: Array<[number, number]> = [];
+  for (const t of tokens) {
+    if (!t) continue;
+    let from = 0;
+    while (true) {
+      const idx = normalized.indexOf(t, from);
+      if (idx === -1) break;
+      ranges.push([idx, idx + t.length]);
+      from = idx + t.length;
+    }
+  }
+  if (ranges.length === 0) return original;
+
+  ranges.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const r of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1]);
+    else merged.push([...r]);
+  }
+
+  const nodes: React.ReactNode[] = [];
+  let cursor = 0;
+  merged.forEach(([start, end], i) => {
+    if (start > cursor) nodes.push(original.slice(cursor, start));
+    nodes.push(<b key={i}>{original.slice(start, end)}</b>);
+    cursor = end;
+  });
+  if (cursor < original.length) nodes.push(original.slice(cursor));
+  return nodes;
 }
 
 function normalizeDateForInput(raw?: string): string {
@@ -826,6 +886,7 @@ const InvoiceDetailPage: React.FC = () => {
   const { toasts, push, remove } = useToast();
   const toastSuccess = (message: string, title = "Thành công") => push({ type: "success", title, message });
   const toastError = (message: string, title = "Có lỗi") => push({ type: "error", title, message });
+  const toastWarning = (message: string, title = "Lưu ý") => push({ type: "warning", title, message });
 
   // const gotoListSoon = () => setTimeout(() => navigate("/invoices"), 350);
 
@@ -847,6 +908,22 @@ const InvoiceDetailPage: React.FC = () => {
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [partners, setPartners] = useState<Partner[]>([]);
   const [items, setItems] = useState<Item[]>([]);
+
+  // ✅ ref tới ô Số lượng của từng dòng, để tự nhảy focus sau khi chọn sản phẩm
+  const qtyInputRefs = useRef<Record<number, HTMLInputElement | null>>({});
+
+  // ✅ chỉ mục tìm kiếm đã chuẩn hoá (bỏ dấu) — tính 1 lần khi `items` đổi,
+  // không tính lại mỗi lần gõ phím trong ô tìm sản phẩm.
+  const itemsSearchIndex = useMemo(
+    () =>
+      items.map((it) => ({
+        item: it,
+        normName: normalizeVN(it.name || ""),
+        normSku: normalizeVN(it.sku || ""),
+      })),
+    [items]
+  );
+
   const [staffs, setStaffs] = useState<StaffUser[]>([]);
   const [accounts, setAccounts] = useState<PaymentAccount[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1181,7 +1258,9 @@ const InvoiceDetailPage: React.FC = () => {
         sku: i.sku || i.code,
         name: i.name,
         unit: i.unit,
-        price: Number(i.price ?? 0),
+        // ✅ non-admin API chỉ trả sellPrice (không có price) — fallback để không bị mất giá
+        price: Number(i.sellPrice ?? i.price ?? 0),
+        stockQty: Number(i.stockQty ?? 0),
       }));
       setItems(mapped);
     } catch (err) {
@@ -1462,6 +1541,15 @@ const InvoiceDetailPage: React.FC = () => {
       return recomputeInvoiceCore(prev, { lines });
     });
     setOpenItemSuggestIndex(null);
+
+    // ✅ tự nhảy sang ô Số lượng ngay sau khi chọn, đỡ phải bấm Tab/click thêm
+    requestAnimationFrame(() => {
+      const el = qtyInputRefs.current[index];
+      if (el) {
+        el.focus();
+        el.select();
+      }
+    });
   }
 
   function addLine() {
@@ -2308,16 +2396,34 @@ const InvoiceDetailPage: React.FC = () => {
               )}
 
               {invoice.lines.map((line, idx) => {
-                const q = (line.itemName || "").toLowerCase();
+                // ✅ FIX: search cũ dùng .toLowerCase().includes() nên gõ không dấu
+                // (vd "may ep") sẽ KHÔNG khớp được với tên có dấu ("Máy ép") — đây
+                // chính là lý do trước giờ phải đổi tên/mã sản phẩm mới tìm ra được.
+                const qRaw = (line.itemName || "").trim();
+                const qNorm = normalizeVN(qRaw);
+                const qTokens = qNorm.split(" ").filter(Boolean);
+
                 const itemSuggestions =
-                  q.length > 0
-                    ? items
-                      .filter((it) => {
-                        const name = (it.name || "").toLowerCase();
-                        const sku = (it.sku || "").toLowerCase();
-                        return name.includes(q) || sku.includes(q);
-                      })
-                      .slice(0, 50)
+                  qTokens.length > 0
+                    ? itemsSearchIndex
+                        .filter(({ normName, normSku }) => {
+                          const hay = `${normName} ${normSku}`;
+                          // mỗi từ gõ vào phải xuất hiện đâu đó trong tên/mã
+                          // (không cần đúng thứ tự, không cần dấu, không phân biệt hoa/thường)
+                          return qTokens.every((t) => hay.includes(t));
+                        })
+                        // ✅ ưu tiên: khớp đúng mã SKU > tên bắt đầu bằng từ khoá > còn lại
+                        .sort((a, b) => {
+                          const score = (x: typeof a) => {
+                            if (x.normSku === qNorm) return 0;
+                            if (x.normSku.startsWith(qNorm)) return 1;
+                            if (x.normName.startsWith(qNorm)) return 2;
+                            return 3;
+                          };
+                          return score(a) - score(b);
+                        })
+                        .slice(0, 50)
+                        .map(({ item }) => item)
                     : [];
 
                 return (
@@ -2335,19 +2441,51 @@ const InvoiceDetailPage: React.FC = () => {
                       {openItemSuggestIndex === idx && !locked && line.itemName.length > 0 && (
                         <div style={styles.suggestBox}>
                           {itemSuggestions.length > 0 ? (
-                            itemSuggestions.map((it) => (
-                              <div
-                                key={it.id}
-                                style={styles.suggestItem}
-                                onMouseDown={(e) => {
-                                  e.preventDefault();
-                                  selectItemForLine(idx, it);
-                                }}
-                              >
-                                {it.sku ? <b style={{ marginRight: 6 }}>{it.sku}</b> : null}
-                                {it.name}
-                              </div>
-                            ))
+                            itemSuggestions.map((it) => {
+                              // ✅ chỉ cảnh báo hết hàng khi hoá đơn là loại XUẤT (SALES) —
+                              // hoá đơn PURCHASE (nhập hàng) thì tồn=0 là chuyện bình thường
+                              const isOutInvoice = invoice.type === "SALES";
+                              const outOfStock = isOutInvoice && Number(it.stockQty ?? 0) <= 0;
+
+                              return (
+                                <div
+                                  key={it.id}
+                                  style={{
+                                    ...styles.suggestItem,
+                                    ...(outOfStock ? { background: "#fef2f2" } : {}),
+                                  }}
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    if (outOfStock) {
+                                      toastWarning(
+                                        `"${it.name}" đang hết hàng trong kho (tồn: 0). Vẫn có thể chọn, nhưng khi duyệt hoá đơn sẽ báo lỗi nếu chưa nhập thêm hàng.`
+                                      );
+                                    }
+                                    selectItemForLine(idx, it);
+                                  }}
+                                >
+                                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                                    <span>
+                                      {it.sku ? (
+                                        <b style={{ marginRight: 6 }}>{highlightMatches(it.sku, qTokens)}</b>
+                                      ) : null}
+                                      {highlightMatches(it.name, qTokens)}
+                                    </span>
+                                    <span
+                                      style={{
+                                        whiteSpace: "nowrap",
+                                        fontSize: 12,
+                                        color: outOfStock ? "#dc2626" : "#6b7280",
+                                        fontWeight: outOfStock ? 700 : 400,
+                                      }}
+                                    >
+                                      {outOfStock ? "Hết hàng" : `Tồn: ${it.stockQty ?? 0}`}
+                                      {it.price ? ` · ${it.price.toLocaleString("vi-VN")}đ` : ""}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })
                           ) : (
                             <div style={styles.suggestItemMuted}>Không tìm thấy sản phẩm</div>
                           )}
@@ -2357,6 +2495,9 @@ const InvoiceDetailPage: React.FC = () => {
 
                     <div>
                       <input
+                        ref={(el) => {
+                          qtyInputRefs.current[idx] = el;
+                        }}
                         style={{ ...styles.smallInput, textAlign: "center" }}
                         type="number"
                         min={0}
