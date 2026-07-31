@@ -11,7 +11,8 @@ type GroupKey =
   | "ops"
   | "reports"
   | "admin"
-  | "account";
+  | "account"
+  | "quotes";
 
 const LS_KEY = "sidebar_groups_v2";
 
@@ -65,7 +66,6 @@ const Layout: React.FC = () => {
   // ✅ "Phiếu kho" nằm chung mục với "Quản lý hóa đơn" (sales group)
   const salesLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
-    list.push({ to: "revenue", label: "Báo cáo doanh thu" });
     list.push({ to: "invoices", label: "Quản lý hóa đơn" });
 
     // ✅ chỉ admin/accountant mới thấy
@@ -86,6 +86,7 @@ const Layout: React.FC = () => {
 
   const reportLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
+    list.push({ to: "revenue", label: "Báo cáo doanh thu" }); // ✅ chuyển từ nhóm Bán hàng qua đây
     if (isAdmin|| isAccountant) list.push({ to: "debts/by-sale", label: "Công Nợ" });
     if (isAdmin|| isAccountant) list.push({ to: "/reports/ledger", label: "Sổ kho" });
     if (isAdmin|| isAccountant) list.push({ to: "/reports/sales-ledger", label: "Bảng kê bán" });
@@ -95,6 +96,12 @@ const Layout: React.FC = () => {
     if (isAdmin) list.push({ to: "/reports/best-sellers", label: "Hàng bán chạy" });
     return list;
   }, [isAdmin, isAccountant]);
+
+  // ✅ mục lớn riêng, đứng ngang hàng với Tồn kho / Bán hàng..., không nằm lồng trong nhóm nào
+  const quoteLinks = useMemo(
+    () => [{ to: "quote-documents", label: "Kho báo giá" }],
+    []
+  );
 
   const adminLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
@@ -126,6 +133,7 @@ const Layout: React.FC = () => {
     reports: false,
     admin: false,
     account: false,
+    quotes: false,
   });
 
   // ✅ Mobile drawer + Desktop collapse
@@ -273,6 +281,10 @@ const Layout: React.FC = () => {
               {desktopCollapsed ? "HD" : "Quản lý hóa đơn"}
             </NavLink>
 
+            <NavLink to="quote-documents" className={navCls}>
+              {desktopCollapsed ? "BG" : "Kho báo giá"}
+            </NavLink>
+
             {/* ✅ staff KHÔNG thấy movements theo yêu cầu */}
 
             <NavLink to="/me/sales" className={navCls}>
@@ -290,6 +302,7 @@ const Layout: React.FC = () => {
         ) : (
           <div>
             <Group k="inventory" title={desktopCollapsed ? "TK" : "Tồn kho"} links={invLinks} />
+            <Group k="quotes" title={desktopCollapsed ? "BG" : "Kho báo giá"} links={quoteLinks} />
             <Group k="sales" title={desktopCollapsed ? "BH" : "Bán hàng"} links={salesLinks} />
             <Group
               k="reports"

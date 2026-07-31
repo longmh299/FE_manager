@@ -881,11 +881,10 @@ const SalesLedgerReportPage: React.FC = () => {
                 <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200">Tên khách hàng</th>
                 <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200">Tên sản phẩm</th>
 
-                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đơn giá</th>
                 <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-center whitespace-nowrap">Số lượng bán</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đơn giá</th>
                 <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Thành tiền</th>
                 <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đơn giá vốn</th>
-                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Giá vốn TB (kỳ)</th>
 
                 <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Thành tiền vốn</th>
 
@@ -893,6 +892,8 @@ const SalesLedgerReportPage: React.FC = () => {
                 <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Còn nợ</th>
                 <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 whitespace-nowrap">NV sale</th>
                 <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 whitespace-nowrap">Kỹ thuật</th>
+
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Giá vốn TB tháng (tham khảo)</th>
               </tr>
             </thead>
 
@@ -939,17 +940,12 @@ const SalesLedgerReportPage: React.FC = () => {
                       <div className="font-semibold">{r.itemName}</div>
                     </td>
 
-                    <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">{fmtMoney(r.unitPrice)}</td>
                     <td className="px-4 py-3 border-b border-slate-100 text-center whitespace-nowrap">{fmtQty(r.qty)}</td>
+                    <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">{fmtMoney(r.unitPrice)}</td>
                     <td className="px-4 py-3 border-b border-slate-100 text-right font-semibold whitespace-nowrap">
                       {fmtMoney(r.lineAmount)}
                     </td>
                     <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">{fmtMoney(r.unitCost)}</td>
-
-                    {/* ✅ render đúng field mới */}
-                    <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">
-                      {fmtMoney(safeNum(r.unitCostMonthAvg))}
-                    </td>
 
                     <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">{fmtMoney(r.costTotal)}</td>
 
@@ -962,6 +958,11 @@ const SalesLedgerReportPage: React.FC = () => {
 
                     <td className="px-4 py-3 border-b border-slate-100 whitespace-nowrap">{r.saleUserName}</td>
                     <td className="px-4 py-3 border-b border-slate-100 whitespace-nowrap">{r.techUserName}</td>
+
+                    {/* ✅ tách riêng khỏi nhóm giá vốn chính, chỉ mang tính tham khảo */}
+                    <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap text-slate-500">
+                      {fmtMoney(safeNum(r.unitCostMonthAvg))}
+                    </td>
                   </tr>
                 );
               })}
