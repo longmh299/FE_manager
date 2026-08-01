@@ -142,7 +142,7 @@ export function ChatWidget() {
     ? createPortal(
         <div
           ref={panelRef}
-          className="fixed right-4 bottom-20 w-[420px] h-[600px] bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden z-[99999] flex flex-col"
+          className="fixed inset-x-4 bottom-20 top-16 md:inset-x-auto md:top-auto md:right-4 md:w-[420px] md:h-[600px] bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden z-[99999] flex flex-col"
         >
           <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between bg-slate-900">
             <div className="font-semibold text-white flex items-center gap-2">
