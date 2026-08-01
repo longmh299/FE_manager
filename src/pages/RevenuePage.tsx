@@ -137,7 +137,7 @@ function toYmd(d: Date) {
 }
 
 /** ✅ Kỳ so sánh = trọn THÁNG TRƯỚC tháng chứa "from" (giống logic prevMonthRange bên BE reportMailer) */
-function prevCalendarMonthRange(fromStr: string, toStr: string) {
+function prevCalendarMonthRange(fromStr: string, _toStr: string) {
   const f = new Date(fromStr + "T00:00:00");
   const anchor = new Date(f.getFullYear(), f.getMonth() - 1, 1);
   const prevFrom = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
