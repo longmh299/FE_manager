@@ -13,6 +13,7 @@ type GroupKey =
   | "admin"
   | "account"
   | "quotes";
+      
 
 const LS_KEY = "sidebar_groups_v2";
 
@@ -98,8 +99,12 @@ const Layout: React.FC = () => {
   }, [isAdmin, isAccountant]);
 
   // ✅ mục lớn riêng, đứng ngang hàng với Tồn kho / Bán hàng..., không nằm lồng trong nhóm nào
+  // ✅ gộp chung "Kho báo giá" và "Kho video vận hành máy" vào cùng 1 group "quotes"
   const quoteLinks = useMemo(
-    () => [{ to: "quote-documents", label: "Kho báo giá" }],
+    () => [
+      { to: "quote-documents", label: "Kho báo giá" },
+      { to: "machine-videos", label: "Kho video vận hành máy" },
+    ],
     []
   );
 
@@ -285,6 +290,10 @@ const Layout: React.FC = () => {
               {desktopCollapsed ? "BG" : "Kho báo giá"}
             </NavLink>
 
+            <NavLink to="machine-videos" className={navCls}>
+              {desktopCollapsed ? "VD" : "Kho video vận hành máy"}
+            </NavLink>
+
             {/* ✅ staff KHÔNG thấy movements theo yêu cầu */}
 
             <NavLink to="/me/sales" className={navCls}>
@@ -302,7 +311,7 @@ const Layout: React.FC = () => {
         ) : (
           <div>
             <Group k="inventory" title={desktopCollapsed ? "TK" : "Tồn kho"} links={invLinks} />
-            <Group k="quotes" title={desktopCollapsed ? "BG" : "Kho báo giá"} links={quoteLinks} />
+            <Group k="quotes" title={desktopCollapsed ? "BG" : "Kho báo giá & video"} links={quoteLinks} />
             <Group k="sales" title={desktopCollapsed ? "BH" : "Bán hàng"} links={salesLinks} />
             <Group
               k="reports"

@@ -31,7 +31,7 @@ import AuditLogsPage from "./pages/AuditLogsPage";
 import StockInOutReportPage from "./pages/StockInOutReportPage";
 import InvoiceStatusAdminPage from "./pages/InvoiceStatusAdminPage";
 import QuoteDocumentsPage from "./pages/QuoteDocumentsPage";
-
+import MachineVideosPage from "./pages/MachineVideosPage";
 // ✅ NEW: movements page
 import MovementsPage from "./pages/MovementsPage";
 
@@ -71,7 +71,8 @@ const App: React.FC = () => {
           <Route path="partners" element={<CustomersPage />} />
           <Route path="partners/:id" element={<CustomerDetailPage />} />
           <Route path="/customers/:id" element={<CustomerDetailPage />} />
-      <Route path="quote-documents" element={<QuoteDocumentsPage />} />
+          <Route path="quote-documents" element={<QuoteDocumentsPage />} />
+          <Route path="machine-videos" element={<MachineVideosPage />} />
           {/* invoices */}
           <Route path="invoices" element={<InvoicesPage />} />
           <Route path="invoices/new" element={<InvoiceDetailPage />} />
