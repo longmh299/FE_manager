@@ -273,7 +273,8 @@ const QuoteDocumentsPage: React.FC = () => {
         </button>
       </form>
 
-      <div className="overflow-x-auto rounded border">
+      {/* ===== Desktop: bảng đầy đủ (giữ nguyên như cũ) ===== */}
+      <div className="hidden md:block overflow-x-auto rounded border">
         <table className="min-w-full text-sm">
           <thead className="bg-slate-50">
             <tr>
@@ -353,6 +354,75 @@ const QuoteDocumentsPage: React.FC = () => {
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* ===== Mobile: dạng thẻ xếp dọc, bỏ cột "File" (tên file thô không cần thiết
+          với người dùng cuối) — chỉ giữ thông tin thật sự cần dùng. ===== */}
+      <div className="md:hidden space-y-3">
+        {loading ? (
+          <div className="rounded border bg-white px-4 py-6 text-center text-slate-500">Đang tải...</div>
+        ) : rows.length === 0 ? (
+          <div className="rounded border bg-white px-4 py-6 text-center text-slate-500">
+            Chưa có báo giá nào được tải lên
+          </div>
+        ) : (
+          rows.map((doc) => {
+            const wasUpdated =
+              new Date(doc.updatedAt).getTime() - new Date(doc.createdAt).getTime() > 60_000;
+            return (
+              <div key={doc.id} className="rounded border bg-white p-3 shadow-sm">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-medium break-words">{doc.title}</div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {doc.machineCode && (
+                        <span className="inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                          Mã máy: {doc.machineCode}
+                        </span>
+                      )}
+                      {wasUpdated && (
+                        <span className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                          Đã cập nhật
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <span className="shrink-0 whitespace-nowrap text-xs text-slate-400">{formatBytes(doc.fileSize)}</span>
+                </div>
+
+                {doc.note && <div className="mt-1 text-xs text-slate-400 break-words">{doc.note}</div>}
+
+                <div className="mt-2 text-xs text-slate-400">
+                  {doc.uploadedBy?.username || "—"} · {formatDate(doc.createdAt)}
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button
+                    className="rounded border px-2 py-2 text-sm hover:bg-slate-100"
+                    onClick={() => openEdit(doc)}
+                  >
+                    Cập nhật
+                  </button>
+                  <button
+                    className="rounded border px-2 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
+                    disabled={downloadingId === doc.id}
+                    onClick={() => onDownload(doc)}
+                  >
+                    {downloadingId === doc.id ? "Đang tải..." : "Tải xuống"}
+                  </button>
+                  {isAdmin && (
+                    <button
+                      className="col-span-2 rounded border px-2 py-2 text-sm text-red-600 hover:bg-red-50"
+                      onClick={() => onDelete(doc)}
+                    >
+                      Xoá
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
 
       <div className="mt-3 flex items-center justify-between text-sm">

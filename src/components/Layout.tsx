@@ -399,7 +399,9 @@ const Layout: React.FC = () => {
           <ChatWidget />
         </header>
 
-        <div className="flex-1 p-4 overflow-auto">
+        {/* ✅ pb-20 trên mobile để cuối trang (vd nút phân trang) không bị nút
+            ChatWidget (fixed bottom-right, z cao) che mất; desktop giữ pb-4 như cũ */}
+        <div className="flex-1 p-4 pb-20 md:pb-4 overflow-auto">
           <Outlet />
         </div>
       </main>

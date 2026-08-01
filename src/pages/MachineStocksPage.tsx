@@ -839,6 +839,8 @@ const MachineStocksPage: React.FC = () => {
 
       {error && <div style={{ marginBottom: 8, color: "#b91c1c", fontSize: 14 }}>Lỗi: {error}</div>}
 
+      {/* ✅ Desktop: bảng đầy đủ (giữ nguyên như cũ) */}
+      <div className="hidden md:block">
       {/* ✅ Table wrapper: scroll ngang + scroll dọc + sticky header (y như tồn linh kiện) */}
       <div style={{ border: B_HDR, borderRadius: 8, overflow: "hidden", backgroundColor: "#fff" }}>
         <div
@@ -1238,6 +1240,131 @@ const MachineStocksPage: React.FC = () => {
             </tbody>
           </table>
         </div>
+      </div>
+      </div>
+
+      {/* ===== Mobile: dạng thẻ xếp dọc, dùng lại nguyên logic sửa ghi chú /
+          xem ghi chú đầy đủ / sửa tồn kho như bảng desktop, chỉ đổi cách hiển thị ===== */}
+      <div className="md:hidden space-y-3">
+        {loading ? (
+          <div className="rounded border bg-white px-4 py-6 text-center text-slate-500">
+            Đang tải dữ liệu...
+          </div>
+        ) : pagedRows.length === 0 ? (
+          <div className="rounded border bg-white px-4 py-6 text-center text-slate-500">
+            Không có dòng máy nào thỏa điều kiện.
+          </div>
+        ) : (
+          pagedRows.map((row) => {
+            const id = row.itemId || "";
+            const draft = id ? getNoteUi(row) : undefined;
+            const noteText = String(row.note ?? "");
+            const isEditing = !!draft?.editing;
+            const isSaving = !!draft?.saving;
+            const val = draft ? draft.value : noteText;
+            const dirty = draft ? draft.value.trim() !== draft.original.trim() : false;
+            const showEye = noteText.trim().length > 60;
+
+            return (
+              <div key={row.itemId || row.sku || row.name} className="rounded border bg-white p-3 shadow-sm">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-xs text-slate-500">{row.sku}</div>
+                    <div className="font-medium break-words">{row.name}</div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="font-semibold tabular-nums">{fmtQty(row.totalQty)}</div>
+                    <div className="text-xs text-slate-400">{renderUnitCell(row)}</div>
+                  </div>
+                </div>
+
+                {/* Ghi chú — dùng lại y hệt logic sửa/xem của bảng desktop */}
+                <div className="mt-2 border-t pt-2">
+                  {!canEditNote || !row.itemId ? (
+                    <div className="text-xs text-slate-600 break-words">
+                      {noteText ? noteText : <span className="text-slate-400">Không có ghi chú</span>}
+                    </div>
+                  ) : isEditing ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        value={val}
+                        onChange={(e) => changeNoteValue(row.itemId!, e.target.value)}
+                        onKeyDown={(e) => onNoteKeyDown(e, row)}
+                        disabled={isSaving}
+                        placeholder="Nhập ghi chú..."
+                        className="w-full rounded border px-2 py-2 text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => saveNote(row)}
+                        disabled={isSaving || !dirty}
+                        className="shrink-0 rounded border px-2 py-2 text-xs font-bold"
+                        style={{
+                          borderColor: "#16a34a",
+                          backgroundColor: isSaving || !dirty ? "#dcfce7" : "#16a34a",
+                          color: isSaving || !dirty ? "#166534" : "#fff",
+                        }}
+                      >
+                        {isSaving ? "..." : "Lưu"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => cancelEditNote(row.itemId!)}
+                        disabled={isSaving}
+                        className="shrink-0 rounded border px-2 py-2 text-xs font-bold"
+                      >
+                        Huỷ
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 text-xs text-slate-600 break-words">
+                        {noteText ? noteText : <span className="text-slate-400">Không có ghi chú</span>}
+                      </div>
+                      <div className="flex shrink-0 gap-1">
+                        {showEye && (
+                          <button
+                            type="button"
+                            onClick={() => openViewNote(row)}
+                            className="rounded-full border px-2 py-1 text-xs"
+                            title="Xem đầy đủ"
+                          >
+                            👁
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => startEditNote(row)}
+                          className="rounded-full border px-2 py-1 text-xs"
+                          title="Sửa ghi chú"
+                        >
+                          ✎
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {isPrivileged && (
+                  <div className="mt-2 flex items-center justify-between border-t pt-2 text-xs">
+                    <div>
+                      <div className="text-slate-400">Giá vốn TB: {fmtMoney(row.avgCost || 0)}</div>
+                      <div className="text-slate-400">Giá trị tồn: {fmtMoney(row.stockValue || 0)}</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openEdit(row)}
+                      className="rounded border px-3 py-2 text-sm font-semibold"
+                      style={{ borderColor: "#2563eb", backgroundColor: "#eff6ff", color: "#1d4ed8" }}
+                    >
+                      Sửa
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
       </div>
 
       {/* ✅ Pagination responsive */}

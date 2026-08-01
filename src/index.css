@@ -6,6 +6,47 @@ body {
   @apply bg-slate-100 text-slate-900;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
+  -webkit-overflow-scrolling: touch; /* ✅ cuộn mượt như app thật trên iOS */
+}
+
+/* ============================================================
+   ✅ FIX MOBILE: bảng không bị "vỡ cột" / dồn chữ xuống dòng lộn xộn
+   ============================================================
+   Nguyên nhân cũ: các bảng <table> co giãn theo chiều rộng màn hình,
+   trên điện thoại (màn hình hẹp) chữ bị ép xuống dòng liên tục, cột
+   dồn vào nhau đọc không nổi.
+
+   Cách fix: bảng giữ NGUYÊN độ rộng tối thiểu hợp lý, không co bóp nữa.
+   Nếu bảng rộng hơn màn hình -> khung nội dung chính (đã có sẵn
+   "overflow-auto" trong Layout.tsx) sẽ tự cho vuốt ngang để xem hết
+   cột, thay vì ép chữ vỡ dòng. KHÔNG đổi display:block của
+   thead/tbody/tr để không ảnh hưởng các bảng đang dùng sticky header
+   (vd trang Doanh thu, Kho báo giá, Kho video...). */
+/* ⚠️ dùng !important vì nhiều bảng trong app có class Tailwind "min-w-full"
+   (min-width: 100%) — class có độ ưu tiên CSS cao hơn thẻ trần "table",
+   nên nếu không có !important thì rule này sẽ bị class đó ghi đè mất tác dụng. */
+table {
+  min-width: 640px !important;
+}
+
+/* ============================================================
+   ✅ Nút bấm/ô nhập to hơn trên màn hình cảm ứng — chuẩn khuyến nghị
+   của Apple/Google là tối thiểu 44x44px để bấm bằng ngón tay không
+   trượt sang nút cạnh bên.
+   ============================================================ */
+@media (max-width: 767px) {
+  button,
+  input,
+  select,
+  textarea {
+    min-height: 44px;
+  }
+  /* input số/ngày tháng thường bị các trình duyệt mobile thu nhỏ mặc định */
+  input[type="date"],
+  input[type="number"],
+  input[type="text"] {
+    font-size: 16px; /* ✅ ngăn Safari iOS tự zoom vào ô input khi bấm (rất khó chịu) */
+  }
 }
 
 @media print {

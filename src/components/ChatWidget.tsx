@@ -80,6 +80,21 @@ function renderContent(content: string) {
   return <div className="space-y-1">{blocks}</div>;
 }
 
+const WELCOME_TEXT =
+  "Chào bạn! Mình có thể giúp:\n" +
+  "**Tồn kho:**\n" +
+  "- Tra cứu tồn kho sản phẩm (theo tên, SKU, hoặc kho)\n" +
+  "- Kiểm tra sản phẩm sắp hết hàng hoặc hết hàng\n" +
+  "- Phát hiện tồn kho âm (lỗi dữ liệu)\n" +
+  "- Đánh giá tồn kho có đủ bán không, có cần nhập thêm\n" +
+  "**Bán hàng & Doanh thu:**\n" +
+  "- Tra cứu hóa đơn (theo mã, khách hàng, khoảng ngày)\n" +
+  "- Tính doanh thu & số lượng bán của từng sản phẩm trong khoảng thời gian\n" +
+  "**Khách hàng:**\n" +
+  "- Xem lịch sử mua hàng của khách\n" +
+  "- Kiểm tra công nợ, tổng đã mua\n\n" +
+  'Hỏi mình bất kỳ câu nào về kho hàng, bán hàng hoặc khách hàng nhé 😊';
+
 export function ChatWidget() {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -144,9 +159,8 @@ export function ChatWidget() {
 
           <div className="flex-1 overflow-auto px-4 py-3 space-y-3 bg-slate-50">
             {messages.length === 0 && (
-              <div className="text-sm text-slate-500 bg-white border border-slate-200 rounded-xl p-3">
-                Hỏi ví dụ: "còn JL-660 không", "hôm nay bán được bao nhiêu",
-                "sản phẩm nào sắp hết hàng"...
+              <div className="max-w-[88%] rounded-2xl px-3.5 py-2.5 text-sm bg-white text-slate-800 border border-slate-200 shadow-sm">
+                {renderContent(WELCOME_TEXT)}
               </div>
             )}
 
