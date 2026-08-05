@@ -247,19 +247,26 @@ const MachineVideosPage: React.FC = () => {
     setPreviewUrl(null);
   }
 
-  // ✅ iOS: ưu tiên Web Share API (hỗ trợ từ iOS 16.4+) — hiện Share Sheet gốc
+  // ✅ iOS: ưu tiên Web Share API (hỗ trợ từ iOS 15+) — hiện Share Sheet gốc
   // của hệ điều hành, trong đó CÓ SẴN nút "Lưu video", chỉ 1 chạm là lưu xong
   // vào Thư viện ảnh. Nhanh và tiện hơn hẳn cách nhấn giữ video.
-  // Máy chưa hỗ trợ (iOS cũ) tự động rơi về cách cũ: mở khung xem trước, nhấn
-  // giữ video để lưu — không cần biết trước máy khách có hỗ trợ hay không.
-async function downloadForIOS(doc: VideoDoc) {
+  // Máy chưa hỗ trợ (iOS cũ) hoặc file quá nặng tự động rơi về cách tải vào
+  // Files — không cần biết trước máy khách có hỗ trợ hay không.
+  async function downloadForIOS(doc: VideoDoc) {
     setDownloadingId(doc.id);
     try {
       const res = await api.get(`/machine-videos/${doc.id}/preview-url`);
       const { url } = res.data;
 
+      // ✅ Chỉ thử Web Share API với file dưới ~100MB — thực tế Safari hay fail
+      // âm thầm với file lớn hơn (đã kiểm chứng: 5-10MB chạy tốt, 200MB fail).
+      // Biết trước dung lượng (doc.fileSize) nên bỏ qua sớm, đỡ tải phí cả trăm MB
+      // vào RAM rồi mới biết là không share được.
+      const SHARE_SIZE_LIMIT = 100 * 1024 * 1024;
       const canTryShareFiles =
-        typeof navigator.share === "function" && typeof navigator.canShare === "function";
+        typeof navigator.share === "function" &&
+        typeof navigator.canShare === "function" &&
+        (!doc.fileSize || doc.fileSize < SHARE_SIZE_LIMIT);
 
       if (canTryShareFiles) {
         try {
@@ -294,22 +301,31 @@ async function downloadForIOS(doc: VideoDoc) {
         } catch (shareErr: any) {
           // Người dùng bấm Huỷ trong Share Sheet -> không phải lỗi, không cần fallback ồn ào
           if (shareErr?.name === "AbortError") return;
-          console.warn("share file thất bại, chuyển sang cách xem trước + nhấn giữ", shareErr);
+          console.warn("share file thất bại, chuyển sang cách tải vào Files", shareErr);
         }
       }
 
-      // Fallback: máy không hỗ trợ share file -> mở khung xem trước như cũ
+      // Fallback: máy không hỗ trợ share file, HOẶC file quá nặng khiến Web Share
+      // API fail âm thầm (Safari có giới hạn dung lượng chia sẻ trực tiếp từ web,
+      // thường chỉ vài chục-100MB tuỳ máy). Tải hẳn file vào app Files (không giới
+      // hạn dung lượng vì là tải file bình thường, không phải nhét cả file vào RAM
+      // như cách share ở trên) — sau đó người dùng tự vào Files, bấm nút Share ở
+      // ĐÓ để lưu qua Ảnh. Share từ trong app Files không bị giới hạn dung lượng
+      // như Web Share API gọi từ trang web.
+      const dl = await api.get(`/machine-videos/${doc.id}/download-url`);
+      window.location.href = dl.data.url;
       pushToast({
         type: "info",
-        title: "Lưu vào Thư viện ảnh",
-        message: 'Nhấn GIỮ vào video rồi chọn "Lưu video".',
-        ttl: 5000,
+        title: "Video đang tải vào app Files",
+        message:
+          'File nặng nên không share trực tiếp được. Mở app Files, tìm video này, bấm nút Share (hình vuông mũi tên lên) rồi chọn "Lưu video" để chuyển vào Thư viện ảnh.',
+        ttl: 8000,
       });
-      await onPreview(doc);
     } finally {
       setDownloadingId(null);
     }
   }
+
   async function onDownload(doc: VideoDoc) {
     try {
       if (isIOS()) {
