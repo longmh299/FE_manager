@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import api, { extractList } from "../api/client";
 import { useAuth } from "../context/AuthContext";
+import { useToast, ToastHost } from "../components/Toast";
 
 type VideoDoc = {
   id: string;
@@ -94,6 +95,10 @@ const MachineVideosPage: React.FC = () => {
   const [shareLoading, setShareLoading] = useState(false);
   const [shareExpiry, setShareExpiry] = useState<"none" | "7" | "30">("7");
   const [creatingShare, setCreatingShare] = useState(false);
+
+  // ✅ đang chuẩn bị file để chia sẻ qua Share Sheet trên iOS (fetch blob mất thời gian)
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const { toasts, push: pushToast, remove: removeToast } = useToast();
 
   async function load() {
     setLoading(true);
@@ -242,20 +247,56 @@ const MachineVideosPage: React.FC = () => {
     setPreviewUrl(null);
   }
 
+  // ✅ iOS: ưu tiên Web Share API (hỗ trợ từ iOS 16.4+) — hiện Share Sheet gốc
+  // của hệ điều hành, trong đó CÓ SẴN nút "Lưu video", chỉ 1 chạm là lưu xong
+  // vào Thư viện ảnh. Nhanh và tiện hơn hẳn cách nhấn giữ video.
+  // Máy chưa hỗ trợ (iOS cũ) tự động rơi về cách cũ: mở khung xem trước, nhấn
+  // giữ video để lưu — không cần biết trước máy khách có hỗ trợ hay không.
+  async function downloadForIOS(doc: VideoDoc) {
+    setDownloadingId(doc.id);
+    try {
+      const res = await api.get(`/machine-videos/${doc.id}/preview-url`);
+      const { url } = res.data;
+
+      const canTryShareFiles =
+        typeof navigator.share === "function" && typeof navigator.canShare === "function";
+
+      if (canTryShareFiles) {
+        try {
+          const fileRes = await fetch(url);
+          const blob = await fileRes.blob();
+          const file = new File([blob], doc.fileName || `${doc.title}.mp4`, {
+            type: doc.mimeType || blob.type || "video/mp4",
+          });
+
+          if (navigator.canShare({ files: [file] })) {
+            await navigator.share({ files: [file], title: doc.title });
+            return; // ✅ xong — người dùng tự chọn "Lưu video" ngay trong Share Sheet
+          }
+        } catch (shareErr: any) {
+          // Người dùng bấm Huỷ trong Share Sheet -> không phải lỗi, không cần fallback ồn ào
+          if (shareErr?.name === "AbortError") return;
+          console.warn("share file thất bại, chuyển sang cách xem trước + nhấn giữ", shareErr);
+        }
+      }
+
+      // Fallback: máy không hỗ trợ share file -> mở khung xem trước như cũ
+      pushToast({
+        type: "info",
+        title: "Lưu vào Thư viện ảnh",
+        message: 'Nhấn GIỮ vào video rồi chọn "Lưu video".',
+        ttl: 5000,
+      });
+      await onPreview(doc);
+    } finally {
+      setDownloadingId(null);
+    }
+  }
+
   async function onDownload(doc: VideoDoc) {
     try {
-      // ✅ iOS Safari: URL "attachment" (ép tải) chỉ lưu vào app Files, KHÔNG
-      // vào được Thư viện ảnh. Cách duy nhất để lưu vào Photos là mở video ở
-      // chế độ phát trực tiếp (inline) rồi để người dùng tự nhấn giữ / bấm nút
-      // Chia sẻ trong trình phát -> "Lưu video". Đây là giới hạn của iOS,
-      // không có API nào ép lưu thẳng được.
       if (isIOS()) {
-        const res = await api.get(`/machine-videos/${doc.id}/preview-url`);
-        const { url } = res.data;
-        window.open(url, "_blank");
-        alert(
-          'Video đã mở ở tab mới.\nĐể lưu vào Thư viện ảnh: nhấn giữ video (hoặc bấm nút chia sẻ trong trình phát) rồi chọn "Lưu video".'
-        );
+        await downloadForIOS(doc);
         return;
       }
 
@@ -354,6 +395,7 @@ const MachineVideosPage: React.FC = () => {
 
   return (
     <div className="p-4">
+      <ToastHost toasts={toasts} onClose={removeToast} />
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold">Kho video vận hành máy</h1>
         <button
@@ -511,10 +553,11 @@ const MachineVideosPage: React.FC = () => {
                       Xem trước
                     </button>
                     <button
-                      className="rounded border px-3 py-1 mr-2 hover:bg-slate-100"
+                      className="rounded border px-3 py-1 mr-2 hover:bg-slate-100 disabled:opacity-50"
                       onClick={() => onDownload(doc)}
+                      disabled={downloadingId === doc.id}
                     >
-                      Tải xuống
+                      {downloadingId === doc.id ? "Đang chuẩn bị..." : "Tải xuống"}
                     </button>
                     <button
                       className="rounded border px-3 py-1 mr-2 hover:bg-slate-100"
@@ -583,10 +626,11 @@ const MachineVideosPage: React.FC = () => {
                   Xem trước
                 </button>
                 <button
-                  className="rounded border px-2 py-2 text-sm hover:bg-slate-100"
+                  className="rounded border px-2 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
                   onClick={() => onDownload(doc)}
+                  disabled={downloadingId === doc.id}
                 >
-                  Tải xuống
+                  {downloadingId === doc.id ? "Đang chuẩn bị..." : "Tải xuống"}
                 </button>
                 <button
                   className={`rounded border px-2 py-2 text-sm hover:bg-slate-100 ${!isAdmin ? "col-span-2" : ""}`}
