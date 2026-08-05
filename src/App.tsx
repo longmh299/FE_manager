@@ -32,6 +32,7 @@ import StockInOutReportPage from "./pages/StockInOutReportPage";
 import InvoiceStatusAdminPage from "./pages/InvoiceStatusAdminPage";
 import QuoteDocumentsPage from "./pages/QuoteDocumentsPage";
 import MachineVideosPage from "./pages/MachineVideosPage";
+import PublicMachineVideoPage from "./pages/PublicMachineVideoPage"; // ✅ trang chia sẻ công khai, không đăng nhập
 // ✅ NEW: movements page
 import MovementsPage from "./pages/MovementsPage";
 
@@ -130,6 +131,10 @@ const App: React.FC = () => {
         </Route>
 
         <Route path="invoices/:id/print" element={<InvoicePrintPage />} />
+
+        {/* ✅ Link chia sẻ video cho khách — công khai, KHÔNG bọc trong RequireAuth */}
+        <Route path="/s/:token" element={<PublicMachineVideoPage />} />
+
         <Route path="*" element={<div className="p-4">404 Not Found</div>} />
       </Routes>
     </>

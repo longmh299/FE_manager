@@ -10,6 +10,27 @@ body {
 }
 
 /* ============================================================
+   ✅ FIX iPhone: né vùng tai thỏ / Dynamic Island / home indicator
+   ============================================================
+   env(safe-area-inset-*) là biến do iOS Safari tự tính theo từng
+   dòng máy (14 Pro Max khác 13 mini...), chỉ hoạt động khi có
+   viewport-fit=cover trong index.html (dự án đã có sẵn). */
+@supports (padding: max(0px)) {
+  .pt-safe {
+    padding-top: max(env(safe-area-inset-top), 0px);
+  }
+  .pb-safe {
+    padding-bottom: max(env(safe-area-inset-bottom), 0px);
+  }
+  .pl-safe {
+    padding-left: max(env(safe-area-inset-left), 0px);
+  }
+  .pr-safe {
+    padding-right: max(env(safe-area-inset-right), 0px);
+  }
+}
+
+/* ============================================================
    ✅ FIX MOBILE: bảng không bị "vỡ cột" / dồn chữ xuống dòng lộn xộn
    ============================================================
    Nguyên nhân cũ: các bảng <table> co giãn theo chiều rộng màn hình,

@@ -18,6 +18,27 @@ type VideoDoc = {
   uploadedBy?: { id: string; username: string } | null;
 };
 
+// ✅ Link chia sẻ công khai cho khách xem (không đăng nhập, không tải được)
+type ShareLink = {
+  id: string;
+  token: string;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+  createdBy?: { id: string; username: string } | null;
+};
+
+// ✅ Phát hiện iPhone/iPad — Safari iOS không tự lưu file tải về vào Thư viện ảnh
+// như Android, phải mở video ở chế độ phát trực tiếp để dùng nút "Lưu video".
+function isIOS() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const isAppleTouch = /iPad|iPhone|iPod/.test(ua);
+  // iPadOS 13+ báo userAgent như macOS, phân biệt bằng khả năng cảm ứng
+  const isIPadOS = navigator.platform === "MacIntel" && (navigator as any).maxTouchPoints > 1;
+  return isAppleTouch || isIPadOS;
+}
+
 function formatBytes(n: number) {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -66,6 +87,13 @@ const MachineVideosPage: React.FC = () => {
   const [editCategory, setEditCategory] = useState("");
   const [editNote, setEditNote] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
+
+  // ✅ Chia sẻ video cho khách (link công khai, không đăng nhập, không tải được)
+  const [shareDoc, setShareDoc] = useState<VideoDoc | null>(null);
+  const [shareLinks, setShareLinks] = useState<ShareLink[]>([]);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareExpiry, setShareExpiry] = useState<"none" | "7" | "30">("7");
+  const [creatingShare, setCreatingShare] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -216,6 +244,21 @@ const MachineVideosPage: React.FC = () => {
 
   async function onDownload(doc: VideoDoc) {
     try {
+      // ✅ iOS Safari: URL "attachment" (ép tải) chỉ lưu vào app Files, KHÔNG
+      // vào được Thư viện ảnh. Cách duy nhất để lưu vào Photos là mở video ở
+      // chế độ phát trực tiếp (inline) rồi để người dùng tự nhấn giữ / bấm nút
+      // Chia sẻ trong trình phát -> "Lưu video". Đây là giới hạn của iOS,
+      // không có API nào ép lưu thẳng được.
+      if (isIOS()) {
+        const res = await api.get(`/machine-videos/${doc.id}/preview-url`);
+        const { url } = res.data;
+        window.open(url, "_blank");
+        alert(
+          'Video đã mở ở tab mới.\nĐể lưu vào Thư viện ảnh: nhấn giữ video (hoặc bấm nút chia sẻ trong trình phát) rồi chọn "Lưu video".'
+        );
+        return;
+      }
+
       const res = await api.get(`/machine-videos/${doc.id}/download-url`);
       const { url } = res.data;
       // ✅ điều hướng trình duyệt tải thẳng từ R2 — không tải blob qua JS
@@ -225,6 +268,76 @@ const MachineVideosPage: React.FC = () => {
       console.error("download error", err);
       alert("Tải video thất bại, thử lại sau.");
     }
+  }
+
+  // ===== Chia sẻ video (link công khai) =====
+  async function openShare(doc: VideoDoc) {
+    setShareDoc(doc);
+    setShareLinks([]);
+    setShareExpiry("7");
+    setShareLoading(true);
+    try {
+      const res = await api.get(`/machine-videos/${doc.id}/shares`);
+      setShareLinks(res.data?.items ?? []);
+    } catch (err) {
+      console.error("load shares error", err);
+    } finally {
+      setShareLoading(false);
+    }
+  }
+
+  function closeShare() {
+    setShareDoc(null);
+    setShareLinks([]);
+  }
+
+  function buildShareUrl(token: string) {
+    return `${window.location.origin}/s/${token}`;
+  }
+
+  function shareStatus(link: ShareLink): { label: string; cls: string } {
+    if (link.revokedAt) return { label: "Đã thu hồi", cls: "text-slate-400" };
+    if (link.expiresAt && new Date(link.expiresAt).getTime() < Date.now())
+      return { label: "Đã hết hạn", cls: "text-slate-400" };
+    return { label: "Đang hoạt động", cls: "text-green-600" };
+  }
+
+  async function onCreateShare() {
+    if (!shareDoc) return;
+    setCreatingShare(true);
+    try {
+      const expiresInDays = shareExpiry === "none" ? null : Number(shareExpiry);
+      await api.post(`/machine-videos/${shareDoc.id}/shares`, { expiresInDays });
+      const res = await api.get(`/machine-videos/${shareDoc.id}/shares`);
+      setShareLinks(res.data?.items ?? []);
+    } catch (err: any) {
+      alert(err?.response?.data?.message || "Tạo link chia sẻ thất bại");
+    } finally {
+      setCreatingShare(false);
+    }
+  }
+
+  async function onRevokeShare(shareId: string) {
+    if (!window.confirm("Thu hồi link này? Khách đang có link sẽ không xem được nữa.")) return;
+    try {
+      await api.delete(`/machine-videos/shares/${shareId}`);
+      if (shareDoc) {
+        const res = await api.get(`/machine-videos/${shareDoc.id}/shares`);
+        setShareLinks(res.data?.items ?? []);
+      }
+    } catch (err: any) {
+      alert(err?.response?.data?.message || "Thu hồi link thất bại");
+    }
+  }
+
+  function copyShareLink(token: string) {
+    const url = buildShareUrl(token);
+    navigator.clipboard
+      ?.writeText(url)
+      .then(() => alert("Đã copy link chia sẻ!"))
+      .catch(() => {
+        window.prompt("Copy link chia sẻ:", url);
+      });
   }
 
   async function onDelete(doc: VideoDoc) {
@@ -403,6 +516,12 @@ const MachineVideosPage: React.FC = () => {
                     >
                       Tải xuống
                     </button>
+                    <button
+                      className="rounded border px-3 py-1 mr-2 hover:bg-slate-100"
+                      onClick={() => openShare(doc)}
+                    >
+                      Chia sẻ
+                    </button>
                     {isAdmin && (
                       <button
                         className="rounded border px-3 py-1 text-red-600 hover:bg-red-50"
@@ -464,10 +583,16 @@ const MachineVideosPage: React.FC = () => {
                   Xem trước
                 </button>
                 <button
-                  className={`rounded border px-2 py-2 text-sm hover:bg-slate-100 ${!isAdmin ? "col-span-2" : ""}`}
+                  className="rounded border px-2 py-2 text-sm hover:bg-slate-100"
                   onClick={() => onDownload(doc)}
                 >
                   Tải xuống
+                </button>
+                <button
+                  className={`rounded border px-2 py-2 text-sm hover:bg-slate-100 ${!isAdmin ? "col-span-2" : ""}`}
+                  onClick={() => openShare(doc)}
+                >
+                  Chia sẻ
                 </button>
                 {isAdmin && (
                   <button
@@ -606,6 +731,106 @@ const MachineVideosPage: React.FC = () => {
                 style={{ maxHeight: "70vh" }}
               />
             ) : null}
+          </div>
+        </div>
+      )}
+
+      {/* ✅ Modal chia sẻ video: tạo/liệt kê/thu hồi link công khai cho khách xem */}
+      {shareDoc && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={closeShare}
+        >
+          <div
+            className="w-full max-w-lg rounded bg-white p-5 shadow-lg space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Chia sẻ: {shareDoc.title}</h2>
+              <button className="text-slate-500 hover:text-slate-800" onClick={closeShare}>
+                ✕
+              </button>
+            </div>
+            <p className="text-xs text-slate-500">
+              Link chia sẻ cho khách xem trực tiếp trong trình duyệt, <strong>không cần đăng nhập</strong> và{" "}
+              <strong>không có nút tải xuống</strong>. Lưu ý: khách vẫn có thể quay lại màn hình, đây không
+              phải giải pháp chống sao chép tuyệt đối.
+            </p>
+
+            <div className="flex items-end gap-2">
+              <label className="block text-sm flex-1">
+                Thời hạn link
+                <select
+                  className="mt-1 block w-full rounded border px-3 py-2"
+                  value={shareExpiry}
+                  onChange={(e) => setShareExpiry(e.target.value as "none" | "7" | "30")}
+                  disabled={creatingShare}
+                >
+                  <option value="7">7 ngày</option>
+                  <option value="30">30 ngày</option>
+                  <option value="none">Không giới hạn</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={onCreateShare}
+                disabled={creatingShare}
+                className="rounded bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {creatingShare ? "Đang tạo..." : "Tạo link"}
+              </button>
+            </div>
+
+            <div>
+              <div className="mb-1 text-sm font-medium">Các link đã tạo</div>
+              {shareLoading ? (
+                <div className="text-sm text-slate-500">Đang tải...</div>
+              ) : shareLinks.length === 0 ? (
+                <div className="text-sm text-slate-500">Chưa có link chia sẻ nào.</div>
+              ) : (
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {shareLinks.map((link) => {
+                    const st = shareStatus(link);
+                    const active = st.label === "Đang hoạt động";
+                    return (
+                      <div key={link.id} className="rounded border p-2 text-sm">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className={`text-xs font-medium ${st.cls}`}>{st.label}</span>
+                          <span className="text-xs text-slate-400">
+                            {link.expiresAt
+                              ? `Hết hạn: ${formatDate(link.expiresAt)}`
+                              : "Không giới hạn"}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex items-center gap-2">
+                          <input
+                            readOnly
+                            className="flex-1 truncate rounded border bg-slate-50 px-2 py-1 text-xs"
+                            value={buildShareUrl(link.token)}
+                          />
+                          {active && (
+                            <>
+                              <button
+                                className="shrink-0 rounded border px-2 py-1 text-xs hover:bg-slate-100"
+                                onClick={() => copyShareLink(link.token)}
+                              >
+                                Copy
+                              </button>
+                              <button
+                                className="shrink-0 rounded border px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+                                onClick={() => onRevokeShare(link.id)}
+                              >
+                                Thu hồi
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

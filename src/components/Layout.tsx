@@ -326,7 +326,7 @@ const Layout: React.FC = () => {
         )}
       </nav>
 
-      <div className="p-3 border-t border-slate-700 text-xs">
+      <div className="p-3 pb-safe border-t border-slate-700 text-xs">
         {!desktopCollapsed && (
           <div className="mb-2">
             Đăng nhập:{" "}
@@ -359,7 +359,7 @@ const Layout: React.FC = () => {
       {/* SIDEBAR */}
       <aside
         className={[
-          "bg-slate-900 text-slate-100 flex flex-col h-screen",
+          "bg-slate-900 text-slate-100 flex flex-col h-screen pt-safe",
           "transition-transform duration-200 ease-out",
           // desktop width collapse
           desktopCollapsed ? "md:w-20" : "md:w-64",
@@ -376,7 +376,7 @@ const Layout: React.FC = () => {
 
       {/* MAIN */}
       <main className="flex-1 flex flex-col max-h-screen overflow-hidden min-w-0">
-        <header className="h-14 bg-white border-b border-slate-200 flex items-center px-4 gap-3">
+        <header className="min-h-14 pt-safe bg-white border-b border-slate-200 flex items-center px-4 gap-3">
           <button
             type="button"
             onClick={onToggleMenu}
