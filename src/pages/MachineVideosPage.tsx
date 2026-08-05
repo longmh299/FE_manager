@@ -252,7 +252,7 @@ const MachineVideosPage: React.FC = () => {
   // vào Thư viện ảnh. Nhanh và tiện hơn hẳn cách nhấn giữ video.
   // Máy chưa hỗ trợ (iOS cũ) tự động rơi về cách cũ: mở khung xem trước, nhấn
   // giữ video để lưu — không cần biết trước máy khách có hỗ trợ hay không.
-  async function downloadForIOS(doc: VideoDoc) {
+async function downloadForIOS(doc: VideoDoc) {
     setDownloadingId(doc.id);
     try {
       const res = await api.get(`/machine-videos/${doc.id}/preview-url`);
@@ -265,12 +265,30 @@ const MachineVideosPage: React.FC = () => {
         try {
           const fileRes = await fetch(url);
           const blob = await fileRes.blob();
-          const file = new File([blob], doc.fileName || `${doc.title}.mp4`, {
-            type: doc.mimeType || blob.type || "video/mp4",
-          });
+
+          // ✅ Ép cứng MIME type + đuôi file là video/mp4 (99% file upload là mp4).
+          // Lý do: nếu MIME lưu trong DB không chuẩn (vd "application/octet-stream"
+          // do trình duyệt không nhận diện đúng lúc upload), Share Sheet của iOS
+          // vẫn HIỆN nút "Lưu video" bình thường (chỉ dựa theo tên file), nhưng bước
+          // ghi thật vào Thư viện ảnh sẽ fail NGẦM — không có cách nào để trang web
+          // biết được lỗi đó, vì sau khi đưa file cho navigator.share() xử lý xong,
+          // web không còn quyền theo dõi tiếp bước lưu vào Photos của hệ điều hành.
+          const safeName = /\.mp4$/i.test(doc.fileName || "")
+            ? doc.fileName
+            : `${(doc.title || "video").replace(/[^\w.\- ]+/g, "_")}.mp4`;
+          const file = new File([blob], safeName, { type: "video/mp4" });
 
           if (navigator.canShare({ files: [file] })) {
             await navigator.share({ files: [file], title: doc.title });
+            // Lưu ý: navigator.share() chỉ báo đã "đưa file cho hệ thống xử lý",
+            // không đảm bảo bước ghi vào Thư viện ảnh đã xong — đây là giới hạn
+            // của iOS, web không có cách nào theo dõi tiếp bước đó.
+            pushToast({
+              type: "success",
+              title: "Đã gửi đi lưu",
+              message: "Mở app Ảnh để kiểm tra video đã vào Thư viện ảnh chưa.",
+              ttl: 5000,
+            });
             return; // ✅ xong — người dùng tự chọn "Lưu video" ngay trong Share Sheet
           }
         } catch (shareErr: any) {
@@ -292,7 +310,6 @@ const MachineVideosPage: React.FC = () => {
       setDownloadingId(null);
     }
   }
-
   async function onDownload(doc: VideoDoc) {
     try {
       if (isIOS()) {
