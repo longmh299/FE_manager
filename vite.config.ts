@@ -41,6 +41,9 @@ export default defineConfig({
         // ✅ cache app shell để mở lại lần sau nhanh hơn; KHÔNG cache API calls
         // (dữ liệu tồn kho/hóa đơn luôn phải lấy mới, không được cache)
         navigateFallbackDenylist: [/^\/api\//],
+        // ✅ bundle chính đã vượt 2MB mặc định của workbox (build fail nếu không nới),
+        // nới lên 5MB để vẫn precache được file JS chính.
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
       },
     }),
   ],
