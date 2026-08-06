@@ -71,6 +71,21 @@ const PublicMachineVideoPage: React.FC = () => {
     if (!loading) requestAnimationFrame(() => setMounted(true));
   }, [loading]);
 
+  // ✅ Tab trình duyệt của khách không nên hiện "Quản Lý Kho - MCBROTHER" (tên
+  // app nội bộ) khi họ đang xem 1 video sản phẩm — đổi tiêu đề đúng theo video,
+  // trả lại tiêu đề cũ khi rời trang (phòng trường hợp app vẫn chạy nền/SPA).
+  useEffect(() => {
+    const prevTitle = document.title;
+    if (data?.title) {
+      document.title = `${data.title} - MCBROTHER`;
+    } else if (error) {
+      document.title = "Video không khả dụng - MCBROTHER";
+    }
+    return () => {
+      document.title = prevTitle;
+    };
+  }, [data, error]);
+
   // ✅ Trang này đứng ngoài Layout của app (không có body nền sáng bọc sẵn).
   // Tự set màu nền cho <html>/<body> trong lúc trang này mở, để không lộ màu
   // sáng ở mép/khi Safari iOS bounce-scroll, rồi trả lại như cũ lúc rời trang.
@@ -165,10 +180,11 @@ const PublicMachineVideoPage: React.FC = () => {
             </div>
 
             {/* khung video + 4 góc kỹ thuật, tự co theo tỉ lệ video thật (không kéo dãn) */}
+            {/* khung video + 4 góc kỹ thuật, tự co theo tỉ lệ video thật (không kéo dãn) */}
             <div className="relative flex items-center justify-center rounded-lg bg-black p-px">
               <CornerBrackets />
               <div
-                className="select-none"
+                className="relative select-none"
                 onContextMenu={(e) => e.preventDefault()} // ✅ chặn chuột phải -> "Lưu video"
               >
                 <video
@@ -180,6 +196,22 @@ const PublicMachineVideoPage: React.FC = () => {
                   onContextMenu={(e) => e.preventDefault()}
                   className="block max-h-[62dvh] max-w-full rounded-lg sm:max-h-[68dvh]"
                   style={{ width: "auto", height: "auto" }}
+                />
+
+                {/* ✅ Watermark — phủ đè bằng CSS, KHÔNG nằm trong file thật (nên video
+                    tải qua F12 sẽ không có watermark). Lặp chéo góc khắp khung hình
+                    (không chỉ 1 góc) để nếu ai quay màn hình rồi cắt crop bớt khung
+                    hình, watermark vẫn còn dính lại — mờ nhẹ, không cản trở xem nội
+                    dung. Không phải giải pháp chống sao chép tuyệt đối, chỉ giảm giá
+                    trị của bản quay lại + nhắc đây là nội dung riêng tư. */}
+                <div
+                  className="pointer-events-none absolute inset-0 select-none rounded-lg"
+                  style={{
+                    backgroundImage:
+                      "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='160'%3E%3Ctext x='120' y='85' transform='rotate(-28 120 85)' font-family='sans-serif' font-size='15' font-weight='600' fill='white' fill-opacity='0.14' text-anchor='middle'%3EMCBROTHER%3C/text%3E%3C/svg%3E\")",
+                    backgroundRepeat: "repeat",
+                    backgroundSize: "240px 160px",
+                  }}
                 />
               </div>
             </div>
