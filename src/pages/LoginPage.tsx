@@ -6,8 +6,8 @@ import { api } from "../api/client";
 const LoginPage: React.FC = () => {
     
   const { login } = useAuth();
-  const [username, setUsername] = useState("123");
-  const [password, setPassword] = useState("123");
+  const [username, setUsername] = useState("username");
+  const [password, setPassword] = useState("password");
   const [remember, setRemember] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

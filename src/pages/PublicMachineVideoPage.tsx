@@ -180,7 +180,6 @@ const PublicMachineVideoPage: React.FC = () => {
             </div>
 
             {/* khung video + 4 góc kỹ thuật, tự co theo tỉ lệ video thật (không kéo dãn) */}
-            {/* khung video + 4 góc kỹ thuật, tự co theo tỉ lệ video thật (không kéo dãn) */}
             <div className="relative flex items-center justify-center rounded-lg bg-black p-px">
               <CornerBrackets />
               <div
@@ -208,9 +207,9 @@ const PublicMachineVideoPage: React.FC = () => {
                   className="pointer-events-none absolute inset-0 select-none rounded-lg"
                   style={{
                     backgroundImage:
-                      "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='160'%3E%3Ctext x='120' y='85' transform='rotate(-28 120 85)' font-family='sans-serif' font-size='15' font-weight='600' fill='white' fill-opacity='0.14' text-anchor='middle'%3EMCBROTHER%3C/text%3E%3C/svg%3E\")",
+                      "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='130' height='90'%3E%3Ctext x='65' y='48' transform='rotate(-28 65 48)' font-family='sans-serif' font-size='10' font-weight='600' fill='white' fill-opacity='0.16' text-anchor='middle'%3EMCBROTHER%3C/text%3E%3C/svg%3E\")",
                     backgroundRepeat: "repeat",
-                    backgroundSize: "240px 160px",
+                    backgroundSize: "130px 90px",
                   }}
                 />
               </div>
