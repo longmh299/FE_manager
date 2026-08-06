@@ -115,3 +115,11 @@ export interface RevenueInvoice {
   saleUserName?: string | null;
   techUserName?: string | null;
 }
+export interface User {
+  id: string;
+  username: string;
+  fullName?: string | null;
+  role: UserRole;
+  email?: string | null;
+  phone?: string | null;
+}

@@ -10,27 +10,6 @@ body {
 }
 
 /* ============================================================
-   ✅ FIX iPhone: né vùng tai thỏ / Dynamic Island / home indicator
-   ============================================================
-   env(safe-area-inset-*) là biến do iOS Safari tự tính theo từng
-   dòng máy (14 Pro Max khác 13 mini...), chỉ hoạt động khi có
-   viewport-fit=cover trong index.html (dự án đã có sẵn). */
-@supports (padding: max(0px)) {
-  .pt-safe {
-    padding-top: max(env(safe-area-inset-top), 0px);
-  }
-  .pb-safe {
-    padding-bottom: max(env(safe-area-inset-bottom), 0px);
-  }
-  .pl-safe {
-    padding-left: max(env(safe-area-inset-left), 0px);
-  }
-  .pr-safe {
-    padding-right: max(env(safe-area-inset-right), 0px);
-  }
-}
-
-/* ============================================================
    ✅ FIX MOBILE: bảng không bị "vỡ cột" / dồn chữ xuống dòng lộn xộn
    ============================================================
    Nguyên nhân cũ: các bảng <table> co giãn theo chiều rộng màn hình,
@@ -68,6 +47,33 @@ table {
   input[type="text"] {
     font-size: 16px; /* ✅ ngăn Safari iOS tự zoom vào ô input khi bấm (rất khó chịu) */
   }
+}
+
+/* ============================================================
+   ✅ Bản xem trước file báo giá .docx (chuyển qua HTML bằng mammoth)
+   ============================================================
+   Tailwind reset xoá hết margin/border mặc định của trình duyệt, nên
+   HTML thô từ mammoth (chỉ có <p>, <table>, <strong>...) sẽ dính chùm
+   sát nhau, bảng không viền — bù lại thủ công cho dễ đọc. */
+.docx-preview p {
+  margin: 0 0 0.75em;
+  line-height: 1.6;
+}
+.docx-preview table {
+  border-collapse: collapse;
+  margin: 0.75em 0;
+}
+.docx-preview td,
+.docx-preview th {
+  border: 1px solid #cbd5e1;
+  padding: 4px 8px;
+}
+.docx-preview img {
+  max-width: 100%;
+  height: auto;
+}
+.docx-preview strong {
+  font-weight: 700;
 }
 
 @media print {

@@ -1,6 +1,7 @@
 // src/pages/QuoteDocumentsPage.tsx
 import React, { useEffect, useState } from "react";
 import { saveAs } from "file-saver";
+import * as mammoth from "mammoth";
 import api, { extractList } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 
@@ -17,6 +18,8 @@ type QuoteDoc = {
   updatedAt: string;
   uploadedBy?: { id: string; username: string } | null;
 };
+
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 function formatBytes(n: number) {
   if (n < 1024) return `${n} B`;
@@ -61,6 +64,19 @@ const QuoteDocumentsPage: React.FC = () => {
   const [editNote, setEditNote] = useState("");
   const [editFile, setEditFile] = useState<File | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+
+  // ✅ Xem trước file ngay trong trang (không cần tải về máy)
+  // - .pdf -> nhúng trực tiếp qua iframe (trình duyệt tự render)
+  // - .docx -> convert sang HTML bằng mammoth để hiển thị (không phải 100% giống
+  //   Word, bảng/ảnh phức tạp có thể lệch chút, nhưng đủ để xem nội dung/giá)
+  // - .doc cũ -> KHÔNG xem trước được (định dạng nhị phân, trình duyệt không đọc
+  //   nổi), báo rõ cho người dùng thay vì im lặng hoặc lỗi khó hiểu
+  const [previewDoc, setPreviewDoc] = useState<QuoteDoc | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewKind, setPreviewKind] = useState<"pdf" | "docx" | "unsupported" | null>(null);
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -162,6 +178,52 @@ const QuoteDocumentsPage: React.FC = () => {
     } finally {
       setSavingEdit(false);
     }
+  }
+
+  async function onPreview(doc: QuoteDoc) {
+    setPreviewDoc(doc);
+    setPreviewLoading(true);
+    setPreviewKind(null);
+    setPreviewHtml(null);
+    setPreviewUrl(null);
+    setPreviewError(null);
+    try {
+      // ✅ dùng chung endpoint /download — vừa xem trước đúng nội dung bạn sẽ nhận
+      // khi tải xuống (kể cả email/SĐT đã được tự động chèn), vừa không cần thêm
+      // route riêng ở backend. Vì đây là fetch qua JS (không phải điều hướng
+      // trình duyệt), header "attachment" không gây tải file/mở tab lạ gì cả.
+      const res = await api.get(`/quote-documents/${doc.id}/download`, { responseType: "blob" });
+      const blob: Blob = res.data;
+      const nameLower = doc.fileName.toLowerCase();
+      const isPdf = doc.mimeType === "application/pdf" || nameLower.endsWith(".pdf");
+      const isDocx = doc.mimeType === DOCX_MIME || nameLower.endsWith(".docx");
+
+      if (isPdf) {
+        setPreviewKind("pdf");
+        setPreviewUrl(URL.createObjectURL(blob));
+      } else if (isDocx) {
+        const arrayBuffer = await blob.arrayBuffer();
+        const result = await mammoth.convertToHtml({ arrayBuffer });
+        setPreviewKind("docx");
+        setPreviewHtml(result.value);
+      } else {
+        setPreviewKind("unsupported");
+      }
+    } catch (err) {
+      console.error("preview error", err);
+      setPreviewError("Không xem trước được file này, thử tải xuống thay thế.");
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  function closePreview() {
+    if (previewUrl) URL.revokeObjectURL(previewUrl); // ✅ giải phóng bộ nhớ blob URL
+    setPreviewDoc(null);
+    setPreviewKind(null);
+    setPreviewHtml(null);
+    setPreviewUrl(null);
+    setPreviewError(null);
   }
 
   async function onDownload(doc: QuoteDoc) {
@@ -334,6 +396,12 @@ const QuoteDocumentsPage: React.FC = () => {
                       Cập nhật
                     </button>
                     <button
+                      className="rounded border px-3 py-1 mr-2 hover:bg-slate-100"
+                      onClick={() => onPreview(doc)}
+                    >
+                      Xem trước
+                    </button>
+                    <button
                       className="rounded border px-3 py-1 mr-2 hover:bg-slate-100 disabled:opacity-50"
                       disabled={downloadingId === doc.id}
                       onClick={() => onDownload(doc)}
@@ -404,6 +472,12 @@ const QuoteDocumentsPage: React.FC = () => {
                     Cập nhật
                   </button>
                   <button
+                    className="rounded border px-2 py-2 text-sm hover:bg-slate-100"
+                    onClick={() => onPreview(doc)}
+                  >
+                    Xem trước
+                  </button>
+                  <button
                     className="rounded border px-2 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
                     disabled={downloadingId === doc.id}
                     onClick={() => onDownload(doc)}
@@ -447,6 +521,58 @@ const QuoteDocumentsPage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* ✅ Modal xem trước file (pdf nhúng trực tiếp, docx convert qua HTML, .doc cũ báo không hỗ trợ) */}
+      {previewDoc && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={closePreview}
+        >
+          <div
+            className="flex max-h-[85vh] w-full max-w-4xl flex-col rounded bg-white shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b px-4 py-3">
+              <h2 className="font-semibold">{previewDoc.title}</h2>
+              <button className="text-slate-500 hover:text-slate-800" onClick={closePreview}>
+                ✕ Đóng
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4">
+              {previewLoading ? (
+                <div className="flex h-64 items-center justify-center text-slate-500">
+                  Đang tải file...
+                </div>
+              ) : previewError ? (
+                <div className="flex h-64 items-center justify-center text-center text-red-600">
+                  {previewError}
+                </div>
+              ) : previewKind === "pdf" && previewUrl ? (
+                <iframe src={previewUrl} title={previewDoc.title} className="h-[75vh] w-full rounded border" />
+              ) : previewKind === "docx" && previewHtml ? (
+                <div>
+                  <p className="mb-3 text-xs text-slate-400">
+                    Bản xem trước chuyển từ Word sang HTML — bảng/ảnh phức tạp hoặc phần header/footer (logo,
+                    thông tin công ty) có thể không hiển thị y hệt bản gốc. Tải xuống để xem đúng 100%.
+                  </p>
+                  <div
+                    className="docx-preview rounded border bg-white p-4"
+                    dangerouslySetInnerHTML={{ __html: previewHtml }}
+                  />
+                </div>
+              ) : previewKind === "unsupported" ? (
+                <div className="flex h-64 flex-col items-center justify-center gap-2 text-center text-slate-500">
+                  <div>
+                    File định dạng <b>.doc</b> cũ — trình duyệt không xem trước được (chỉ hỗ trợ .docx và .pdf).
+                  </div>
+                  <div className="text-sm">Tải xuống để mở bằng Word, hoặc lưu lại thành .docx rồi tải lên thay thế.</div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ✅ Modal cập nhật báo giá (sửa thông tin và/hoặc thay file khi giá đổi) */}
       {editingDoc && (
