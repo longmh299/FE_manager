@@ -252,8 +252,8 @@ const QuoteDocumentsPage: React.FC = () => {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
-    <div className="p-4">
-      <div className="flex items-center justify-between mb-4">
+    <div className="mx-auto max-w-[1400px] p-4">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">Kho báo giá (file Word/PDF)</h1>
         <button
           className="rounded bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700"
@@ -499,7 +499,7 @@ const QuoteDocumentsPage: React.FC = () => {
         )}
       </div>
 
-      <div className="mt-3 flex items-center justify-between text-sm">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm">
         <span>Tổng: {total} báo giá</span>
         <div className="flex gap-2">
           <button
@@ -581,7 +581,7 @@ const QuoteDocumentsPage: React.FC = () => {
           onClick={() => setEditingDoc(null)}
         >
           <form
-            className="w-full max-w-lg rounded bg-white p-5 shadow-lg space-y-3"
+            className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-y-auto rounded bg-white p-5 shadow-lg space-y-3"
             onClick={(e) => e.stopPropagation()}
             onSubmit={onSaveEdit}
           >
