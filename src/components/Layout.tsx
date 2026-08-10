@@ -13,7 +13,7 @@ type GroupKey =
   | "admin"
   | "account"
   | "quotes";
-      
+
 
 const LS_KEY = "sidebar_groups_v2";
 
@@ -42,8 +42,7 @@ const Layout: React.FC = () => {
   }
 
   const navCls = ({ isActive }: { isActive: boolean }) =>
-    `block rounded px-3 py-2 ${
-      isActive ? "bg-slate-700" : "hover:bg-slate-800"
+    `block rounded px-3 py-2 ${isActive ? "bg-slate-700" : "hover:bg-slate-800"
     }`;
 
   const linkMatch = (to: string) => {
@@ -72,14 +71,14 @@ const Layout: React.FC = () => {
     // ✅ chỉ admin/accountant mới thấy
     if (canSeeMovements) list.push({ to: "movements", label: "Phiếu điều chỉnh" });
 
-    if (isAdmin|| isAccountant) list.push({ to: "/sales-returns", label: "Khách trả hàng" });
+    if (isAdmin || isAccountant) list.push({ to: "/sales-returns", label: "Khách trả hàng" });
     return list;
   }, [isAdmin, canSeeMovements]);
 
 
   const opsLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
-    if (isAdmin|| isAccountant) list.push({ to: "stock-counts", label: "Kiểm kê tồn" });
+    if (isAdmin || isAccountant) list.push({ to: "stock-counts", label: "Kiểm kê tồn" });
     if (isAdmin)
       list.push({ to: "stock-import-opening", label: "Khởi tạo tồn đầu" });
     return list;
@@ -88,9 +87,9 @@ const Layout: React.FC = () => {
   const reportLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
     list.push({ to: "revenue", label: "Báo cáo doanh thu" }); // ✅ chuyển từ nhóm Bán hàng qua đây
-    if (isAdmin|| isAccountant) list.push({ to: "debts/by-sale", label: "Công Nợ" });
-    if (isAdmin|| isAccountant) list.push({ to: "/reports/ledger", label: "Sổ kho" });
-    if (isAdmin|| isAccountant) list.push({ to: "/reports/sales-ledger", label: "Bảng kê bán" });
+    if (isAdmin || isAccountant) list.push({ to: "debts/by-sale", label: "Công Nợ" });
+    if (isAdmin || isAccountant) list.push({ to: "/reports/ledger", label: "Sổ kho" });
+    if (isAdmin || isAccountant) list.push({ to: "/reports/sales-ledger", label: "Bảng kê bán" });
     if (isAdmin || isAccountant)
       list.push({ to: "/reports/stock-inout", label: "Báo cáo XNT" });
     // ✅ chỉ admin xem được hàng bán chạy
@@ -104,6 +103,7 @@ const Layout: React.FC = () => {
     () => [
       { to: "quote-documents", label: "Kho báo giá" },
       { to: "machine-videos", label: "Kho video vận hành máy" },
+      { to: "machine-images", label: "Kho ảnh máy móc" },
     ],
     []
   );
@@ -111,7 +111,7 @@ const Layout: React.FC = () => {
   const adminLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
     if (isAdmin) list.push({ to: "users", label: "Quản lý tài khoản" });
-    if (isAdmin|| isAccountant)
+    if (isAdmin || isAccountant)
       list.push({ to: "payment-accounts", label: "Thêm tài khoản thanh toán" });
     if (canSeeAuditLogs)
       list.push({ to: "audit-logs", label: "Lịch sử thao tác" });
@@ -205,7 +205,7 @@ const Layout: React.FC = () => {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object")
         setOpenGroups((prev) => ({ ...prev, ...parsed }));
-    } catch {}
+    } catch { }
   }, [isStaff]);
 
   // Persist
@@ -213,7 +213,7 @@ const Layout: React.FC = () => {
     if (isStaff) return;
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(openGroups));
-    } catch {}
+    } catch { }
   }, [openGroups, isStaff]);
 
   const toggleGroup = (k: GroupKey) =>
@@ -238,9 +238,8 @@ const Layout: React.FC = () => {
         <button
           type="button"
           onClick={() => toggleGroup(k)}
-          className={`w-full flex items-center justify-between px-3 py-2 rounded text-xs uppercase tracking-wide ${
-            active ? "text-slate-200" : "text-slate-400"
-          } hover:bg-slate-800`}
+          className={`w-full flex items-center justify-between px-3 py-2 rounded text-xs uppercase tracking-wide ${active ? "text-slate-200" : "text-slate-400"
+            } hover:bg-slate-800`}
           title={opened ? "Thu gọn" : "Mở rộng"}
         >
           <span className={desktopCollapsed ? "hidden md:inline-block md:truncate" : ""}>
@@ -293,7 +292,9 @@ const Layout: React.FC = () => {
             <NavLink to="machine-videos" className={navCls}>
               {desktopCollapsed ? "VD" : "Kho video vận hành máy"}
             </NavLink>
-
+            <NavLink to="machine-images" className={navCls}>
+              {desktopCollapsed ? "AM" : "Kho ảnh máy móc"}
+            </NavLink>
             {/* ✅ staff KHÔNG thấy movements theo yêu cầu */}
 
             <NavLink to="/me/sales" className={navCls}>
@@ -318,9 +319,9 @@ const Layout: React.FC = () => {
               title={desktopCollapsed ? "BC" : "Báo cáo & công nợ"}
               links={reportLinks}
             />
-             <Group k="ops" title={desktopCollapsed ? "VH" : "Vận hành"} links={opsLinks} />
+            <Group k="ops" title={desktopCollapsed ? "VH" : "Vận hành"} links={opsLinks} />
             <Group k="admin" title={desktopCollapsed ? "QT" : "Quản trị"} links={adminLinks} />
-             <Group k="partner" title={desktopCollapsed ? "DT" : "Đối tác"} links={partnerLinks} />
+            <Group k="partner" title={desktopCollapsed ? "DT" : "Đối tác"} links={partnerLinks} />
             <Group k="account" title={desktopCollapsed ? "TK" : "Tài khoản"} links={accountLinks} />
           </div>
         )}

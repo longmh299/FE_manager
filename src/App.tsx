@@ -35,7 +35,7 @@ import MachineVideosPage from "./pages/MachineVideosPage";
 import PublicMachineVideoPage from "./pages/PublicMachineVideoPage"; // ✅ trang chia sẻ công khai, không đăng nhập
 // ✅ NEW: movements page
 import MovementsPage from "./pages/MovementsPage";
-
+import MachineImagesPage from "./pages/MachineImagesPage";
 // ✅ NEW: best sellers report
 import BestSellersReportPage from "./pages/BestSellersReportPage";
 
@@ -74,6 +74,7 @@ const App: React.FC = () => {
           <Route path="/customers/:id" element={<CustomerDetailPage />} />
           <Route path="quote-documents" element={<QuoteDocumentsPage />} />
           <Route path="machine-videos" element={<MachineVideosPage />} />
+          <Route path="machine-images" element={<MachineImagesPage />} />
           {/* invoices */}
           <Route path="invoices" element={<InvoicesPage />} />
           <Route path="invoices/new" element={<InvoiceDetailPage />} />
