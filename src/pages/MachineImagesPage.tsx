@@ -17,6 +17,9 @@ type ImageDoc = {
   createdAt: string;
   updatedAt: string;
   uploadedBy?: { id: string; username: string } | null;
+  // ✅ backend trả sẵn link xem trực tiếp cho từng ảnh trong danh sách (để hiện
+  // thumbnail ngay trên lưới) — khác với video (chỉ xin link khi bấm "Xem trước",
+  // vì ảnh nhẹ hơn nhiều nên load thẳng cả list không tốn kém như video).
   previewUrl?: string;
 };
 
@@ -42,7 +45,7 @@ const MachineImagesPage: React.FC = () => {
   const [rows, setRows] = useState<ImageDoc[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [pageSize] = useState(24);
+  const [pageSize] = useState(24); // bội số của 2/3/4 cột cho lưới đẹp
   const [loading, setLoading] = useState(false);
 
   const [showUpload, setShowUpload] = useState(false);
@@ -50,14 +53,16 @@ const MachineImagesPage: React.FC = () => {
   const [machineCode, setMachineCode] = useState("");
   const [category, setCategory] = useState("");
   const [note, setNote] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
+  const [files, setFiles] = useState<File[]>([]); // ✅ ảnh cho phép chọn nhiều file 1 lần
   const [uploading, setUploading] = useState(false);
   const [uploadPct, setUploadPct] = useState(0);
   const [uploadIndex, setUploadIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
+  // ✅ Xem phóng to ảnh ngay trong trang
   const [previewDoc, setPreviewDoc] = useState<ImageDoc | null>(null);
 
+  // ✅ Cập nhật thông tin (tên/mã máy/nhóm/ghi chú) — không đổi file gốc
   const [editingDoc, setEditingDoc] = useState<ImageDoc | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editMachineCode, setEditMachineCode] = useState("");
@@ -93,6 +98,8 @@ const MachineImagesPage: React.FC = () => {
     load();
   }
 
+  // ✅ Upload trực tiếp lên R2 bằng XMLHttpRequest (không qua backend), giống video —
+  //    tránh giới hạn RAM/timeout backend và có % tiến trình.
   function putToR2(uploadUrl: string, f: File, onProgress: (pct: number) => void): Promise<void> {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -129,7 +136,9 @@ const MachineImagesPage: React.FC = () => {
         setUploadIndex(i + 1);
         setUploadPct(0);
 
+        // Bước 1: xin URL upload trực tiếp
         const initRes = await api.post("/machine-images/init", {
+          // ✅ nhiều ảnh cùng lúc thì đánh số cho khỏi trùng tên hiển thị
           title: files.length > 1 ? `${title.trim()} (${i + 1})` : title.trim(),
           machineCode: machineCode.trim() || undefined,
           category: category.trim() || undefined,
@@ -140,7 +149,10 @@ const MachineImagesPage: React.FC = () => {
         });
         const { id, uploadUrl } = initRes.data;
 
+        // Bước 2: PUT file thẳng lên R2, giữ nguyên chất lượng gốc
         await putToR2(uploadUrl, file, setUploadPct);
+
+        // Bước 3: báo backend xác nhận đã upload xong
         await api.post(`/machine-images/${id}/complete`);
       }
 
@@ -199,11 +211,46 @@ const MachineImagesPage: React.FC = () => {
     }
   }
 
+  // ✅ Ưu tiên Web Share API — mở Share Sheet gốc của hệ điều hành (Android/iOS
+  // đều hỗ trợ), trong đó CÓ SẴN nút "Lưu ảnh"/"Lưu vào Ảnh", chỉ 1 chạm là lưu
+  // thẳng vào Thư viện ảnh. Không cần người dùng biết file tải về nằm ở đâu.
+  // Máy không hỗ trợ (trình duyệt cũ, desktop...) tự động rơi về cách tải file
+  // bình thường qua link.
   async function onDownload(doc: ImageDoc) {
     setDownloadingId(doc.id);
     try {
       const res = await api.get(`/machine-images/${doc.id}/download-url`);
       const { url } = res.data;
+
+      const canTryShareFiles =
+        typeof navigator.share === "function" && typeof navigator.canShare === "function";
+
+      if (canTryShareFiles) {
+        try {
+          const fileRes = await fetch(url);
+          const blob = await fileRes.blob();
+          const file = new File([blob], doc.fileName, {
+            type: doc.mimeType || blob.type || "image/jpeg",
+          });
+
+          if (navigator.canShare({ files: [file] })) {
+            await navigator.share({ files: [file], title: doc.title });
+            pushToast({
+              type: "success",
+              title: "Đã gửi đi lưu",
+              message: 'Chọn "Lưu vào Ảnh" (hoặc tương tự) trong bảng vừa hiện ra để lưu vào thư viện ảnh.',
+              ttl: 5000,
+            });
+            return; // ✅ xong — người dùng tự chọn lưu trong Share Sheet
+          }
+        } catch (shareErr: any) {
+          // Người dùng bấm Huỷ trong Share Sheet -> không phải lỗi, im lặng thoát
+          if (shareErr?.name === "AbortError") return;
+          console.warn("share file thất bại, chuyển sang cách tải thường", shareErr);
+        }
+      }
+
+      // Fallback: máy không hỗ trợ Web Share API -> tải file bình thường
       window.location.href = url;
     } catch (err) {
       console.error("download error", err);
@@ -303,7 +350,10 @@ const MachineImagesPage: React.FC = () => {
           {uploading && (
             <div>
               <div className="h-2 w-full rounded bg-slate-200 overflow-hidden">
-                <div className="h-full bg-indigo-600 transition-all" style={{ width: `${uploadPct}%` }} />
+                <div
+                  className="h-full bg-indigo-600 transition-all"
+                  style={{ width: `${uploadPct}%` }}
+                />
               </div>
               <div className="mt-1 text-xs text-slate-500">
                 Đang tải ảnh {uploadIndex}/{files.length}... {uploadPct}%
@@ -333,6 +383,7 @@ const MachineImagesPage: React.FC = () => {
         </button>
       </form>
 
+      {/* ===== Lưới ảnh, dùng chung cho cả desktop và mobile — số cột tự co giãn ===== */}
       {loading ? (
         <div className="rounded border bg-white px-4 py-10 text-center text-slate-500">Đang tải...</div>
       ) : rows.length === 0 ? (
@@ -350,7 +401,12 @@ const MachineImagesPage: React.FC = () => {
                 aria-label={`Xem ảnh ${doc.title}`}
               >
                 {doc.previewUrl ? (
-                  <img src={doc.previewUrl} alt={doc.title} className="h-full w-full object-cover" loading="lazy" />
+                  <img
+                    src={doc.previewUrl}
+                    alt={doc.title}
+                    className="h-full w-full object-cover"
+                    loading="lazy"
+                  />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center text-xs text-slate-400">
                     Không có ảnh
@@ -368,7 +424,10 @@ const MachineImagesPage: React.FC = () => {
                 </div>
 
                 <div className="mt-2 grid grid-cols-2 gap-1.5">
-                  <button className="rounded border px-2 py-1 text-xs hover:bg-slate-100" onClick={() => openEdit(doc)}>
+                  <button
+                    className="rounded border px-2 py-1 text-xs hover:bg-slate-100"
+                    onClick={() => openEdit(doc)}
+                  >
                     Cập nhật
                   </button>
                   <button
@@ -416,9 +475,17 @@ const MachineImagesPage: React.FC = () => {
         </div>
       </div>
 
+      {/* ✅ Modal cập nhật thông tin ảnh (không đổi file gốc) */}
       {editingDoc && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setEditingDoc(null)}>
-          <form className="w-full max-w-lg rounded bg-white p-5 shadow-lg space-y-3" onClick={(e) => e.stopPropagation()} onSubmit={onSaveEdit}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setEditingDoc(null)}
+        >
+          <form
+            className="w-full max-w-lg rounded bg-white p-5 shadow-lg space-y-3"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={onSaveEdit}
+          >
             <h2 className="text-lg font-semibold">Cập nhật thông tin ảnh</h2>
             <p className="text-xs text-slate-500">
               File hiện tại: <span className="font-medium">{editingDoc.fileName}</span>{" "}
@@ -427,26 +494,51 @@ const MachineImagesPage: React.FC = () => {
 
             <label className="block text-sm">
               Tên ảnh / tên máy
-              <input className="mt-1 block w-full rounded border px-3 py-2" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} />
+              <input
+                className="mt-1 block w-full rounded border px-3 py-2"
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+              />
             </label>
             <label className="block text-sm">
               Mã máy
-              <input className="mt-1 block w-full rounded border px-3 py-2" value={editMachineCode} onChange={(e) => setEditMachineCode(e.target.value)} />
+              <input
+                className="mt-1 block w-full rounded border px-3 py-2"
+                value={editMachineCode}
+                onChange={(e) => setEditMachineCode(e.target.value)}
+              />
             </label>
             <label className="block text-sm">
               Nhóm máy
-              <input className="mt-1 block w-full rounded border px-3 py-2" value={editCategory} onChange={(e) => setEditCategory(e.target.value)} />
+              <input
+                className="mt-1 block w-full rounded border px-3 py-2"
+                value={editCategory}
+                onChange={(e) => setEditCategory(e.target.value)}
+              />
             </label>
             <label className="block text-sm">
               Ghi chú
-              <textarea className="mt-1 block w-full rounded border px-3 py-2" rows={2} value={editNote} onChange={(e) => setEditNote(e.target.value)} />
+              <textarea
+                className="mt-1 block w-full rounded border px-3 py-2"
+                rows={2}
+                value={editNote}
+                onChange={(e) => setEditNote(e.target.value)}
+              />
             </label>
 
             <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="rounded border px-4 py-2 hover:bg-slate-50" onClick={() => setEditingDoc(null)}>
+              <button
+                type="button"
+                className="rounded border px-4 py-2 hover:bg-slate-50"
+                onClick={() => setEditingDoc(null)}
+              >
                 Huỷ
               </button>
-              <button type="submit" disabled={savingEdit} className="rounded bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 disabled:opacity-50">
+              <button
+                type="submit"
+                disabled={savingEdit}
+                className="rounded bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
                 {savingEdit ? "Đang lưu..." : "Lưu thay đổi"}
               </button>
             </div>
@@ -454,9 +546,16 @@ const MachineImagesPage: React.FC = () => {
         </div>
       )}
 
+      {/* ✅ Modal xem phóng to ảnh */}
       {previewDoc && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setPreviewDoc(null)}>
-          <div className="w-full max-w-3xl rounded bg-white p-4 shadow-lg" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => setPreviewDoc(null)}
+        >
+          <div
+            className="w-full max-w-3xl rounded bg-white p-4 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="mb-2 flex items-center justify-between">
               <h2 className="font-semibold">{previewDoc.title}</h2>
               <button className="text-slate-500 hover:text-slate-800" onClick={() => setPreviewDoc(null)}>
@@ -464,7 +563,12 @@ const MachineImagesPage: React.FC = () => {
               </button>
             </div>
             {previewDoc.previewUrl ? (
-              <img src={previewDoc.previewUrl} alt={previewDoc.title} className="w-full rounded bg-black" style={{ maxHeight: "70vh", objectFit: "contain" }} />
+              <img
+                src={previewDoc.previewUrl}
+                alt={previewDoc.title}
+                className="w-full rounded bg-black"
+                style={{ maxHeight: "70vh", objectFit: "contain" }}
+              />
             ) : (
               <div className="flex h-64 items-center justify-center text-slate-500">Không có ảnh</div>
             )}
