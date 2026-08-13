@@ -102,7 +102,7 @@ const Layout: React.FC = () => {
   const quoteLinks = useMemo(
     () => [
       { to: "quote-documents", label: "Kho báo giá" },
-      { to: "machine-videos", label: "Kho video vận hành máy" },
+      { to: "machine-videos", label: "Video vận hành máy" },
       { to: "machine-images", label: "Kho ảnh máy móc" },
     ],
     []
@@ -146,16 +146,23 @@ const Layout: React.FC = () => {
   const [desktopCollapsed, setDesktopCollapsed] = useState(false);
 
   // ✅ track breakpoint reliably (fix rotate lag)
+  // ⚠️ Dùng window.innerWidth (LUÔN bao gồm độ rộng thanh cuộn dọc nếu có)
+  // thay vì matchMedia("(min-width: 768px)") — matchMedia đo theo viewport
+  // CSS, ở 1 số trình duyệt viewport này BỊ TRỪ ĐI độ rộng thanh cuộn khi nó
+  // xuất hiện. Hậu quả: trang có nhiều dữ liệu hơn (cần cuộn dọc) có thể bị
+  // tính nhầm là "dưới 768px" dù cửa sổ trình duyệt không hề đổi kích thước,
+  // khiến sidebar tự thu gọn như trên mobile chỉ vì trang đó dài hơn các
+  // trang khác — đúng như hiện tượng bạn gặp ở trang video (13 dòng, cần
+  // cuộn dọc, các trang khác ít dòng hơn thì không cần).
   const [isDesktop, setIsDesktop] = useState(() => {
     if (typeof window === "undefined") return true;
-    return window.matchMedia("(min-width: 768px)").matches;
+    return window.innerWidth >= 768;
   });
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const mq = window.matchMedia("(min-width: 768px)");
     const handler = () => {
-      const next = mq.matches;
+      const next = window.innerWidth >= 768;
       setIsDesktop(next);
 
       // ✅ reset state when crossing breakpoint to avoid stuck/lag
@@ -164,12 +171,10 @@ const Layout: React.FC = () => {
     };
 
     handler();
-    if (mq.addEventListener) mq.addEventListener("change", handler);
-    else mq.addListener(handler);
+    window.addEventListener("resize", handler);
 
     return () => {
-      if (mq.removeEventListener) mq.removeEventListener("change", handler);
-      else mq.removeListener(handler);
+      window.removeEventListener("resize", handler);
     };
   }, []);
 
@@ -290,7 +295,7 @@ const Layout: React.FC = () => {
             </NavLink>
 
             <NavLink to="machine-videos" className={navCls}>
-              {desktopCollapsed ? "VD" : "Kho video vận hành máy"}
+              {desktopCollapsed ? "VD" : "Video vận hành máy"}
             </NavLink>
             <NavLink to="machine-images" className={navCls}>
               {desktopCollapsed ? "AM" : "Kho ảnh máy móc"}
@@ -401,8 +406,15 @@ const Layout: React.FC = () => {
         </header>
 
         {/* ✅ pb-20 trên mobile để cuối trang (vd nút phân trang) không bị nút
-            ChatWidget (fixed bottom-right, z cao) che mất; desktop giữ pb-4 như cũ */}
-        <div className="flex-1 p-4 pb-20 md:pb-4 overflow-auto">
+            ChatWidget (fixed bottom-right, z cao) che mất; desktop giữ pb-4 như cũ.
+            ⚠️ min-w-0 BẮT BUỘC phải có: đây là flex item trong <main> (flex flex-col).
+            Mặc định flex item có min-width: auto (không phải 0), nghĩa là nếu nội
+            dung bên trong (vd bảng nhiều cột/nút như trang video) rộng hơn khung,
+            item này sẽ tự phình to theo nội dung thay vì cuộn ngang bên trong nó
+            — kéo theo cả trang bị giãn/tràn ngang. min-w-0 buộc nó chịu ép đúng
+            kích thước khung, để overflow-auto ở đây (và overflow-x-auto trong
+            từng bảng) hoạt động đúng như mong đợi. */}
+        <div className="flex-1 min-w-0 w-full p-4 pb-20 md:pb-4 overflow-auto">
           <Outlet />
         </div>
       </main>

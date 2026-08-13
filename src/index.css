@@ -24,9 +24,18 @@ body {
    (vd trang Doanh thu, Kho báo giá, Kho video...). */
 /* ⚠️ dùng !important vì nhiều bảng trong app có class Tailwind "min-w-full"
    (min-width: 100%) — class có độ ưu tiên CSS cao hơn thẻ trần "table",
-   nên nếu không có !important thì rule này sẽ bị class đó ghi đè mất tác dụng. */
-table {
-  min-width: 640px !important;
+   nên nếu không có !important thì rule này sẽ bị class đó ghi đè mất tác dụng.
+   ⚠️ CHỈ áp dụng trên MÀN HÌNH NHỎ (mobile) — đây chính là mục đích ban đầu
+   của rule này. Trước đây rule không có @media nên áp dụng luôn cho CẢ
+   desktop, vô tình đè mất "min-w-full" ở MỌI bảng trên desktop luôn (không
+   riêng gì bảng nào) — khiến bảng co về đúng bề rộng nội dung tự nhiên thay
+   vì giãn đầy khung chứa, để lại khoảng trống trống bên phải dù khung chứa
+   rộng hơn. Bọc trong @media (max-width: 767px) để chỉ mobile mới bị ép
+   min-width 640px, còn desktop trả lại quyền kiểm soát cho min-w-full. */
+@media (max-width: 767px) {
+  table {
+    min-width: 640px !important;
+  }
 }
 
 /* ============================================================

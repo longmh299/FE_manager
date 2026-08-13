@@ -1,0 +1,1006 @@
+// src/pages/VideoLibraryPage.tsx
+import React, { useEffect, useState } from "react";
+import api, { extractList } from "../api/client";
+import { useAuth } from "../context/AuthContext";
+import { useToast, ToastHost } from "../components/Toast";
+
+type VideoDoc = {
+  id: string;
+  title: string;
+  machineCode?: string | null;
+  category?: string | null;
+  note?: string | null;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  status: "PENDING" | "READY" | "FAILED";
+  createdAt: string;
+  updatedAt: string;
+  uploadedBy?: { id: string; username: string } | null;
+};
+
+// ✅ Link chia sẻ công khai cho khách xem (không đăng nhập, không tải được)
+type ShareLink = {
+  id: string;
+  token: string;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+  createdBy?: { id: string; username: string } | null;
+};
+
+// ✅ Phát hiện iPhone/iPad — Safari iOS không tự lưu file tải về vào Thư viện ảnh
+// như Android, phải mở video ở chế độ phát trực tiếp để dùng nút "Lưu video".
+function isIOS() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const isAppleTouch = /iPad|iPhone|iPod/.test(ua);
+  // iPadOS 13+ báo userAgent như macOS, phân biệt bằng khả năng cảm ứng
+  const isIPadOS = navigator.platform === "MacIntel" && (navigator as any).maxTouchPoints > 1;
+  return isAppleTouch || isIPadOS;
+}
+
+function formatBytes(n: number) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function formatDate(iso?: string) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("vi-VN") + " " + d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+}
+
+// ✅ Hằng số phải khớp CHÍNH XÁC với OPERATION_MANUAL_CATEGORY /
+// OPERATION_DEMO_CATEGORY bên BE (src/services/machineVideos.service.ts).
+const OPERATION_MANUAL_CATEGORY = "__operation_manual__";
+const OPERATION_DEMO_CATEGORY = "__operation_demo__";
+
+type VideoType = "DEMO" | "MANUAL";
+
+const TYPE_OPTIONS: { value: VideoType; label: string; uploadPlaceholder: string }[] = [
+  { value: "DEMO", label: "Video chạy máy", uploadPlaceholder: 'vd "Vận hành máy đóng vỉ DPP-150E"' },
+  { value: "MANUAL", label: "Video hướng dẫn vận hành", uploadPlaceholder: 'vd "Hướng dẫn vận hành máy đóng vỉ DPP-150E"' },
+];
+
+// ✅ Giá trị GHI vào DB khi tải lên / sửa video — luôn tường minh (không bao
+// giờ gửi chuỗi rỗng), để không rơi vào NULL gây khó hiểu khi xem trực tiếp
+// trong DB (xem giải thích OPERATION_DEMO_CATEGORY bên BE).
+function typeToWriteCategory(t: VideoType): string {
+  return t === "MANUAL" ? OPERATION_MANUAL_CATEGORY : OPERATION_DEMO_CATEGORY;
+}
+
+// ✅ Giá trị dùng để LỌC danh sách — tab "Video chạy máy" phải bao gồm cả
+// video cũ có category NULL hoặc category tự do (trước khi có tính năng
+// này), nên KHÔNG được lọc chính xác bằng OPERATION_DEMO_CATEGORY ở đây,
+// phải để trống (undefined) cho BE áp dụng luật "khác video hướng dẫn" thay
+// vì "đúng bằng video chạy máy".
+function typeToListFilter(t: VideoType): string | undefined {
+  return t === "MANUAL" ? OPERATION_MANUAL_CATEGORY : undefined;
+}
+
+function categoryToType(category?: string | null): VideoType {
+  return category === OPERATION_MANUAL_CATEGORY ? "MANUAL" : "DEMO";
+}
+
+// ✅ 1 trang duy nhất gộp cả "video chạy máy" và "video hướng dẫn vận hành",
+// lọc bằng 2 nút gạt ở đầu trang thay vì tách route/menu riêng — đỡ dài menu,
+// tiện thao tác trên mobile. Khi tải lên/sửa, bắt buộc chọn 1 trong 2 loại
+// qua dropdown nên video nào cũng được phân loại rõ ràng, không bỏ trống.
+const VideoLibraryPage: React.FC = () => {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+
+  const [activeType, setActiveType] = useState<VideoType>("DEMO");
+
+  const [q, setQ] = useState("");
+  const [rows, setRows] = useState<VideoDoc[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(20);
+  const [loading, setLoading] = useState(false);
+
+  const [showUpload, setShowUpload] = useState(false);
+  const [title, setTitle] = useState("");
+  const [machineCode, setMachineCode] = useState("");
+  // ✅ loại video được chọn lúc tải lên — mặc định theo tab đang xem cho tiện,
+  // nhưng người dùng vẫn đổi được nếu muốn tải video khác loại từ tab này.
+  const [uploadType, setUploadType] = useState<VideoType>("DEMO");
+  const [note, setNote] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadPct, setUploadPct] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  // ✅ Xem trước video ngay trong trang (không cần tải về máy)
+  const [previewDoc, setPreviewDoc] = useState<VideoDoc | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  // ✅ Cập nhật thông tin (tên/mã máy/nhóm/ghi chú) — không đổi file gốc.
+  // Nếu quay lại video khác hẳn thì nên xoá + upload mới cho rõ ràng, đỡ nhầm lẫn.
+  const [editingDoc, setEditingDoc] = useState<VideoDoc | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editMachineCode, setEditMachineCode] = useState("");
+  const [editType, setEditType] = useState<VideoType>("DEMO");
+  const [editNote, setEditNote] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  // ✅ Chia sẻ video cho khách (link công khai, không đăng nhập, không tải được)
+  const [shareDoc, setShareDoc] = useState<VideoDoc | null>(null);
+  const [shareLinks, setShareLinks] = useState<ShareLink[]>([]);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareExpiry, setShareExpiry] = useState<"none" | "7" | "30">("7");
+  const [creatingShare, setCreatingShare] = useState(false);
+
+  // ✅ đang chuẩn bị file để chia sẻ qua Share Sheet trên iOS (fetch blob mất thời gian)
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const { toasts, push: pushToast, remove: removeToast } = useToast();
+
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await api.get("/machine-videos", {
+        params: { q, page, pageSize, category: typeToListFilter(activeType) },
+      });
+      const data = res.data;
+      setRows(extractList<VideoDoc>(data));
+      setTotal(data?.total ?? 0);
+    } catch (err) {
+      console.error("load machine videos error", err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, activeType]);
+
+  // ✅ Đổi tab loại video (chạy máy / hướng dẫn): về trang 1 + tải lại danh
+  // sách + mặc định dropdown lúc upload theo tab đang xem cho tiện.
+  function onChangeType(t: VideoType) {
+    if (t === activeType) return;
+    setActiveType(t);
+    setPage(1);
+    setUploadType(t);
+  }
+
+  function onSearch(e: React.FormEvent) {
+    e.preventDefault();
+    setPage(1);
+    load();
+  }
+
+  // ✅ Upload trực tiếp lên R2 bằng XMLHttpRequest (không qua backend) để:
+  //    - không giới hạn bởi RAM/timeout của Render
+  //    - có % tiến trình cho video nặng (fetch không hỗ trợ tốt việc này)
+  function putToR2(uploadUrl: string, f: File, onProgress: (pct: number) => void): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", uploadUrl, true);
+      xhr.setRequestHeader("Content-Type", f.type || "application/octet-stream");
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error(`Upload lên storage thất bại (HTTP ${xhr.status})`));
+      };
+      xhr.onerror = () => reject(new Error("Upload lên storage thất bại (mất kết nối mạng)"));
+      xhr.send(f);
+    });
+  }
+
+  async function onUpload(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (!file) {
+      setError("Chọn file video trước đã.");
+      return;
+    }
+    if (!title.trim()) {
+      setError("Nhập tên video / tên máy để sau này dễ tìm.");
+      return;
+    }
+
+    setUploading(true);
+    setUploadPct(0);
+    try {
+      // Bước 1: xin URL upload trực tiếp
+      const initRes = await api.post("/machine-videos/init", {
+        title: title.trim(),
+        machineCode: machineCode.trim() || undefined,
+        category: typeToWriteCategory(uploadType),
+        note: note.trim() || undefined,
+        fileName: file.name,
+        mimeType: file.type || "application/octet-stream",
+        fileSize: file.size,
+      });
+      const { id, uploadUrl } = initRes.data;
+
+      // Bước 2: PUT file thẳng lên R2, giữ nguyên chất lượng gốc (không nén/convert)
+      await putToR2(uploadUrl, file, setUploadPct);
+
+      // Bước 3: báo backend xác nhận đã upload xong
+      await api.post(`/machine-videos/${id}/complete`);
+
+      setTitle("");
+      setMachineCode("");
+      setNote("");
+      setFile(null);
+      setShowUpload(false);
+
+      // ✅ Chuyển luôn sang đúng tab của video vừa tải để thấy ngay kết quả
+      // (nếu tải từ tab này nhưng chọn loại kia trong dropdown).
+      if (uploadType !== activeType) {
+        setActiveType(uploadType); // effect [page, activeType] sẽ tự load lại
+      } else {
+        setPage(1);
+        await load();
+      }
+    } catch (err: any) {
+      setError(err?.response?.data?.message || err?.message || "Tải video lên thất bại");
+    } finally {
+      setUploading(false);
+      setUploadPct(0);
+    }
+  }
+
+  function openEdit(doc: VideoDoc) {
+    setEditingDoc(doc);
+    setEditTitle(doc.title);
+    setEditMachineCode(doc.machineCode || "");
+    setEditType(categoryToType(doc.category));
+    setEditNote(doc.note || "");
+  }
+
+  async function onSaveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingDoc) return;
+    if (!editTitle.trim()) {
+      alert("Tên video không được để trống.");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      await api.put(`/machine-videos/${editingDoc.id}`, {
+        title: editTitle.trim(),
+        machineCode: editMachineCode.trim(),
+        category: typeToWriteCategory(editType),
+        note: editNote.trim(),
+      });
+      setEditingDoc(null);
+      await load();
+    } catch (err: any) {
+      alert(err?.response?.data?.message || "Cập nhật thất bại");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  async function onPreview(doc: VideoDoc) {
+    setPreviewDoc(doc);
+    setPreviewLoading(true);
+    setPreviewUrl(null);
+    try {
+      const res = await api.get(`/machine-videos/${doc.id}/preview-url`);
+      setPreviewUrl(res.data.url);
+    } catch (err) {
+      console.error("preview error", err);
+      alert("Không xem trước được video này, thử tải xuống thay thế.");
+      setPreviewDoc(null);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  function closePreview() {
+    setPreviewDoc(null);
+    setPreviewUrl(null);
+  }
+
+  // ✅ iOS: ưu tiên Web Share API (hỗ trợ từ iOS 15+) — hiện Share Sheet gốc
+  // của hệ điều hành, trong đó CÓ SẴN nút "Lưu video", chỉ 1 chạm là lưu xong
+  // vào Thư viện ảnh. Nhanh và tiện hơn hẳn cách nhấn giữ video.
+  // Máy chưa hỗ trợ (iOS cũ) hoặc file quá nặng tự động rơi về cách tải vào
+  // Files — không cần biết trước máy khách có hỗ trợ hay không.
+  async function downloadForIOS(doc: VideoDoc) {
+    setDownloadingId(doc.id);
+    try {
+      const res = await api.get(`/machine-videos/${doc.id}/preview-url`);
+      const { url } = res.data;
+
+      // ✅ Chỉ thử Web Share API với file dưới ~100MB — thực tế Safari hay fail
+      // âm thầm với file lớn hơn (đã kiểm chứng: 5-10MB chạy tốt, 200MB fail).
+      // Biết trước dung lượng (doc.fileSize) nên bỏ qua sớm, đỡ tải phí cả trăm MB
+      // vào RAM rồi mới biết là không share được.
+      const SHARE_SIZE_LIMIT = 100 * 1024 * 1024;
+      const canTryShareFiles =
+        typeof navigator.share === "function" &&
+        typeof navigator.canShare === "function" &&
+        (!doc.fileSize || doc.fileSize < SHARE_SIZE_LIMIT);
+
+      if (canTryShareFiles) {
+        try {
+          const fileRes = await fetch(url);
+          const blob = await fileRes.blob();
+
+          // ✅ Ép cứng MIME type + đuôi file là video/mp4 (99% file upload là mp4).
+          // Lý do: nếu MIME lưu trong DB không chuẩn (vd "application/octet-stream"
+          // do trình duyệt không nhận diện đúng lúc upload), Share Sheet của iOS
+          // vẫn HIỆN nút "Lưu video" bình thường (chỉ dựa theo tên file), nhưng bước
+          // ghi thật vào Thư viện ảnh sẽ fail NGẦM — không có cách nào để trang web
+          // biết được lỗi đó, vì sau khi đưa file cho navigator.share() xử lý xong,
+          // web không còn quyền theo dõi tiếp bước lưu vào Photos của hệ điều hành.
+          const safeName = /\.mp4$/i.test(doc.fileName || "")
+            ? doc.fileName
+            : `${(doc.title || "video").replace(/[^\w.\- ]+/g, "_")}.mp4`;
+          const file = new File([blob], safeName, { type: "video/mp4" });
+
+          if (navigator.canShare({ files: [file] })) {
+            await navigator.share({ files: [file], title: doc.title });
+            // Lưu ý: navigator.share() chỉ báo đã "đưa file cho hệ thống xử lý",
+            // không đảm bảo bước ghi vào Thư viện ảnh đã xong — đây là giới hạn
+            // của iOS, web không có cách nào theo dõi tiếp bước đó.
+            pushToast({
+              type: "success",
+              title: "Đã gửi đi lưu",
+              message: "Mở app Ảnh để kiểm tra video đã vào Thư viện ảnh chưa.",
+              ttl: 5000,
+            });
+            return; // ✅ xong — người dùng tự chọn "Lưu video" ngay trong Share Sheet
+          }
+        } catch (shareErr: any) {
+          // Người dùng bấm Huỷ trong Share Sheet -> không phải lỗi, không cần fallback ồn ào
+          if (shareErr?.name === "AbortError") return;
+          console.warn("share file thất bại, chuyển sang cách tải vào Files", shareErr);
+        }
+      }
+
+      // Fallback: máy không hỗ trợ share file, HOẶC file quá nặng khiến Web Share
+      // API fail âm thầm (Safari có giới hạn dung lượng chia sẻ trực tiếp từ web,
+      // thường chỉ vài chục-100MB tuỳ máy). Tải hẳn file vào app Files (không giới
+      // hạn dung lượng vì là tải file bình thường, không phải nhét cả file vào RAM
+      // như cách share ở trên) — sau đó người dùng tự vào Files, bấm nút Share ở
+      // ĐÓ để lưu qua Ảnh. Share từ trong app Files không bị giới hạn dung lượng
+      // như Web Share API gọi từ trang web.
+      const dl = await api.get(`/machine-videos/${doc.id}/download-url`);
+      window.location.href = dl.data.url;
+      pushToast({
+        type: "info",
+        title: "Video đang tải vào app Files",
+        message:
+          'File nặng nên không share trực tiếp được. Mở app Files, tìm video này, bấm nút Share (hình vuông mũi tên lên) rồi chọn "Lưu video" để chuyển vào Thư viện ảnh.',
+        ttl: 8000,
+      });
+    } finally {
+      setDownloadingId(null);
+    }
+  }
+
+  async function onDownload(doc: VideoDoc) {
+    try {
+      if (isIOS()) {
+        await downloadForIOS(doc);
+        return;
+      }
+
+      const res = await api.get(`/machine-videos/${doc.id}/download-url`);
+      const { url } = res.data;
+      // ✅ điều hướng trình duyệt tải thẳng từ R2 — không tải blob qua JS
+      // (tránh chiếm RAM trình duyệt với file video vài GB)
+      window.location.href = url;
+    } catch (err) {
+      console.error("download error", err);
+      alert("Tải video thất bại, thử lại sau.");
+    }
+  }
+
+  // ===== Chia sẻ video (link công khai) =====
+  async function openShare(doc: VideoDoc) {
+    setShareDoc(doc);
+    setShareLinks([]);
+    setShareExpiry("7");
+    setShareLoading(true);
+    try {
+      const res = await api.get(`/machine-videos/${doc.id}/shares`);
+      setShareLinks(res.data?.items ?? []);
+    } catch (err) {
+      console.error("load shares error", err);
+    } finally {
+      setShareLoading(false);
+    }
+  }
+
+  function closeShare() {
+    setShareDoc(null);
+    setShareLinks([]);
+  }
+
+  function buildShareUrl(token: string) {
+    return `${window.location.origin}/s/${token}`;
+  }
+
+  function shareStatus(link: ShareLink): { label: string; cls: string } {
+    if (link.revokedAt) return { label: "Đã thu hồi", cls: "text-slate-400" };
+    if (link.expiresAt && new Date(link.expiresAt).getTime() < Date.now())
+      return { label: "Đã hết hạn", cls: "text-slate-400" };
+    return { label: "Đang hoạt động", cls: "text-green-600" };
+  }
+
+  async function onCreateShare() {
+    if (!shareDoc) return;
+    setCreatingShare(true);
+    try {
+      const expiresInDays = shareExpiry === "none" ? null : Number(shareExpiry);
+      await api.post(`/machine-videos/${shareDoc.id}/shares`, { expiresInDays });
+      const res = await api.get(`/machine-videos/${shareDoc.id}/shares`);
+      setShareLinks(res.data?.items ?? []);
+    } catch (err: any) {
+      alert(err?.response?.data?.message || "Tạo link chia sẻ thất bại");
+    } finally {
+      setCreatingShare(false);
+    }
+  }
+
+  async function onRevokeShare(shareId: string) {
+    if (!window.confirm("Thu hồi link này? Khách đang có link sẽ không xem được nữa.")) return;
+    try {
+      await api.delete(`/machine-videos/shares/${shareId}`);
+      if (shareDoc) {
+        const res = await api.get(`/machine-videos/${shareDoc.id}/shares`);
+        setShareLinks(res.data?.items ?? []);
+      }
+    } catch (err: any) {
+      alert(err?.response?.data?.message || "Thu hồi link thất bại");
+    }
+  }
+
+  function copyShareLink(token: string) {
+    const url = buildShareUrl(token);
+    navigator.clipboard
+      ?.writeText(url)
+      .then(() => alert("Đã copy link chia sẻ!"))
+      .catch(() => {
+        window.prompt("Copy link chia sẻ:", url);
+      });
+  }
+
+  async function onDelete(doc: VideoDoc) {
+    if (!window.confirm(`Xoá video "${doc.title}"? Không thể hoàn tác.`)) return;
+    try {
+      await api.delete(`/machine-videos/${doc.id}`);
+      await load();
+    } catch (err: any) {
+      alert(err?.response?.data?.message || "Xoá thất bại");
+    }
+  }
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  return (
+    <div className="p-4 w-full">
+      <ToastHost toasts={toasts} onClose={removeToast} />
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-xl font-semibold">Video vận hành máy</h1>
+        <button
+          className="rounded bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700"
+          onClick={() => setShowUpload((v) => !v)}
+        >
+          {showUpload ? "Đóng" : "+ Tải video lên"}
+        </button>
+      </div>
+
+      {/* ✅ Toggle 2 loại video — thay cho 2 trang/menu riêng, đỡ dài menu và
+          tiện chuyển qua lại trên mobile. */}
+      <div className="mb-4 inline-flex rounded-lg border bg-slate-100 p-1">
+        {TYPE_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChangeType(opt.value)}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+              activeType === opt.value
+                ? "bg-white text-indigo-700 shadow-sm"
+                : "text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      {showUpload && (
+        <form onSubmit={onUpload} className="mb-5 rounded border p-4 space-y-3 bg-slate-50">
+          {error && <div className="rounded bg-red-50 px-3 py-2 text-red-700 text-sm">{error}</div>}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <label className="block text-sm">
+              Loại video <span className="text-red-500">*</span>
+              <select
+                className="mt-1 block w-full rounded border px-3 py-2 bg-white"
+                value={uploadType}
+                onChange={(e) => setUploadType(e.target.value as VideoType)}
+                disabled={uploading}
+              >
+                {TYPE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-sm">
+              Tên video / tên máy <span className="text-red-500">*</span>
+              <input
+                className="mt-1 block w-full rounded border px-3 py-2"
+                placeholder={TYPE_OPTIONS.find((o) => o.value === uploadType)?.uploadPlaceholder}
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                disabled={uploading}
+              />
+            </label>
+            <label className="block text-sm">
+              Mã máy (để tìm nhanh)
+              <input
+                className="mt-1 block w-full rounded border px-3 py-2"
+                placeholder='vd "DPP-150E"'
+                value={machineCode}
+                onChange={(e) => setMachineCode(e.target.value)}
+                disabled={uploading}
+              />
+            </label>
+            <label className="block text-sm">
+              File video <span className="text-red-500">*</span>
+              <input
+                type="file"
+                accept="video/*"
+                className="mt-1 block w-full rounded border px-3 py-2 bg-white"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+                disabled={uploading}
+              />
+              {file && (
+                <span className="mt-1 block text-xs text-slate-500">{formatBytes(file.size)}</span>
+              )}
+            </label>
+          </div>
+          <label className="block text-sm">
+            Ghi chú (tuỳ chọn)
+            <textarea
+              className="mt-1 block w-full rounded border px-3 py-2"
+              rows={2}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              disabled={uploading}
+            />
+          </label>
+
+          {uploading && (
+            <div>
+              <div className="h-2 w-full rounded bg-slate-200 overflow-hidden">
+                <div
+                  className="h-full bg-indigo-600 transition-all"
+                  style={{ width: `${uploadPct}%` }}
+                />
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                Đang tải lên... {uploadPct}% — video nặng có thể mất vài phút, đừng tắt trang.
+              </div>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={uploading}
+            className="rounded bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {uploading ? "Đang tải lên..." : "Lưu vào kho"}
+          </button>
+        </form>
+      )}
+
+      <form onSubmit={onSearch} className="mb-4 flex gap-2">
+        <input
+          className="flex-1 rounded border px-3 py-2"
+          placeholder="Tìm theo tên máy, mã máy, tên file..."
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <button type="submit" className="rounded border px-4 py-2 hover:bg-slate-50">
+          Tìm
+        </button>
+      </form>
+
+      {/* ===== Desktop: bảng đầy đủ (giữ nguyên như cũ) ===== */}
+      <div className="hidden md:block w-full overflow-x-auto rounded border">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-50">
+            <tr>
+              <th className="px-3 py-2 text-left">Tên video</th>
+              <th className="px-3 py-2 text-left">Mã máy</th>
+              <th className="px-3 py-2 text-left">File</th>
+              <th className="px-3 py-2 text-left">Dung lượng</th>
+              <th className="px-3 py-2 text-left">Người tải lên</th>
+              <th className="px-3 py-2 text-left">Ngày tải lên</th>
+              <th className="px-3 py-2 text-right">Thao tác</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td colSpan={7} className="px-3 py-6 text-center text-slate-500">
+                  Đang tải...
+                </td>
+              </tr>
+            ) : rows.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="px-3 py-6 text-center text-slate-500">
+                  Chưa có video nào ở mục này
+                </td>
+              </tr>
+            ) : (
+              rows.map((doc) => (
+                <tr key={doc.id} className="border-t hover:bg-slate-50">
+                  <td className="px-3 py-2">
+                    <div className="font-medium">{doc.title}</div>
+                    {doc.note && <div className="text-xs text-slate-400">{doc.note}</div>}
+                  </td>
+                  <td className="px-3 py-2">{doc.machineCode || "—"}</td>
+                  <td className="px-3 py-2 text-slate-500">{doc.fileName}</td>
+                  <td className="px-3 py-2">{formatBytes(doc.fileSize)}</td>
+                  <td className="px-3 py-2">{doc.uploadedBy?.username || "—"}</td>
+                  <td className="px-3 py-2">{formatDate(doc.createdAt)}</td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
+                    <button
+                      className="rounded border px-3 py-1 mr-2 hover:bg-slate-100"
+                      onClick={() => openEdit(doc)}
+                    >
+                      Cập nhật
+                    </button>
+                    <button
+                      className="rounded border px-3 py-1 mr-2 hover:bg-slate-100"
+                      onClick={() => onPreview(doc)}
+                    >
+                      Xem trước
+                    </button>
+                    <button
+                      className="rounded border px-3 py-1 mr-2 hover:bg-slate-100 disabled:opacity-50"
+                      onClick={() => onDownload(doc)}
+                      disabled={downloadingId === doc.id}
+                    >
+                      {downloadingId === doc.id ? "Đang chuẩn bị..." : "Tải xuống"}
+                    </button>
+                    <button
+                      className="rounded border px-3 py-1 mr-2 hover:bg-slate-100"
+                      onClick={() => openShare(doc)}
+                    >
+                      Chia sẻ
+                    </button>
+                    {isAdmin && (
+                      <button
+                        className="rounded border px-3 py-1 text-red-600 hover:bg-red-50"
+                        onClick={() => onDelete(doc)}
+                      >
+                        Xoá
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* ===== Mobile: dạng thẻ xếp dọc, KHÔNG hiện cột "File" (tên file thô không cần
+          thiết với người dùng cuối) — chỉ giữ thông tin thật sự cần: tên, mã máy, dung
+          lượng, người/ngày tải lên, và các nút thao tác xếp thành lưới cho dễ bấm. ===== */}
+      <div className="md:hidden space-y-3">
+        {loading ? (
+          <div className="rounded border bg-white px-4 py-6 text-center text-slate-500">Đang tải...</div>
+        ) : rows.length === 0 ? (
+          <div className="rounded border bg-white px-4 py-6 text-center text-slate-500">
+            Chưa có video nào ở mục này
+          </div>
+        ) : (
+          rows.map((doc) => (
+            <div key={doc.id} className="rounded border bg-white p-3 shadow-sm">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="font-medium break-words">{doc.title}</div>
+                  {doc.machineCode && (
+                    <span className="mt-1 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                      Mã máy: {doc.machineCode}
+                    </span>
+                  )}
+                </div>
+                <span className="shrink-0 whitespace-nowrap text-xs text-slate-400">{formatBytes(doc.fileSize)}</span>
+              </div>
+
+              {doc.note && <div className="mt-1 text-xs text-slate-400 break-words">{doc.note}</div>}
+
+              <div className="mt-2 text-xs text-slate-400">
+                {doc.uploadedBy?.username || "—"} · {formatDate(doc.createdAt)}
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  className="rounded border px-2 py-2 text-sm hover:bg-slate-100"
+                  onClick={() => openEdit(doc)}
+                >
+                  Cập nhật
+                </button>
+                <button
+                  className="rounded border px-2 py-2 text-sm hover:bg-slate-100"
+                  onClick={() => onPreview(doc)}
+                >
+                  Xem trước
+                </button>
+                <button
+                  className="rounded border px-2 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
+                  onClick={() => onDownload(doc)}
+                  disabled={downloadingId === doc.id}
+                >
+                  {downloadingId === doc.id ? "Đang chuẩn bị..." : "Tải xuống"}
+                </button>
+                <button
+                  className={`rounded border px-2 py-2 text-sm hover:bg-slate-100 ${!isAdmin ? "col-span-2" : ""}`}
+                  onClick={() => openShare(doc)}
+                >
+                  Chia sẻ
+                </button>
+                {isAdmin && (
+                  <button
+                    className="rounded border px-2 py-2 text-sm text-red-600 hover:bg-red-50"
+                    onClick={() => onDelete(doc)}
+                  >
+                    Xoá
+                  </button>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="mt-3 flex items-center justify-between text-sm">
+        <span>Tổng: {total} video</span>
+        <div className="flex gap-2">
+          <button
+            className="rounded border px-3 py-1 disabled:opacity-40"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+          >
+            Trước
+          </button>
+          <span>
+            Trang {page}/{totalPages}
+          </span>
+          <button
+            className="rounded border px-3 py-1 disabled:opacity-40"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          >
+            Sau
+          </button>
+        </div>
+      </div>
+
+      {/* ✅ Modal cập nhật thông tin video (không đổi file gốc) */}
+      {editingDoc && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setEditingDoc(null)}
+        >
+          <form
+            className="w-full max-w-lg rounded bg-white p-5 shadow-lg space-y-3"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={onSaveEdit}
+          >
+            <h2 className="text-lg font-semibold">Cập nhật thông tin video</h2>
+            <p className="text-xs text-slate-500">
+              File hiện tại: <span className="font-medium">{editingDoc.fileName}</span>{" "}
+              (nếu cần đổi hẳn sang video khác, xoá video này rồi tải video mới lên sẽ rõ ràng hơn)
+            </p>
+
+            <label className="block text-sm">
+              Tên video / tên máy
+              <input
+                className="mt-1 block w-full rounded border px-3 py-2"
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+              />
+            </label>
+            <label className="block text-sm">
+              Mã máy
+              <input
+                className="mt-1 block w-full rounded border px-3 py-2"
+                value={editMachineCode}
+                onChange={(e) => setEditMachineCode(e.target.value)}
+              />
+            </label>
+            <label className="block text-sm">
+              Loại video
+              <select
+                className="mt-1 block w-full rounded border px-3 py-2 bg-white"
+                value={editType}
+                onChange={(e) => setEditType(e.target.value as VideoType)}
+              >
+                {TYPE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-sm">
+              Ghi chú
+              <textarea
+                className="mt-1 block w-full rounded border px-3 py-2"
+                rows={2}
+                value={editNote}
+                onChange={(e) => setEditNote(e.target.value)}
+              />
+            </label>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                className="rounded border px-4 py-2 hover:bg-slate-50"
+                onClick={() => setEditingDoc(null)}
+              >
+                Huỷ
+              </button>
+              <button
+                type="submit"
+                disabled={savingEdit}
+                className="rounded bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {savingEdit ? "Đang lưu..." : "Lưu thay đổi"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ✅ Modal xem trước video */}
+      {previewDoc && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={closePreview}
+        >
+          <div
+            className="w-full max-w-3xl rounded bg-white p-4 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="font-semibold">{previewDoc.title}</h2>
+              <button className="text-slate-500 hover:text-slate-800" onClick={closePreview}>
+                ✕ Đóng
+              </button>
+            </div>
+            {previewLoading ? (
+              <div className="flex h-64 items-center justify-center text-slate-500">
+                Đang tải video...
+              </div>
+            ) : previewUrl ? (
+              <video
+                src={previewUrl}
+                controls
+                autoPlay
+                className="w-full rounded bg-black"
+                style={{ maxHeight: "70vh" }}
+              />
+            ) : null}
+          </div>
+        </div>
+      )}
+
+      {/* ✅ Modal chia sẻ video: tạo/liệt kê/thu hồi link công khai cho khách xem */}
+      {shareDoc && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={closeShare}
+        >
+          <div
+            className="w-full max-w-lg rounded bg-white p-5 shadow-lg space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Chia sẻ: {shareDoc.title}</h2>
+              <button className="text-slate-500 hover:text-slate-800" onClick={closeShare}>
+                ✕
+              </button>
+            </div>
+            <p className="text-xs text-slate-500">
+              Link chia sẻ cho khách xem trực tiếp trong trình duyệt, <strong>không cần đăng nhập</strong> và{" "}
+              <strong>không có nút tải xuống</strong>. Lưu ý: khách vẫn có thể quay lại màn hình, đây không
+              phải giải pháp chống sao chép tuyệt đối.
+            </p>
+
+            <div className="flex items-end gap-2">
+              <label className="block text-sm flex-1">
+                Thời hạn link
+                <select
+                  className="mt-1 block w-full rounded border px-3 py-2"
+                  value={shareExpiry}
+                  onChange={(e) => setShareExpiry(e.target.value as "none" | "7" | "30")}
+                  disabled={creatingShare}
+                >
+                  <option value="7">7 ngày</option>
+                  <option value="30">30 ngày</option>
+                  <option value="none">Không giới hạn</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={onCreateShare}
+                disabled={creatingShare}
+                className="rounded bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {creatingShare ? "Đang tạo..." : "Tạo link"}
+              </button>
+            </div>
+
+            <div>
+              <div className="mb-1 text-sm font-medium">Các link đã tạo</div>
+              {shareLoading ? (
+                <div className="text-sm text-slate-500">Đang tải...</div>
+              ) : shareLinks.length === 0 ? (
+                <div className="text-sm text-slate-500">Chưa có link chia sẻ nào.</div>
+              ) : (
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {shareLinks.map((link) => {
+                    const st = shareStatus(link);
+                    const active = st.label === "Đang hoạt động";
+                    return (
+                      <div key={link.id} className="rounded border p-2 text-sm">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className={`text-xs font-medium ${st.cls}`}>{st.label}</span>
+                          <span className="text-xs text-slate-400">
+                            {link.expiresAt
+                              ? `Hết hạn: ${formatDate(link.expiresAt)}`
+                              : "Không giới hạn"}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex items-center gap-2">
+                          <input
+                            readOnly
+                            className="flex-1 truncate rounded border bg-slate-50 px-2 py-1 text-xs"
+                            value={buildShareUrl(link.token)}
+                          />
+                          {active && (
+                            <>
+                              <button
+                                className="shrink-0 rounded border px-2 py-1 text-xs hover:bg-slate-100"
+                                onClick={() => copyShareLink(link.token)}
+                              >
+                                Copy
+                              </button>
+                              <button
+                                className="shrink-0 rounded border px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+                                onClick={() => onRevokeShare(link.id)}
+                              >
+                                Thu hồi
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default VideoLibraryPage;
