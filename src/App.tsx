@@ -35,6 +35,7 @@ import MachineVideosPage from "./pages/MachineVideosPage";
 import PublicMachineVideoPage from "./pages/PublicMachineVideoPage"; // ✅ trang chia sẻ công khai, không đăng nhập
 // ✅ NEW: movements page
 import MovementsPage from "./pages/MovementsPage";
+import AnalyticsPage from "./pages/AnalyticsPage";
 import MachineImagesPage from "./pages/MachineImagesPage";
 // ✅ NEW: best sellers report
 import BestSellersReportPage from "./pages/BestSellersReportPage";
@@ -119,7 +120,15 @@ const App: React.FC = () => {
           <Route path="/me/sales" element={<MySalesDashboardPage />} />
           <Route path="audit-logs" element={<AuditLogsPage />} />
           <Route path="reports/stock-inout" element={<StockInOutReportPage />} />
-
+          {/* ✅ NEW: thống kê lượt truy cập web (admin only) */}
+          <Route
+            path="analytics"
+            element={
+              <RequireRole roles={["admin"]}>
+                <AnalyticsPage />
+              </RequireRole>
+            }
+          />
           {/* ✅ NEW: hàng bán chạy (admin only) */}
           <Route
             path="reports/best-sellers"

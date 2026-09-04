@@ -94,6 +94,7 @@ const Layout: React.FC = () => {
       list.push({ to: "/reports/stock-inout", label: "Báo cáo XNT" });
     // ✅ chỉ admin xem được hàng bán chạy
     if (isAdmin) list.push({ to: "/reports/best-sellers", label: "Hàng bán chạy" });
+    if (isAdmin) list.push({ to: "/analytics", label: "Lượt truy cập Website" });
     return list;
   }, [isAdmin, isAccountant]);
 
