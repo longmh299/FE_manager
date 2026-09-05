@@ -366,7 +366,7 @@ const Layout: React.FC = () => {
       {/* SIDEBAR */}
       <aside
         className={[
-          "bg-slate-900 text-slate-100 flex flex-col h-screen pt-safe",
+          "bg-slate-900 text-slate-100 flex flex-col h-screen pt-safe pl-safe",
           "transition-transform duration-200 ease-out",
           // desktop width collapse
           desktopCollapsed ? "md:w-20" : "md:w-64",
@@ -383,7 +383,7 @@ const Layout: React.FC = () => {
 
       {/* MAIN */}
       <main className="flex-1 flex flex-col max-h-screen overflow-hidden min-w-0">
-        <header className="min-h-14 pt-safe bg-white border-b border-slate-200 flex items-center px-4 gap-3">
+        <header className="min-h-14 pt-safe pl-safe pr-safe bg-white border-b border-slate-200 flex items-center px-4 gap-3">
           <button
             type="button"
             onClick={onToggleMenu}
