@@ -30,6 +30,7 @@ import MySalesDashboardPage from "./pages/MySalesDashboardPage";
 import AuditLogsPage from "./pages/AuditLogsPage";
 import StockInOutReportPage from "./pages/StockInOutReportPage";
 import InvoiceStatusAdminPage from "./pages/InvoiceStatusAdminPage";
+import InvoiceTracePage from "./pages/InvoiceTracePage"; // ✅ NEW: truy xuất hóa đơn theo mã sản phẩm
 import QuoteDocumentsPage from "./pages/QuoteDocumentsPage";
 import MachineVideosPage from "./pages/MachineVideosPage";
 import PublicMachineVideoPage from "./pages/PublicMachineVideoPage"; // ✅ trang chia sẻ công khai, không đăng nhập
@@ -120,6 +121,8 @@ const App: React.FC = () => {
           <Route path="/me/sales" element={<MySalesDashboardPage />} />
           <Route path="audit-logs" element={<AuditLogsPage />} />
           <Route path="reports/stock-inout" element={<StockInOutReportPage />} />
+          {/* ✅ NEW: truy xuất hóa đơn theo mã sản phẩm */}
+          <Route path="reports/invoice-trace" element={<InvoiceTracePage />} />
           {/* ✅ NEW: thống kê lượt truy cập web (admin only) */}
           <Route
             path="analytics"

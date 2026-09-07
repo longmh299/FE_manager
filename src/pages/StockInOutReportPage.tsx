@@ -379,14 +379,14 @@ const StockInOutReportPage: React.FC = () => {
       <ToastHost toasts={toasts} onClose={remove} />
 
       <div className="bg-white rounded-xl border border-slate-200 p-4">
-        <div className="flex flex-wrap items-end gap-3">
+        <div className="grid grid-cols-2 gap-3 md:flex md:flex-wrap md:items-end">
           <div>
             <div className="text-xs text-slate-500 mb-1">Từ</div>
             <input
               type="date"
               value={from}
               onChange={(e) => setFrom(e.target.value)}
-              className="border border-slate-300 rounded px-3 py-2"
+              className="w-full border border-slate-300 rounded px-3 py-2"
             />
           </div>
 
@@ -396,11 +396,11 @@ const StockInOutReportPage: React.FC = () => {
               type="date"
               value={to}
               onChange={(e) => setTo(e.target.value)}
-              className="border border-slate-300 rounded px-3 py-2"
+              className="w-full border border-slate-300 rounded px-3 py-2"
             />
           </div>
 
-          <div className="flex-1 min-w-[260px]">
+          <div className="col-span-2 md:flex-1 md:min-w-[260px]">
             <div className="text-xs text-slate-500 mb-1">Tìm</div>
             <input
               value={q}
@@ -419,7 +419,7 @@ const StockInOutReportPage: React.FC = () => {
           <button
             onClick={() => load()} // ✅ tránh React truyền event vào load()
             disabled={loading}
-            className={`px-4 py-2 rounded bg-slate-900 text-white hover:bg-slate-800 ${
+            className={`col-span-1 md:col-auto px-4 py-2 rounded bg-slate-900 text-white hover:bg-slate-800 ${
               loading ? "opacity-60 cursor-not-allowed" : ""
             }`}
           >
@@ -429,7 +429,7 @@ const StockInOutReportPage: React.FC = () => {
           <button
             onClick={exportExcel}
             disabled={!data || loading}
-            className={`px-4 py-2 rounded border border-slate-300 bg-white hover:bg-slate-50 ${
+            className={`col-span-1 md:col-auto px-4 py-2 rounded border border-slate-300 bg-white hover:bg-slate-50 ${
               !data || loading ? "opacity-60 cursor-not-allowed" : ""
             }`}
             title="Xuất toàn bộ dữ liệu (không chỉ trang hiện tại)"
@@ -450,8 +450,8 @@ const StockInOutReportPage: React.FC = () => {
         ) : null}
       </div>
 
-      {/* ===== TABLE (Header sticky chắc chắn) ===== */}
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+      {/* ===== Desktop: bảng đầy đủ ===== */}
+      <div className="hidden md:block bg-white rounded-xl border border-slate-200 overflow-hidden">
         {/* ✅ scroll ngang chung header + body */}
         <div className="overflow-auto max-h-[70vh]">
           {/* ✅ HEADER STICKY */}
@@ -548,6 +548,108 @@ const StockInOutReportPage: React.FC = () => {
             </button>
           </div>
         </div>
+      </div>
+
+      {/* ===== Mobile: dạng thẻ xếp dọc ===== */}
+      <div className="md:hidden space-y-3">
+        {loading ? (
+          <div className="rounded-xl border border-slate-200 bg-white px-4 py-6 text-center text-slate-500">
+            Đang tải...
+          </div>
+        ) : !data ? (
+          <div className="rounded-xl border border-slate-200 bg-white px-4 py-6 text-center text-slate-500">
+            Chưa có dữ liệu.
+          </div>
+        ) : pagedRows.length === 0 ? (
+          <div className="rounded-xl border border-slate-200 bg-white px-4 py-6 text-center text-slate-500">
+            Không có sản phẩm nào thỏa điều kiện.
+          </div>
+        ) : (
+          <>
+            {pagedRows.map((r) => (
+              <div key={r.itemId} className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-xs text-slate-500">{r.sku}</div>
+                    <div className="font-medium break-words">{r.name}</div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="text-xs text-slate-400">{unitLabel(r.unitCode, r.unitName)}</div>
+                  </div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-4 gap-2 border-t border-slate-100 pt-2 text-center">
+                  <div>
+                    <div className="text-[11px] text-slate-400">Tồn đầu</div>
+                    <div className="text-sm font-semibold tabular-nums">{fmtQty(r.openingQty)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-400">Nhập</div>
+                    <div className="text-sm font-semibold tabular-nums text-green-600">{fmtQty(r.inQty)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-400">Xuất</div>
+                    <div className="text-sm font-semibold tabular-nums text-red-600">{fmtQty(r.outQty)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-400">Tồn cuối</div>
+                    <div className="text-sm font-semibold tabular-nums">{fmtQty(r.closingQty)}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {/* Tổng cộng */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div className="text-xs font-semibold text-slate-600 mb-2">Tổng cộng</div>
+              <div className="grid grid-cols-4 gap-2 text-center">
+                <div>
+                  <div className="text-[11px] text-slate-400">Tồn đầu</div>
+                  <div className="text-sm font-semibold tabular-nums">{fmtQty(data.totals.openingQty)}</div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-slate-400">Nhập</div>
+                  <div className="text-sm font-semibold tabular-nums text-green-600">
+                    {fmtQty(data.totals.inQty)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-slate-400">Xuất</div>
+                  <div className="text-sm font-semibold tabular-nums text-red-600">
+                    {fmtQty(data.totals.outQty)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-slate-400">Tồn cuối</div>
+                  <div className="text-sm font-semibold tabular-nums">{fmtQty(data.totals.closingQty)}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Pagination mobile */}
+            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm">
+              <div className="text-slate-600">
+                Trang <b>{page}</b>/<b>{totalPages}</b>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  className="px-3 py-1.5 rounded border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-50"
+                  disabled={page <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                >
+                  ← Trước
+                </button>
+                <button
+                  className="px-3 py-1.5 rounded border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-50"
+                  disabled={page >= totalPages}
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                >
+                  Sau →
+                </button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

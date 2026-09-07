@@ -87,6 +87,7 @@ const Layout: React.FC = () => {
   const reportLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
     list.push({ to: "revenue", label: "Báo cáo doanh thu" }); // ✅ chuyển từ nhóm Bán hàng qua đây
+    list.push({ to: "/reports/invoice-trace", label: "Truy xuất hóa đơn" }); // ✅ NEW: tra cứu hóa đơn theo mã sản phẩm
     if (isAdmin || isAccountant) list.push({ to: "debts/by-sale", label: "Công Nợ" });
     if (isAdmin || isAccountant) list.push({ to: "/reports/ledger", label: "Sổ kho" });
     if (isAdmin || isAccountant) list.push({ to: "/reports/sales-ledger", label: "Bảng kê bán" });
