@@ -105,7 +105,7 @@ const Layout: React.FC = () => {
     () => [
       { to: "quote-documents", label: "Kho báo giá" },
       { to: "machine-videos", label: "Video vận hành máy" },
-      { to: "machine-images", label: "Kho ảnh máy móc" },
+      { to: "machine-images", label: "Kho ảnh máy móc, linh kiện" },
     ],
     []
   );

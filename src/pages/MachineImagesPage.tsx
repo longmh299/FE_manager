@@ -37,6 +37,15 @@ function formatDate(iso?: string) {
   return d.toLocaleDateString("vi-VN") + " " + d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
 }
 
+// ✅ Phát hiện iOS (Safari/Chrome trên iPhone, iPad — kể cả iPad "giả desktop"
+// từ iPadOS 13+ trở đi, nhận diện qua Macintosh + có cảm ứng).
+function isIOSDevice() {
+  const ua = navigator.userAgent || "";
+  const isAppleTouch = /iPad|iPhone|iPod/.test(ua);
+  const isIPadOSDesktopMode = ua.includes("Macintosh") && navigator.maxTouchPoints > 1;
+  return isAppleTouch || isIPadOSDesktopMode;
+}
+
 const MachineImagesPage: React.FC = () => {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
@@ -211,21 +220,24 @@ const MachineImagesPage: React.FC = () => {
     }
   }
 
-  // ✅ Ưu tiên Web Share API — mở Share Sheet gốc của hệ điều hành (Android/iOS
-  // đều hỗ trợ), trong đó CÓ SẴN nút "Lưu ảnh"/"Lưu vào Ảnh", chỉ 1 chạm là lưu
-  // thẳng vào Thư viện ảnh. Không cần người dùng biết file tải về nằm ở đâu.
-  // Máy không hỗ trợ (trình duyệt cũ, desktop...) tự động rơi về cách tải file
-  // bình thường qua link.
+  // ✅ Tải ảnh về máy — chia 2 nhánh rõ ràng theo thiết bị:
+  //  - iOS (iPhone/iPad): dùng Web Share API để mở Share Sheet, có sẵn nút
+  //    "Lưu vào Ảnh" — vì Safari/iOS tải file qua thẻ <a download> hay điều
+  //    hướng link thường sẽ luôn bị đẩy vào app Files, rất khó tìm.
+  //  - Android & Desktop: tải file THẬT SỰ bằng cách fetch về blob rồi tạo
+  //    link tải tạm thời với thuộc tính "download". Không dùng
+  //    window.location.href = url nữa vì với ảnh, trình duyệt thường chỉ MỞ
+  //    ảnh ra xem (do thiếu header Content-Disposition: attachment từ R2) chứ
+  //    không tải xuống — đây chính là nguyên nhân "bấm tải mà không thấy gì".
+  //    Trên Android, file .jpg/.png tải bằng cách này vẫn được hệ thống quét
+  //    và gộp vào thư viện ảnh như bình thường.
   async function onDownload(doc: ImageDoc) {
     setDownloadingId(doc.id);
     try {
       const res = await api.get(`/machine-images/${doc.id}/download-url`);
       const { url } = res.data;
 
-      const canTryShareFiles =
-        typeof navigator.share === "function" && typeof navigator.canShare === "function";
-
-      if (canTryShareFiles) {
+      if (isIOSDevice() && typeof navigator.share === "function" && typeof navigator.canShare === "function") {
         try {
           const fileRes = await fetch(url);
           const blob = await fileRes.blob();
@@ -246,12 +258,24 @@ const MachineImagesPage: React.FC = () => {
         } catch (shareErr: any) {
           // Người dùng bấm Huỷ trong Share Sheet -> không phải lỗi, im lặng thoát
           if (shareErr?.name === "AbortError") return;
-          console.warn("share file thất bại, chuyển sang cách tải thường", shareErr);
+          console.warn("share file thất bại trên iOS, chuyển sang tải file thường", shareErr);
+          // rơi xuống nhánh tải file thường bên dưới
         }
       }
 
-      // Fallback: máy không hỗ trợ Web Share API -> tải file bình thường
-      window.location.href = url;
+      // Android & Desktop: fetch về blob rồi ép trình duyệt tải xuống thật sự
+      const fileRes = await fetch(url);
+      if (!fileRes.ok) throw new Error(`Tải file thất bại (HTTP ${fileRes.status})`);
+      const blob = await fileRes.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = doc.fileName || doc.title || "anh.jpg";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // giải phóng bộ nhớ sau khi trình duyệt đã kịp bắt đầu tải
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
     } catch (err) {
       console.error("download error", err);
       alert("Tải ảnh thất bại, thử lại sau.");
