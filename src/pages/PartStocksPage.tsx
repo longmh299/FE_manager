@@ -120,6 +120,9 @@ const PartStocksPage: React.FC = () => {
   const [newSellPrice, setNewSellPrice] = useState<string>("");
   const [creating, setCreating] = useState(false);
 
+  // ✅ NEW: thu gọn/mở khung "Tạo mới linh kiện nhanh" — mặc định đóng cho gọn trang
+  const [showCreateForm, setShowCreateForm] = useState(false);
+
   // ===== Edit modal =====
   const [edit, setEdit] = useState<EditState>({ open: false });
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -665,148 +668,180 @@ const PartStocksPage: React.FC = () => {
         </div>
       )}
 
-      {/* ✅ Create card responsive */}
+      {/* ✅ Create card responsive (thu gọn/mở ra) */}
       {isPrivileged && (
         <div
           style={{
             marginBottom: 12,
-            padding: 12,
             borderRadius: 6,
             border: "1px dashed #d1d5db",
             backgroundColor: "#f9fafb",
+            overflow: "hidden",
           }}
         >
-          <div
+          <button
+            type="button"
+            onClick={() => setShowCreateForm((v) => !v)}
+            aria-expanded={showCreateForm}
             style={{
-              fontSize: 14,
-              fontWeight: 600,
-              marginBottom: 8,
+              width: "100%",
+              padding: 12,
               display: "flex",
               alignItems: "center",
-              gap: 6,
-              flexWrap: "wrap",
+              justifyContent: "space-between",
+              gap: 8,
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              textAlign: "left",
             }}
           >
-            <span>Tạo mới linh kiện nhanh</span>
-            <span style={{ fontSize: 11, color: "#6b7280" }}>(Dành cho Admin / Accountant)</span>
-          </div>
-
-          <form
-            onSubmit={handleCreatePart}
-            style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}
-          >
-            <div style={{ minWidth: 180, flex: "1 1 180px" }}>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
-                Mã linh kiện
-              </label>
-              <input
-                type="text"
-                value={newSku}
-                onChange={(e) => setNewSku(e.target.value)}
-                placeholder="VD: KP-001"
-                style={{
-                  width: "100%",
-                  padding: "6px 10px",
-                  borderRadius: 6,
-                  border: "1px solid #cbd5e1",
-                  fontSize: 13,
-                  outline: "none",
-                }}
-              />
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>Tạo mới linh kiện nhanh</span>
+              <span style={{ fontSize: 11, color: "#6b7280" }}>(Dành cho Admin / Accountant)</span>
             </div>
-
-            <div style={{ minWidth: 220, flex: "2 1 220px" }}>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
-                Tên linh kiện *
-              </label>
-              <input
-                type="text"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="Nhập tên linh kiện..."
+            <span
+              style={{
+                fontSize: 13,
+                fontWeight: 700,
+                color: "#2563eb",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {showCreateForm ? "Thu gọn" : "Mở ra"}
+              <span
                 style={{
-                  width: "100%",
-                  padding: "6px 10px",
-                  borderRadius: 6,
-                  border: "1px solid #cbd5e1",
-                  fontSize: 13,
-                  outline: "none",
-                }}
-              />
-            </div>
-
-            <div style={{ minWidth: 180, flex: "1 1 180px" }}>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
-                ĐVT
-              </label>
-              <select
-                value={newUnitId}
-                onChange={(e) => setNewUnitId(e.target.value)}
-                disabled={unitsLoading}
-                style={{
-                  width: "100%",
-                  padding: "6px 10px",
-                  borderRadius: 6,
-                  border: "1px solid #cbd5e1",
-                  fontSize: 13,
-                  outline: "none",
-                  backgroundColor: unitsLoading ? "#f8fafc" : "#fff",
+                  display: "inline-block",
+                  transition: "transform 0.15s ease",
+                  transform: showCreateForm ? "rotate(180deg)" : "rotate(0deg)",
                 }}
               >
-                {units.length === 0 ? (
-                  <option value="">{unitsLoading ? "Đang tải..." : "Chưa có Unit"}</option>
-                ) : (
-                  units.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name} ({u.code})
-                    </option>
-                  ))
-                )}
-              </select>
-            </div>
+                ▾
+              </span>
+            </span>
+          </button>
 
-            <div style={{ minWidth: 180, flex: "1 1 180px" }}>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
-                Giá bán (VND)
-              </label>
-              <input
-                type="number"
-                min={0}
-                value={newSellPrice}
-                onChange={(e) => setNewSellPrice(e.target.value)}
-                placeholder="VD: 150000"
-                style={{
-                  width: "100%",
-                  padding: "6px 10px",
-                  borderRadius: 6,
-                  border: "1px solid #cbd5e1",
-                  fontSize: 13,
-                  textAlign: "right",
-                  outline: "none",
-                }}
-              />
-            </div>
+          {showCreateForm && (
+            <form
+              onSubmit={handleCreatePart}
+              style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end", padding: "0 12px 12px" }}
+            >
+              <div style={{ minWidth: 180, flex: "1 1 180px" }}>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                  Mã linh kiện
+                </label>
+                <input
+                  type="text"
+                  value={newSku}
+                  onChange={(e) => setNewSku(e.target.value)}
+                  placeholder="VD: KP-001"
+                  style={{
+                    width: "100%",
+                    padding: "6px 10px",
+                    borderRadius: 6,
+                    border: "1px solid #cbd5e1",
+                    fontSize: 13,
+                    outline: "none",
+                  }}
+                />
+              </div>
 
-            <div style={{ flex: "0 0 auto" }}>
-              <button
-                type="submit"
-                disabled={creating}
-                style={{
-                  padding: "8px 16px",
-                  borderRadius: 6,
-                  border: "1px solid #16a34a",
-                  backgroundColor: creating ? "#bbf7d0" : "#16a34a",
-                  color: "#fff",
-                  fontSize: 13,
-                  cursor: creating ? "default" : "pointer",
-                  fontWeight: 700,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {creating ? "Đang tạo..." : "Tạo linh kiện"}
-              </button>
-            </div>
-          </form>
+              <div style={{ minWidth: 220, flex: "2 1 220px" }}>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                  Tên linh kiện *
+                </label>
+                <input
+                  type="text"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="Nhập tên linh kiện..."
+                  style={{
+                    width: "100%",
+                    padding: "6px 10px",
+                    borderRadius: 6,
+                    border: "1px solid #cbd5e1",
+                    fontSize: 13,
+                    outline: "none",
+                  }}
+                />
+              </div>
+
+              <div style={{ minWidth: 180, flex: "1 1 180px" }}>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                  ĐVT
+                </label>
+                <select
+                  value={newUnitId}
+                  onChange={(e) => setNewUnitId(e.target.value)}
+                  disabled={unitsLoading}
+                  style={{
+                    width: "100%",
+                    padding: "6px 10px",
+                    borderRadius: 6,
+                    border: "1px solid #cbd5e1",
+                    fontSize: 13,
+                    outline: "none",
+                    backgroundColor: unitsLoading ? "#f8fafc" : "#fff",
+                  }}
+                >
+                  {units.length === 0 ? (
+                    <option value="">{unitsLoading ? "Đang tải..." : "Chưa có Unit"}</option>
+                  ) : (
+                    units.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.name} ({u.code})
+                      </option>
+                    ))
+                  )}
+                </select>
+              </div>
+
+              <div style={{ minWidth: 180, flex: "1 1 180px" }}>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                  Giá bán (VND)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={newSellPrice}
+                  onChange={(e) => setNewSellPrice(e.target.value)}
+                  placeholder="VD: 150000"
+                  style={{
+                    width: "100%",
+                    padding: "6px 10px",
+                    borderRadius: 6,
+                    border: "1px solid #cbd5e1",
+                    fontSize: 13,
+                    textAlign: "right",
+                    outline: "none",
+                  }}
+                />
+              </div>
+
+              <div style={{ flex: "0 0 auto" }}>
+                <button
+                  type="submit"
+                  disabled={creating}
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: 6,
+                    border: "1px solid #16a34a",
+                    backgroundColor: creating ? "#bbf7d0" : "#16a34a",
+                    color: "#fff",
+                    fontSize: 13,
+                    cursor: creating ? "default" : "pointer",
+                    fontWeight: 700,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {creating ? "Đang tạo..." : "Tạo linh kiện"}
+                </button>
+              </div>
+            </form>
+          )}
         </div>
       )}
 
