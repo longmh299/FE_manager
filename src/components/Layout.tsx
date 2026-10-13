@@ -106,6 +106,7 @@ const Layout: React.FC = () => {
       { to: "quote-documents", label: "Kho báo giá" },
       { to: "machine-videos", label: "Video vận hành máy" },
       { to: "machine-images", label: "Kho ảnh máy móc, linh kiện" },
+      { to: "translate", label: "Dịch tài liệu" },
     ],
     []
   );
@@ -302,6 +303,9 @@ const Layout: React.FC = () => {
             <NavLink to="machine-images" className={navCls}>
               {desktopCollapsed ? "AM" : "Kho ảnh máy móc"}
             </NavLink>
+            <NavLink to="translate" className={navCls}>
+              {desktopCollapsed ? "DT" : "Dịch tài liệu"}
+            </NavLink>
             {/* ✅ staff KHÔNG thấy movements theo yêu cầu */}
 
             <NavLink to="/me/sales" className={navCls}>
@@ -404,7 +408,8 @@ const Layout: React.FC = () => {
           <div className="flex items-center gap-2">
             <LowStockBell />
           </div>
-          <ChatWidget />
+          {/* ✅ Trang Dịch tài liệu có ô chat AI riêng + nút dưới đáy -> ẩn bong bóng chat chung để không che */}
+          {!location.pathname.startsWith("/translate") && <ChatWidget />}
         </header>
 
         {/* ✅ pb-20 trên mobile để cuối trang (vd nút phân trang) không bị nút

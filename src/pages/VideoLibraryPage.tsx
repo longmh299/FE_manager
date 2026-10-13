@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import api, { extractList } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { useToast, ToastHost } from "../components/Toast";
+import MachinePicker, { type MachineRef } from "../components/MachinePicker";
 
 type VideoDoc = {
   id: string;
@@ -105,7 +106,10 @@ const VideoLibraryPage: React.FC = () => {
 
   const [showUpload, setShowUpload] = useState(false);
   const [title, setTitle] = useState("");
-  const [machineCode, setMachineCode] = useState("");
+  // ✅ Máy được chọn qua ô gõ có gợi ý — BE đặt tên file trên R2 theo mã máy này
+  const [machine, setMachine] = useState<MachineRef | null>(null);
+  const [machineSug, setMachineSug] = useState<MachineRef[]>([]);
+  const [pickerKey, setPickerKey] = useState(0); // đổi key để reset ô chọn máy sau khi upload
   // ✅ loại video được chọn lúc tải lên — mặc định theo tab đang xem cho tiện,
   // nhưng người dùng vẫn đổi được nếu muốn tải video khác loại từ tab này.
   const [uploadType, setUploadType] = useState<VideoType>("DEMO");
@@ -203,25 +207,46 @@ const VideoLibraryPage: React.FC = () => {
       setError("Chọn file video trước đã.");
       return;
     }
-    if (!title.trim()) {
-      setError("Nhập tên video / tên máy để sau này dễ tìm.");
+    if (!machine) {
+      setError("Chọn máy trước đã — gõ mã/tên máy rồi bấm chọn trong gợi ý.");
       return;
     }
 
     setUploading(true);
     setUploadPct(0);
+
+    // ✅ Giữ màn hình điện thoại không tắt trong lúc upload (video 4K mất vài phút;
+    // màn hình tắt / chuyển app là trình duyệt dừng upload). Máy không hỗ trợ thì bỏ qua.
+    type WakeLockLike = { release?: () => Promise<void> };
+    const nav = navigator as Navigator & { wakeLock?: { request?: (t: "screen") => Promise<WakeLockLike> } };
+    let wakeLock: WakeLockLike | null | undefined = null;
     try {
-      // Bước 1: xin URL upload trực tiếp
+      wakeLock = await nav.wakeLock?.request?.("screen");
+    } catch {
+      /* không hỗ trợ — bỏ qua */
+    }
+    // ✅ Hỏi lại nếu lỡ tay đóng/tải lại trang khi đang upload
+    const warnLeave = (ev: BeforeUnloadEvent) => {
+      ev.preventDefault();
+      ev.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnLeave);
+
+    try {
+      // Bước 1: xin URL upload trực tiếp — BE tự đặt tên file theo mã máy
       const initRes = await api.post("/machine-videos/init", {
-        title: title.trim(),
-        machineCode: machineCode.trim() || undefined,
+        title: title.trim() || undefined, // để trống = lấy tên máy
+        machineCode: machine.isNew ? machine.name : machine.code,
+        strictMachine: true,
+        newMachine: !!machine.isNew, // máy mới chưa có trong danh mục -> BE cho phép, lưu vào khu _may-moi
+
         category: typeToWriteCategory(uploadType),
         note: note.trim() || undefined,
         fileName: file.name,
         mimeType: file.type || "application/octet-stream",
         fileSize: file.size,
       });
-      const { id, uploadUrl } = initRes.data;
+      const { id, uploadUrl, r2Key } = initRes.data;
 
       // Bước 2: PUT file thẳng lên R2, giữ nguyên chất lượng gốc (không nén/convert)
       await putToR2(uploadUrl, file, setUploadPct);
@@ -229,8 +254,17 @@ const VideoLibraryPage: React.FC = () => {
       // Bước 3: báo backend xác nhận đã upload xong
       await api.post(`/machine-videos/${id}/complete`);
 
+      pushToast({
+        type: "success",
+        title: "Đã lưu video",
+        message: String(r2Key || "").split("/").pop() || file.name,
+        ttl: 6000,
+      });
+
       setTitle("");
-      setMachineCode("");
+      setMachine(null);
+      setMachineSug([]);
+      setPickerKey((k) => k + 1);
       setNote("");
       setFile(null);
       setShowUpload(false);
@@ -244,8 +278,20 @@ const VideoLibraryPage: React.FC = () => {
         await load();
       }
     } catch (err: any) {
+      // 422 = tên máy không khớp danh mục -> BE gửi kèm gợi ý
+      const sug = err?.response?.data?.data?.suggestions;
+      if (err?.response?.status === 422 && Array.isArray(sug)) {
+        setMachine(null);
+        setMachineSug(sug);
+      }
       setError(err?.response?.data?.message || err?.message || "Tải video lên thất bại");
     } finally {
+      window.removeEventListener("beforeunload", warnLeave);
+      try {
+        await wakeLock?.release?.();
+      } catch {
+        /* bỏ qua */
+      }
       setUploading(false);
       setUploadPct(0);
     }
@@ -519,6 +565,19 @@ const VideoLibraryPage: React.FC = () => {
         <form onSubmit={onUpload} className="mb-5 rounded border p-4 space-y-3 bg-slate-50">
           {error && <div className="rounded bg-red-50 px-3 py-2 text-red-700 text-sm">{error}</div>}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="block text-sm">
+              Máy <span className="text-red-500">*</span>
+              <MachinePicker
+                key={pickerKey}
+                value={machine}
+                onChange={(m) => {
+                  setMachine(m);
+                  if (m) setError(null);
+                }}
+                externalSuggestions={machineSug}
+                disabled={uploading}
+              />
+            </div>
             <label className="block text-sm">
               Loại video <span className="text-red-500">*</span>
               <select
@@ -533,24 +592,19 @@ const VideoLibraryPage: React.FC = () => {
                   </option>
                 ))}
               </select>
+              <span className={`mt-1 block text-xs ${uploadType === "MANUAL" ? "text-amber-700" : "text-slate-500"}`}>
+                {uploadType === "MANUAL"
+                  ? "Video đã dựng hoàn chỉnh — lưu ở khu riêng, AI không đọc / không dùng."
+                  : "Video quay thô — AI được dùng để dựng nội dung đăng mạng xã hội."}
+              </span>
             </label>
             <label className="block text-sm">
-              Tên video / tên máy <span className="text-red-500">*</span>
+              Tên video <span className="text-slate-400">(tuỳ chọn — để trống sẽ lấy tên máy)</span>
               <input
                 className="mt-1 block w-full rounded border px-3 py-2"
                 placeholder={TYPE_OPTIONS.find((o) => o.value === uploadType)?.uploadPlaceholder}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                disabled={uploading}
-              />
-            </label>
-            <label className="block text-sm">
-              Mã máy (để tìm nhanh)
-              <input
-                className="mt-1 block w-full rounded border px-3 py-2"
-                placeholder='vd "DPP-150E"'
-                value={machineCode}
-                onChange={(e) => setMachineCode(e.target.value)}
                 disabled={uploading}
               />
             </label>
@@ -588,7 +642,8 @@ const VideoLibraryPage: React.FC = () => {
                 />
               </div>
               <div className="mt-1 text-xs text-slate-500">
-                Đang tải lên... {uploadPct}% — video nặng có thể mất vài phút, đừng tắt trang.
+                Đang tải lên... {uploadPct}% — video nặng có thể mất vài phút. Giữ nguyên trang này,
+                đừng tắt màn hình hay chuyển sang app khác.
               </div>
             </div>
           )}

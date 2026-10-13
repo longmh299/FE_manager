@@ -17,6 +17,8 @@ import StockCountDetailPage from "./pages/StockCountDetailPage";
 import StockOpeningImportPage from "./pages/StockOpeningImportPage";
 import PartStocksPage from "./pages/PartStocksPage";
 import UserManagementPage from "./pages/UserManagementPage";
+// ✅ tải riêng khi mở trang (thư viện PDF/Word khá nặng, không làm chậm các trang khác)
+const TranslatePage = React.lazy(() => import("./pages/TranslatePage"));
 import CustomerDetailPage from "./pages/CustomerDetailPage";
 import InvoicePrintPage from "./pages/InvoicePrintPage";
 import InvoiceDetailPage from "./pages/InvoiceDetailPage";
@@ -77,6 +79,14 @@ const App: React.FC = () => {
           <Route path="quote-documents" element={<QuoteDocumentsPage />} />
           <Route path="machine-videos" element={<MachineVideosPage />} />
           <Route path="machine-images" element={<MachineImagesPage />} />
+          <Route
+            path="translate"
+            element={
+              <React.Suspense fallback={<div className="p-4 text-slate-500">Đang tải…</div>}>
+                <TranslatePage />
+              </React.Suspense>
+            }
+          />
           {/* invoices */}
           <Route path="invoices" element={<InvoicesPage />} />
           <Route path="invoices/new" element={<InvoiceDetailPage />} />
