@@ -19,6 +19,7 @@ import PartStocksPage from "./pages/PartStocksPage";
 import UserManagementPage from "./pages/UserManagementPage";
 // ✅ tải riêng khi mở trang (thư viện PDF/Word khá nặng, không làm chậm các trang khác)
 const TranslatePage = React.lazy(() => import("./pages/TranslatePage"));
+const MktPage = React.lazy(() => import("./pages/MktPage")); // ✅ Hàng chờ MKT (clip AI từ video thô)
 import CustomerDetailPage from "./pages/CustomerDetailPage";
 import InvoicePrintPage from "./pages/InvoicePrintPage";
 import InvoiceDetailPage from "./pages/InvoiceDetailPage";
@@ -87,6 +88,19 @@ const App: React.FC = () => {
               </React.Suspense>
             }
           />
+          {["mkt", "mkt/:id"].map((p) => (
+            <Route
+              key={p}
+              path={p}
+              element={
+                <RequireRole roles={["admin"]}>
+                  <React.Suspense fallback={<div className="p-4 text-slate-500">Đang tải…</div>}>
+                    <MktPage />
+                  </React.Suspense>
+                </RequireRole>
+              }
+            />
+          ))}
           {/* invoices */}
           <Route path="invoices" element={<InvoicesPage />} />
           <Route path="invoices/new" element={<InvoiceDetailPage />} />

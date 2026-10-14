@@ -107,8 +107,9 @@ const Layout: React.FC = () => {
       { to: "machine-videos", label: "Video vận hành máy" },
       { to: "machine-images", label: "Kho ảnh máy móc, linh kiện" },
       { to: "translate", label: "Dịch tài liệu" },
+      ...(isAdmin ? [{ to: "mkt", label: "Hàng chờ MKT" }] : []), // ✅ chỉ admin
     ],
-    []
+    [isAdmin]
   );
 
   const adminLinks = useMemo(() => {
@@ -306,6 +307,11 @@ const Layout: React.FC = () => {
             <NavLink to="translate" className={navCls}>
               {desktopCollapsed ? "DT" : "Dịch tài liệu"}
             </NavLink>
+            {isAdmin && (
+              <NavLink to="mkt" className={navCls}>
+                {desktopCollapsed ? "MK" : "Hàng chờ MKT"}
+              </NavLink>
+            )}
             {/* ✅ staff KHÔNG thấy movements theo yêu cầu */}
 
             <NavLink to="/me/sales" className={navCls}>
@@ -408,8 +414,8 @@ const Layout: React.FC = () => {
           <div className="flex items-center gap-2">
             <LowStockBell />
           </div>
-          {/* ✅ Trang Dịch tài liệu có ô chat AI riêng + nút dưới đáy -> ẩn bong bóng chat chung để không che */}
-          {!location.pathname.startsWith("/translate") && <ChatWidget />}
+          {/* ✅ Trang Dịch tài liệu / Hàng chờ MKT có thanh nút dưới đáy -> ẩn bong bóng chat chung để không che */}
+          {!location.pathname.startsWith("/translate") && !location.pathname.startsWith("/mkt") && <ChatWidget />}
         </header>
 
         {/* ✅ pb-20 trên mobile để cuối trang (vd nút phân trang) không bị nút
