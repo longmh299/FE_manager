@@ -34,6 +34,7 @@ type Item = {
   unit?: string;
   price?: number;
   stockQty?: number; // ✅ tổng tồn kho (tất cả kho) — hiện trong gợi ý + cảnh báo hết hàng
+  kind?: string; // ✅ MỚI: MACHINE | PART — để chặn máy trùng mã khi tạo nhanh
 };
 
 type InvoiceLine = {
@@ -43,6 +44,35 @@ type InvoiceLine = {
   unit?: string;
   qty: number;
   price: number;
+  _imp?: ImpMeta; // ✅ MỚI: dòng đến từ "Nhập từ file" (chỉ dùng trên giao diện, payload KHÔNG gửi trường này)
+};
+
+// ✅ MỚI: nhập hoá đơn từ file
+type ImpCand = { itemId: string; sku: string; name: string; kind: string; unit: string; price: number; stockQty: number; score: number };
+type ImpMeta = {
+  status: "ok" | "check" | "new";
+  row: number;
+  code: string;
+  name: string;
+  unit: string;
+  reason: string;
+  flags: string[];
+  candidates: ImpCand[];
+  rawKey: string;
+  autoItemId: string | null;
+};
+type ImportInfo = {
+  fileName: string;
+  fileHash: string;
+  invoiceKey: string;
+  invoiceNo: string;
+  source: string;
+  fileTotal: number | null;
+  critical: string[];
+  warnings: string[];
+  partner: { data?: { name?: string; taxCode?: string }; match?: Partner | null } | null;
+  ack: boolean;
+  confirmed: boolean;
 };
 
 type StaffUser = {
@@ -190,8 +220,9 @@ const PaidAmountInput: React.FC<{
           display: "flex",
           alignItems: "stretch",
           width: "100%",
-          border: "1px solid #d1d5db",
-          borderRadius: 4,
+          height: 36,
+          border: "1px solid #cbd5e1",
+          borderRadius: 8,
           overflow: "hidden",
           background: disabled ? "#f8fafc" : "#fff",
           boxSizing: "border-box",
@@ -199,8 +230,9 @@ const PaidAmountInput: React.FC<{
       >
         <input
           style={{
-            padding: "5px 8px",
-            fontSize: 13,
+            padding: "0 10px",
+            fontSize: 13.5,
+            boxShadow: "none",
             boxSizing: "border-box",
             flex: 1,
             minWidth: 0,
@@ -226,9 +258,9 @@ const PaidAmountInput: React.FC<{
             padding: "0 10px",
             display: "flex",
             alignItems: "center",
-            borderLeft: "1px solid #e5e7eb",
-            background: "#f9fafb",
-            color: "#374151",
+            borderLeft: "1px solid #e2e8f0",
+            background: "#f1f5f9",
+            color: "#334155",
             fontSize: 13,
             whiteSpace: "nowrap",
           }}
@@ -257,8 +289,9 @@ const WarrantyHoldInput: React.FC<{
           display: "flex",
           alignItems: "stretch",
           width: "100%",
-          border: "1px solid #d1d5db",
-          borderRadius: 4,
+          height: 36,
+          border: "1px solid #cbd5e1",
+          borderRadius: 8,
           overflow: "hidden",
           background: disabled ? "#f8fafc" : "#fff",
           boxSizing: "border-box",
@@ -266,8 +299,9 @@ const WarrantyHoldInput: React.FC<{
       >
         <input
           style={{
-            padding: "5px 8px",
-            fontSize: 13,
+            padding: "0 10px",
+            fontSize: 13.5,
+            boxShadow: "none",
             boxSizing: "border-box",
             flex: 1,
             minWidth: 0,
@@ -293,9 +327,9 @@ const WarrantyHoldInput: React.FC<{
             padding: "0 10px",
             display: "flex",
             alignItems: "center",
-            borderLeft: "1px solid #e5e7eb",
-            background: "#f9fafb",
-            color: "#374151",
+            borderLeft: "1px solid #e2e8f0",
+            background: "#f1f5f9",
+            color: "#334155",
             fontSize: 13,
             whiteSpace: "nowrap",
           }}
@@ -308,6 +342,36 @@ const WarrantyHoldInput: React.FC<{
 };
 
 // unwrap { ok: true, data: ... } OR direct
+/** ✅ FIX: tải HẾT danh sách (trước đây chỉ lấy 1 trang: 1000 hàng / 100 khách → thiếu dữ liệu khi tìm) */
+async function fetchAllPages(url: string, pageSize = 500): Promise<any[]> {
+  const out: any[] = [];
+  const seen = new Set<string>();
+  for (let page = 1; page <= 100; page++) {
+    const res = await api.get(url, { params: { q: "", page, pageSize } });
+    const body = res?.data;
+    const arr: any[] = Array.isArray(body?.data) ? body.data : Array.isArray(body?.items) ? body.items : Array.isArray(body) ? body : [];
+    for (const x of arr) {
+      const id = String(x?.id ?? "");
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      out.push(x);
+    }
+    const total = Number(body?.total ?? 0);
+    if (arr.length < pageSize || (total > 0 && out.length >= total)) break;
+  }
+  return out;
+}
+
+/** ✅ FIX: dạng "liền" để gõ cke020 / dz600 / sh100 vẫn ra CK-E020 / DZ-600 / SH-100 */
+function compactKey(s: string): string {
+  return normalizeVN(s).replace(/[^a-z0-9]/g, "");
+}
+
+/** chuỗi tìm kiếm cho đối tác: tên + mã + MST + SĐT, không dấu */
+function partnerHay(p: { name?: string; code?: string; taxCode?: string; phone?: string }) {
+  return normalizeVN([p.name, p.code, p.taxCode, p.phone].filter(Boolean).join(" "));
+}
+
 function unwrap<T = any>(res: any): T {
   const body = res?.data;
   if (body && typeof body === "object" && "data" in body) return body.data as T;
@@ -444,201 +508,321 @@ function calcCollectible(inv: Invoice) {
 }
 
 // -------- styles ----------
+// ✅ UI mới: tông slate (khớp sidebar/Layout), thẻ bo góc, bảng dòng hàng gọn, thanh hành động dính đáy.
+//    Chỉ đổi giao diện — không đổi trường dữ liệu / logic.
+const C = {
+  bg: "#f8fafc",
+  card: "#ffffff",
+  border: "#e2e8f0",
+  borderInput: "#cbd5e1",
+  text: "#0f172a",
+  muted: "#64748b",
+  soft: "#f1f5f9",
+  primary: "#0f172a",
+  blue: "#2563eb",
+  green: "#16a34a",
+  red: "#dc2626",
+};
+
+// CSS phụ (focus, hover, responsive) — inline style không làm được :focus / @media
+const INV_CSS = `
+.inv-ui input:focus, .inv-ui select:focus, .inv-ui textarea:focus {
+  outline: none; border-color: #0f172a !important; box-shadow: 0 0 0 3px rgba(15,23,42,.08);
+}
+.inv-ui input:disabled, .inv-ui select:disabled, .inv-ui textarea:disabled { background: #f8fafc !important; color: #475569; cursor: not-allowed; }
+.inv-ui .inv-suggest-item:hover { background: #f1f5f9; }
+.inv-ui .inv-line:hover { background: #f8fafc; }
+.inv-ui .inv-del:hover:not(:disabled) { background: #fee2e2; color: #b91c1c; }
+.inv-ui .inv-add:hover:not(:disabled) { background: #f1f5f9; border-color: #94a3b8; }
+.inv-ui .inv-btn:hover:not(:disabled) { filter: brightness(0.96); }
+.inv-ui .inv-grid-2 { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 16px; align-items: start; }
+.inv-ui .inv-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.inv-ui .inv-line-grid { display: grid; grid-template-columns: 32px minmax(0,1fr) 84px 150px 150px 36px; column-gap: 10px; align-items: center; }
+.inv-ui .inv-pay-table th, .inv-ui .inv-pay-table td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; }
+@media (max-width: 960px) {
+  .inv-ui .inv-grid-2 { grid-template-columns: minmax(0,1fr); }
+}
+@media (max-width: 640px) {
+  .inv-ui .inv-inline { flex-direction: column !important; gap: 0 !important; }
+  .inv-ui .inv-line-grid { grid-template-columns: 72px minmax(0,1fr) 32px; row-gap: 6px; }
+  .inv-ui .inv-col-prod { grid-column: 1 / -1; }
+  .inv-ui .inv-line-head, .inv-ui .inv-col-stt, .inv-ui .inv-col-total { display: none !important; }
+  .inv-ui .inv-sum-row { flex-wrap: wrap !important; row-gap: 6px; }
+  .inv-ui .inv-sum-label { width: 120px !important; }
+  .inv-ui .inv-hold-note { padding-left: 0 !important; }
+  .inv-ui .inv-hide-sm { display: none !important; }
+  .inv-ui .inv-actions { flex-direction: column-reverse; align-items: stretch !important; }
+}
+`;
+
 const styles: Record<string, React.CSSProperties> = {
-  page: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 },
-  header: { padding: "12px 16px", borderBottom: "1px solid #e5e7eb" },
-  headerTitle: { margin: 0, fontSize: 20, fontWeight: 600 },
+  page: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0, background: C.bg, color: C.text },
+  header: {
+    padding: "14px 20px",
+    borderBottom: `1px solid ${C.border}`,
+    background: C.card,
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    flexWrap: "wrap",
+  },
+  headerTitle: { margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: -0.2 },
   body: {
     flex: 1,
     minHeight: 0,
-    padding: "12px 16px",
+    padding: "20px 20px 0",
     display: "flex",
     justifyContent: "center",
     overflowY: "auto",
   },
-  content: { width: "100%", maxWidth: 900 },
+  content: { width: "100%", maxWidth: 1180 },
   backBtn: {
-    border: "none",
-    background: "none",
-    color: "#2563eb",
+    border: `1px solid ${C.border}`,
+    background: C.card,
+    color: C.text,
     cursor: "pointer",
-    padding: 0,
-    marginBottom: 12,
-    fontSize: 14,
+    padding: "6px 10px",
+    borderRadius: 8,
+    fontSize: 13,
+    fontWeight: 500,
   },
-  form: { display: "flex", flexDirection: "column", gap: 10, fontSize: 14 },
+  form: { display: "flex", flexDirection: "column", gap: 16, fontSize: 14 },
   sectionBox: {
-    border: "1px solid #e5e7eb",
-    borderRadius: 6,
-    padding: 12,
-    background: "#ffffff",
+    border: `1px solid ${C.border}`,
+    borderRadius: 12,
+    padding: "16px 18px",
+    background: C.card,
+    boxShadow: "0 1px 2px rgba(15,23,42,0.04)",
+    minWidth: 0,
   },
   sectionTitle: {
-    fontWeight: 600,
-    marginBottom: 8,
-    borderBottom: "1px solid #f3f4f6",
-    paddingBottom: 4,
+    fontWeight: 700,
+    fontSize: 13,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    color: C.muted,
+    marginBottom: 14,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
   },
-  formRow: { display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 },
+  formRow: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 },
   rowInline: { display: "flex", gap: 12 },
-  flex1: { flex: 1 },
-  label: { fontWeight: 500, fontSize: 13 },
+  flex1: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 },
+  label: { fontWeight: 600, fontSize: 12.5, color: "#334155" },
   input: {
-    padding: "6px 10px",
-    borderRadius: 4,
-    border: "1px solid #d1d5db",
+    height: 38,
+    padding: "0 12px",
+    borderRadius: 8,
+    border: `1px solid ${C.borderInput}`,
     fontSize: 14,
     width: "100%",
     boxSizing: "border-box",
+    background: "#fff",
+    color: C.text,
   },
   select: {
-    padding: "6px 10px",
-    borderRadius: 4,
-    border: "1px solid #d1d5db",
+    height: 38,
+    padding: "0 10px",
+    borderRadius: 8,
+    border: `1px solid ${C.borderInput}`,
     fontSize: 14,
     background: "#fff",
     width: "100%",
     boxSizing: "border-box",
+    color: C.text,
   },
-  autoWrapper: { position: "relative" },
+  autoWrapper: { position: "relative", minWidth: 0 },
   suggestBox: {
     position: "absolute",
     top: "100%",
     left: 0,
     right: 0,
     background: "#fff",
-    border: "1px solid #e5e7eb",
-    borderRadius: 4,
-    maxHeight: 160,
+    border: `1px solid ${C.border}`,
+    borderRadius: 10,
+    maxHeight: 300,
     overflowY: "auto",
     zIndex: 30,
-    marginTop: 2,
-    boxShadow: "0 4px 10px rgba(0,0,0,0.04)",
+    marginTop: 4,
+    boxShadow: "0 12px 28px rgba(15,23,42,0.14)",
+    padding: 4,
   },
-  suggestItem: { padding: "4px 8px", fontSize: 13, cursor: "pointer" },
-  suggestItemMuted: { padding: "4px 8px", fontSize: 12, color: "#9ca3af" },
+  suggestItem: { padding: "8px 10px", fontSize: 13, cursor: "pointer", borderRadius: 6 },
+  suggestItemMuted: { padding: "8px 10px", fontSize: 12.5, color: "#94a3b8" },
 
   gridHeader: {
-    display: "grid",
-    gridTemplateColumns: "4fr 1fr 2fr 2fr 70px",
-    columnGap: 8,
-    fontSize: 12,
-    fontWeight: 600,
-    marginBottom: 6,
-    padding: "4px 6px",
-    background: "#f9fafb",
-    borderRadius: 4,
-    alignItems: "center",
+    fontSize: 11.5,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+    color: C.muted,
+    padding: "8px 8px",
+    background: C.soft,
+    borderRadius: 8,
+    marginBottom: 4,
   },
   gridRow: {
-    display: "grid",
-    gridTemplateColumns: "4fr 1fr 2fr 2fr 70px",
-    columnGap: 8,
-    alignItems: "center",
-    marginBottom: 6,
-    padding: "4px 6px",
-    borderRadius: 4,
-    border: "1px solid #e5e7eb",
-    background: "#ffffff",
+    padding: "8px 8px",
+    borderBottom: `1px solid ${C.soft}`,
+    borderRadius: 6,
   },
   smallInput: {
     width: "100%",
-    padding: "5px 8px",
-    borderRadius: 4,
-    border: "1px solid #d1d5db",
-    fontSize: 13,
+    height: 36,
+    padding: "0 10px",
+    borderRadius: 8,
+    border: `1px solid ${C.borderInput}`,
+    fontSize: 13.5,
     boxSizing: "border-box",
+    background: "#fff",
+    color: C.text,
   },
   smallBtn: {
-    padding: "2px 6px",
-    borderRadius: 4,
+    width: 32,
+    height: 32,
+    borderRadius: 8,
     border: "none",
-    background: "#ef4444",
-    color: "#fff",
+    background: "transparent",
+    color: "#94a3b8",
     cursor: "pointer",
-    fontSize: 11,
-    width: "100%",
-    boxSizing: "border-box",
+    fontSize: 16,
+    lineHeight: 1,
   },
   addLineBtn: {
-    marginTop: 8,
-    padding: "6px 10px",
-    borderRadius: 4,
-    border: "1px dashed #2563eb",
-    background: "#eff6ff",
-    color: "#2563eb",
+    marginTop: 10,
+    padding: "9px 12px",
+    borderRadius: 8,
+    border: `1px dashed ${C.borderInput}`,
+    background: "#fff",
+    color: C.text,
     cursor: "pointer",
-    fontSize: 12,
+    fontSize: 13,
+    fontWeight: 600,
     width: "100%",
     textAlign: "center",
   },
   totalBox: {
     width: "100%",
-    padding: "5px 8px",
-    borderRadius: 4,
-    border: "1px solid #e5e7eb",
-    fontSize: 13,
+    fontSize: 14,
+    fontWeight: 600,
     boxSizing: "border-box",
-    background: "#f9fafb",
     textAlign: "right",
     whiteSpace: "nowrap",
+    fontVariantNumeric: "tabular-nums",
   },
 
   summaryRow: {
-    display: "grid",
-    gridTemplateColumns: "220px minmax(260px, 360px) 1fr",
-    columnGap: 12,
+    display: "flex",
     alignItems: "center",
-    marginTop: 6,
-    fontSize: 13,
+    gap: 12,
+    padding: "7px 0",
+    fontSize: 13.5,
+    flexWrap: "nowrap",
   },
-  summaryLabel: { fontWeight: 500, textAlign: "left" },
-  summaryValue: { width: "100%", textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" },
+  summaryLabel: { fontWeight: 500, color: "#475569", width: 150, flexShrink: 0 },
+  summaryValue: {
+    marginLeft: "auto",
+    textAlign: "right",
+    fontWeight: 600,
+    whiteSpace: "nowrap",
+    fontVariantNumeric: "tabular-nums",
+  },
+  totalRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    margin: "8px -18px",
+    padding: "12px 18px",
+    background: C.primary,
+    color: "#fff",
+    fontSize: 15,
+  },
 
-  formActions: { display: "flex", justifyContent: "space-between", marginTop: 12, gap: 8 },
+  formActions: {
+    position: "sticky",
+    bottom: 0,
+    zIndex: 20,
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+    margin: "4px -20px 0",
+    padding: "12px 20px",
+    background: "rgba(255,255,255,0.96)",
+    backdropFilter: "blur(6px)",
+    borderTop: `1px solid ${C.border}`,
+  },
   primaryBtn: {
-    padding: "6px 16px",
-    borderRadius: 4,
+    height: 40,
+    padding: "0 20px",
+    borderRadius: 8,
     border: "none",
-    background: "#16a34a",
+    background: C.primary,
     color: "#fff",
     cursor: "pointer",
     fontSize: 14,
+    fontWeight: 600,
   },
   secondaryBtn: {
-    padding: "6px 12px",
-    borderRadius: 4,
-    border: "1px solid #d1d5db",
+    height: 40,
+    padding: "0 16px",
+    borderRadius: 8,
+    border: `1px solid ${C.borderInput}`,
     background: "#fff",
     cursor: "pointer",
     fontSize: 14,
+    fontWeight: 500,
+    color: C.text,
   },
   secondarySmallBtn: {
-    padding: "4px 10px",
-    borderRadius: 4,
-    border: "1px solid #d1d5db",
+    height: 34,
+    padding: "0 12px",
+    borderRadius: 8,
+    border: `1px solid ${C.borderInput}`,
     background: "#fff",
     cursor: "pointer",
-    fontSize: 12,
+    fontSize: 13,
+    fontWeight: 500,
+    color: C.text,
   },
 
   postStatusRow: {
     display: "flex",
     alignItems: "center",
-    justifyContent: "space-between",
     gap: 8,
-    marginTop: 8,
+    flexWrap: "wrap",
   },
 
-  notice: { marginTop: 8, padding: "8px 10px", borderRadius: 4, fontSize: 13 },
-  noticeSuccess: { background: "#ecfdf3", border: "1px solid #22c55e", color: "#166534" },
-  noticeError: { background: "#fef2f2", border: "1px solid #f87171", color: "#b91c1c" },
+  notice: { padding: "10px 14px", borderRadius: 10, fontSize: 13.5, lineHeight: 1.5 },
+  noticeSuccess: { background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534" },
+  noticeError: { background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c" },
 };
+
+/** Nhãn trạng thái dạng "viên thuốc" */
+function pill(bg: string, color: string): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "3px 10px",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 600,
+    background: bg,
+    color,
+    whiteSpace: "nowrap",
+    textTransform: "none",
+    letterSpacing: 0,
+  };
+}
 
 function dangerBtn(disabled?: boolean): React.CSSProperties {
   return {
     padding: "6px 12px",
-    borderRadius: 4,
+    borderRadius: 8,
     border: "none",
     background: disabled ? "rgba(239, 68, 68, 0.35)" : "#ef4444",
     color: "#fff",
@@ -650,7 +834,7 @@ function dangerBtn(disabled?: boolean): React.CSSProperties {
 function primarySmallBtn(disabled?: boolean): React.CSSProperties {
   return {
     padding: "6px 12px",
-    borderRadius: 4,
+    borderRadius: 8,
     border: "none",
     background: disabled ? "rgba(37, 99, 235, 0.35)" : "#2563eb",
     color: "#fff",
@@ -839,6 +1023,292 @@ const PromptModal: React.FC<{
   );
 };
 
+// =====================================================================
+// ✅ MỚI: Tạo nhanh mã hàng ngay trong hoá đơn (chỉ kế toán / admin)
+// - gọi đúng API POST /items như trang Tồn máy / Tồn linh kiện (không sửa BE)
+// - chặn: trùng tên; máy trùng mã; máy thiếu mã
+// - hiện mã gần giống để chọn lại mã cũ thay vì tạo trùng
+// =====================================================================
+type UnitOpt = { id: string; code: string; name: string };
+
+const QuickCreateItemModal: React.FC<{
+  open: boolean;
+  initialText: string;
+  initialSku?: string; // ✅ từ file nhập: điền sẵn đúng mã / tên / loại
+  initialName?: string;
+  initialKind?: "PART" | "MACHINE";
+  items: Item[];
+  onClose: () => void;
+  onCreated: (it: Item) => void;
+  onPickExisting: (it: Item) => void;
+}> = ({ open, initialText, initialSku, initialName, initialKind, items, onClose, onCreated, onPickExisting }) => {
+  const [kind, setKind] = useState<"PART" | "MACHINE">("PART");
+  const [sku, setSku] = useState("");
+  const [name, setName] = useState("");
+  const [unitId, setUnitId] = useState("");
+  const [sellPrice, setSellPrice] = useState("");
+  const [units, setUnits] = useState<UnitOpt[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // điền sẵn từ chữ đã gõ: dạng mã (không khoảng trắng, có số) -> ô Mã, còn lại -> ô Tên
+  useEffect(() => {
+    if (!open) return;
+    const t = (initialText || "").trim();
+    const looksLikeCode = !/\s/.test(t) && /\d/.test(t) && t.length <= 30;
+    if (initialSku !== undefined || initialName !== undefined) {
+      setSku((initialSku || "").trim());
+      setName((initialName || "").trim());
+    } else {
+      setSku(looksLikeCode ? t.toUpperCase() : "");
+      setName(looksLikeCode ? "" : t);
+    }
+    setKind(initialKind || "PART");
+    setSellPrice("");
+    setErr(null);
+    setBusy(false);
+  }, [open, initialText, initialSku, initialName, initialKind]);
+
+  // sửa ô nào thì xoá thông báo lỗi cũ
+  useEffect(() => {
+    setErr(null);
+  }, [kind, sku, name]);
+
+  useEffect(() => {
+    if (!open || units.length) return;
+    (async () => {
+      try {
+        const res = await api.get("/items/units");
+        const list: UnitOpt[] = res?.data?.data || res?.data || [];
+        setUnits(Array.isArray(list) ? list : []);
+        const pcs = (Array.isArray(list) ? list : []).find((u) => u.code === "pcs");
+        setUnitId((cur) => cur || pcs?.id || list[0]?.id || "");
+      } catch {
+        setErr("Không tải được danh sách ĐVT.");
+      }
+    })();
+  }, [open, units.length]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, busy, onClose]);
+
+  const nName = normalizeVN(name);
+  const cSku = compactKey(sku);
+  const sameName = nName ? items.find((x) => normalizeVN(x.name) === nName) : undefined;
+  const sameMachineSku =
+    kind === "MACHINE" && cSku ? items.find((x) => x.kind === "MACHINE" && compactKey(x.sku || "") === cSku) : undefined;
+
+  // mã gần giống: trùng mã (dạng liền) hoặc tên chứa đủ các từ đã gõ
+  const similar = useMemo(() => {
+    if (!open) return [];
+    const toks = nName.split(" ").filter((t) => t.length >= 2);
+    const cName = compactKey(name);
+    // từ dạng mã (có cả chữ và số, VD dz400, 6050s) -> so dạng liền với mã/tên đang có
+    const codeToks = `${name} ${sku}`
+      .split(/\s+/)
+      .map((t) => compactKey(t))
+      .filter((t) => t.length >= 4 && /\d/.test(t) && /[a-z]/.test(t));
+    return items
+      .map((x) => {
+        const xs = compactKey(x.sku || "");
+        const xn = normalizeVN(x.name);
+        let s = 0;
+        if (cSku && xs === cSku) s = 3;
+        else if (cSku.length >= 3 && (xs.includes(cSku) || compactKey(x.name).includes(cSku))) s = 2;
+        else if (codeToks.some((t) => compactKey(`${x.sku || ""} ${x.name}`).includes(t))) s = 2;
+        else if (toks.length && toks.filter((t) => xn.includes(t)).length / toks.length >= 0.6) s = 1;
+        else if (cName.length >= 4 && compactKey(`${x.sku || ""}${x.name}`).includes(cName)) s = 1;
+        return { x, s };
+      })
+      .filter((r) => r.s > 0)
+      .sort((a, b) => b.s - a.s)
+      .slice(0, 6)
+      .map((r) => r.x);
+  }, [open, items, nName, cSku, name]);
+
+  if (!open) return null;
+
+  const label: React.CSSProperties = { fontSize: 12.5, fontWeight: 600, color: "#334155", marginBottom: 4, display: "block" };
+  const input: React.CSSProperties = {
+    width: "100%",
+    boxSizing: "border-box",
+    border: "1px solid #cbd5e1",
+    borderRadius: 8,
+    padding: "8px 10px",
+    fontSize: 14,
+  };
+
+  async function submit(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (busy) return;
+    setErr(null);
+    const n = name.trim();
+    const s = sku.trim();
+    if (!n) return setErr("Vui lòng nhập TÊN hàng.");
+    if (kind === "MACHINE" && !s) return setErr("Máy bắt buộc phải có MÃ (mỗi máy 1 mã riêng).");
+    if (sameName) return setErr(`Tên này đã có trong danh mục: [${sameName.sku || "—"}] ${sameName.name}. Hãy chọn mã đó thay vì tạo mới.`);
+    if (sameMachineSku) return setErr(`Mã máy "${s}" đã được dùng cho: ${sameMachineSku.name}. Mỗi máy phải 1 mã riêng.`);
+    if (!unitId) return setErr("Vui lòng chọn ĐVT.");
+    const sp = sellPrice.trim() === "" ? undefined : Number(sellPrice.replace(/[.,\s]/g, ""));
+    if (sp !== undefined && (Number.isNaN(sp) || sp < 0)) return setErr("Giá bán không hợp lệ.");
+
+    try {
+      setBusy(true);
+      const res = await api.post("/items", { sku: s || undefined, name: n, unitId, kind, sellPrice: sp });
+      const c: any = res?.data?.data ?? res?.data;
+      if (!c?.id) throw new Error("Không nhận được mã vừa tạo.");
+      onCreated({
+        id: String(c.id),
+        sku: c.sku,
+        name: c.name,
+        unit: c.unit,
+        price: Number(c.sellPrice ?? c.price ?? 0),
+        stockQty: 0,
+        kind: c.kind,
+      });
+    } catch (ex: any) {
+      const status = ex?.response?.status;
+      setErr(
+        status === 403
+          ? "Bạn không có quyền tạo mã hàng (chỉ kế toán / admin)."
+          : ex?.response?.data?.message || ex?.response?.data?.error || ex?.message || "Tạo mã hàng thất bại."
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={modalOverlay} onMouseDown={() => !busy && onClose()}>
+      <form
+        style={{ ...modalCard, maxWidth: 560, width: "calc(100vw - 32px)" }}
+        onMouseDown={(e) => e.stopPropagation()}
+        onSubmit={submit}
+      >
+        <div style={modalHeader}>
+          <div>
+            <div style={modalTitle}>Tạo mã hàng mới</div>
+            <div style={{ fontSize: 12.5, color: "#6b7280", marginTop: 4 }}>
+              Tạo xong sẽ tự chọn vào dòng hoá đơn. Giá vốn lấy theo phiếu nhập khi duyệt.
+            </div>
+          </div>
+          <button type="button" style={modalCloseBtn} onClick={onClose} disabled={busy} title="Đóng (ESC)">
+            ✕
+          </button>
+        </div>
+
+        <div style={{ ...modalBody, display: "grid", gap: 12, padding: 16 }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            {(["PART", "MACHINE"] as const).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setKind(k)}
+                style={{
+                  flex: 1,
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  border: kind === k ? "1.5px solid #0f172a" : "1px solid #cbd5e1",
+                  background: kind === k ? "#0f172a" : "#fff",
+                  color: kind === k ? "#fff" : "#334155",
+                }}
+              >
+                {k === "PART" ? "Linh kiện" : "Máy"}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,2fr)", gap: 10 }}>
+            <div>
+              <label style={label}>Mã {kind === "MACHINE" ? <span style={{ color: "#dc2626" }}>*</span> : <span style={{ color: "#94a3b8", fontWeight: 400 }}>(trống = tự sinh)</span>}</label>
+              <input style={{ ...input, ...(sameMachineSku ? { borderColor: "#ef4444" } : {}) }} value={sku} onChange={(e) => setSku(e.target.value)} placeholder="VD: FXA-6050S" autoFocus={!!sku === false && !name} />
+            </div>
+            <div>
+              <label style={label}>Tên <span style={{ color: "#dc2626" }}>*</span></label>
+              <input style={{ ...input, ...(sameName ? { borderColor: "#ef4444" } : {}) }} value={name} onChange={(e) => setName(e.target.value)} placeholder="Tên đầy đủ, có thông số" autoFocus={!!sku} />
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 10 }}>
+            <div>
+              <label style={label}>ĐVT <span style={{ color: "#dc2626" }}>*</span></label>
+              <select style={input} value={unitId} onChange={(e) => setUnitId(e.target.value)}>
+                {units.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name || u.code}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={label}>Giá bán <span style={{ color: "#94a3b8", fontWeight: 400 }}>(không bắt buộc)</span></label>
+              <input
+                style={{ ...input, textAlign: "right" }}
+                inputMode="numeric"
+                value={sellPrice}
+                onChange={(e) => {
+                  const d = e.target.value.replace(/[^\d]/g, "");
+                  setSellPrice(d ? Number(d).toLocaleString("vi-VN") : "");
+                }}
+                placeholder="0"
+              />
+            </div>
+          </div>
+
+          {similar.length > 0 && (
+            <div style={{ border: "1px solid #fde68a", background: "#fffbeb", borderRadius: 8, padding: 10 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: "#92400e", marginBottom: 6 }}>
+                Đã có mã gần giống — kiểm tra trước khi tạo mới để tránh trùng:
+              </div>
+              <div style={{ display: "grid", gap: 4 }}>
+                {similar.map((x) => (
+                  <div key={x.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                    {x.sku ? (
+                      <span style={{ background: "#fef3c7", borderRadius: 6, padding: "1px 6px", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>{x.sku}</span>
+                    ) : null}
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={x.name}>
+                      {x.name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onPickExisting(x)}
+                      style={{ border: "1px solid #d97706", color: "#92400e", background: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
+                    >
+                      Dùng mã này
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {err && (
+            <div style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", borderRadius: 8, padding: "8px 10px", fontSize: 13 }}>{err}</div>
+          )}
+        </div>
+
+        <div style={modalFooter}>
+          <button type="button" style={styles.secondarySmallBtn} onClick={onClose} disabled={busy}>
+            Hủy
+          </button>
+          <button type="submit" style={primarySmallBtn(busy)} disabled={busy}>
+            {busy ? "Đang tạo..." : "Tạo mã & chọn vào dòng"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+
 function calcTotal(lines: InvoiceLine[]) {
   return lines.reduce((s, l) => s + l.qty * l.price, 0);
 }
@@ -904,6 +1374,15 @@ const InvoiceDetailPage: React.FC = () => {
   // ✅ AUTH: lấy role từ BE (/me), fallback localStorage
   const [me, setMe] = useState<{ id?: string; role?: string }>({});
   const isAdmin = String(me.role || "").trim().toLowerCase() === "admin";
+  // ✅ MỚI: quyền tạo nhanh mã hàng trong hoá đơn (khớp BE: POST /items chỉ accountant|admin)
+  const canCreateItem = ["admin", "accountant"].includes(String(me.role || "").trim().toLowerCase());
+  const [quickCreate, setQuickCreate] = useState<{
+    lineIdx: number;
+    text: string;
+    sku?: string;
+    name?: string;
+    kind?: "PART" | "MACHINE";
+  } | null>(null);
 
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [partners, setPartners] = useState<Partner[]>([]);
@@ -920,6 +1399,8 @@ const InvoiceDetailPage: React.FC = () => {
         item: it,
         normName: normalizeVN(it.name || ""),
         normSku: normalizeVN(it.sku || ""),
+        compact: compactKey(`${it.sku || ""} ${it.name || ""}`), // ✅ FIX: gõ liền không gạch
+        compactSku: compactKey(it.sku || ""),
       })),
     [items]
   );
@@ -1096,6 +1577,124 @@ const InvoiceDetailPage: React.FC = () => {
     setMessage(null);
   }
 
+  // =====================================================================
+  // ✅ MỚI: NHẬP TỪ FILE — chỉ đổ dòng vào bảng sản phẩm, lưu vẫn bằng handleSave cũ
+  // =====================================================================
+  const [importInfo, setImportInfo] = useState<ImportInfo | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const importFileRef = useRef<HTMLInputElement | null>(null);
+
+  async function handleImportFile(file: File) {
+    if (!invoice) return;
+    if (invoice.lines.some((l) => l._imp)) {
+      toastError("Phiếu đang có dòng từ 1 file khác. Bấm “Bỏ các dòng từ file” trước khi nhập file mới.", "Đã có dòng từ file");
+      return;
+    }
+    try {
+      setImportBusy(true);
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("type", String(invoice.type));
+      if (invoice.partnerId) fd.append("partnerId", String(invoice.partnerId));
+      const res = await api.post("/invoice-import/analyze", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      const d: any = res?.data?.data;
+      if (!d || !Array.isArray(d.lines)) throw new Error("Phản hồi không hợp lệ");
+
+      const byId = new Map(items.map((i) => [i.id, i]));
+      const newLines: InvoiceLine[] = d.lines
+        .filter((l: any) => l.status !== "skip")
+        .map((l: any) => {
+          const meta: ImpMeta = {
+            status: l.status,
+            row: l.row,
+            code: l.code || "",
+            name: l.name || "",
+            unit: l.unit || "",
+            reason: l.reason || "",
+            flags: l.flags || [],
+            candidates: l.candidates || [],
+            rawKey: l.rawKey,
+            autoItemId: l.status === "ok" ? l.itemId : null,
+          };
+          if (l.status === "ok" && l.itemId) {
+            const it = byId.get(String(l.itemId));
+            const c = meta.candidates.find((x) => x.itemId === l.itemId);
+            return { itemId: String(l.itemId), itemName: it?.name || c?.name || l.name, unit: it?.unit ?? c?.unit, qty: l.qty, price: l.price, _imp: meta };
+          }
+          // 🟡 / 🔵: để TRỐNG itemId -> bắt buộc người dùng chọn / tạo mã (khoá lưu đã có sẵn)
+          return { itemId: undefined, itemName: l.name, unit: l.unit || "", qty: l.qty, price: l.price, _imp: meta };
+        });
+
+      markDirty();
+      setInvoice((prev) => {
+        if (!prev) return prev;
+        const keep = prev.lines.filter((l) => l.itemId || (l.itemName || "").trim() || Number(l.price || 0) > 0);
+        return recomputeInvoiceCore(prev, { lines: [...keep, ...newLines] });
+      });
+      setImportInfo({
+        fileName: d.fileName,
+        fileHash: d.fileHash,
+        invoiceKey: d.invoiceKey || "",
+        invoiceNo: d.invoiceNo || "",
+        source: d.source,
+        fileTotal: d.totals?.fileTotal ?? null,
+        critical: d.critical || [],
+        warnings: d.warnings || [],
+        partner: d.partner || null,
+        ack: false,
+        confirmed: false,
+      });
+      const c = d.count || {};
+      toastSuccess(`Đã đưa ${newLines.length} dòng vào phiếu: ${c.ok || 0} tự khớp · ${c.check || 0} cần chọn · ${c.new || 0} chưa có mã.`, "Nhập từ file");
+    } catch (err: any) {
+      toastError(err?.response?.data?.message || err?.message || "Không đọc được file.", "Nhập từ file thất bại");
+    } finally {
+      setImportBusy(false);
+      if (importFileRef.current) importFileRef.current.value = "";
+    }
+  }
+
+  function clearImportedLines() {
+    markDirty();
+    setInvoice((prev) => (prev ? recomputeInvoiceCore(prev, { lines: prev.lines.filter((l) => !l._imp) }) : prev));
+    setImportInfo(null);
+  }
+
+  async function downloadImportTemplate() {
+    try {
+      const res = await api.get("/invoice-import/template", { params: { kind: "ALL" }, responseType: "blob" });
+      const url = URL.createObjectURL(res.data as Blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `mau-nhap-hang.xlsx`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    } catch (err: any) {
+      toastError(err?.message || "Không tải được file mẫu.");
+    }
+  }
+
+  // Sau khi LƯU thành công (handleSave cũ đặt dirty=false) -> ghi nhật ký chống trùng + ghi nhớ lựa chọn
+  useEffect(() => {
+    if (!importInfo || importInfo.confirmed || dirtySinceLastSave || !invoice?.id) return;
+    const picks = invoice.lines
+      .filter((l) => l._imp && l.itemId && (l._imp.status !== "ok" || String(l.itemId) !== String(l._imp.autoItemId)))
+      .map((l) => ({ rawKey: l._imp!.rawKey, rawText: `${l._imp!.code} ${l._imp!.name}`.trim(), itemId: String(l.itemId) }));
+    setImportInfo((p) => (p ? { ...p, confirmed: true } : p));
+    api
+      .post("/invoice-import/confirm", {
+        invoiceId: String(invoice.id),
+        fileHash: importInfo.fileHash,
+        invoiceKey: importInfo.invoiceKey,
+        fileName: importInfo.fileName,
+        type: invoice.type,
+        partnerId: invoice.partnerId ? String(invoice.partnerId) : "",
+        picks,
+      })
+      .catch((e) => console.warn("invoice-import confirm failed", e));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [importInfo, dirtySinceLastSave, invoice?.id]);
+
   function defaultHoldAmountFromSubtotal(subtotal: number) {
     return Math.round(Math.max(0, Number(subtotal || 0)) * DEFAULT_HOLD_PCT);
   }
@@ -1228,11 +1827,36 @@ const InvoiceDetailPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [invoice?.id]);
 
+  // ✅ FIX: danh sách cũ quá 60s thì tải lại khi quay lại tab hoặc bấm vào ô tìm
+  const lastLoadRef = useRef<{ items: number; partners: number }>({ items: 0, partners: 0 });
+  const STALE_MS = 60_000;
+  function refreshListsIfStale(which: "items" | "partners" | "both" = "both") {
+    const now = Date.now();
+    if ((which === "items" || which === "both") && now - lastLoadRef.current.items > STALE_MS) {
+      lastLoadRef.current.items = now;
+      loadItems();
+    }
+    if ((which === "partners" || which === "both") && now - lastLoadRef.current.partners > STALE_MS) {
+      lastLoadRef.current.partners = now;
+      loadPartners();
+    }
+  }
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refreshListsIfStale("both");
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function loadPartners() {
     try {
-      const res = await api.get("/partners", { params: { q: "", page: 1, pageSize: 100 } });
-      const data = unwrap<any>(res);
-      const arr: any[] = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+      const arr: any[] = await fetchAllPages("/partners"); // ✅ FIX: hết danh sách, không còn giới hạn 100
       const mapped: Partner[] = arr.map((p: any) => ({
         id: String(p.id),
         name: p.name,
@@ -1243,6 +1867,7 @@ const InvoiceDetailPage: React.FC = () => {
         email: p.email,
       }));
       setPartners(mapped);
+      lastLoadRef.current.partners = Date.now();
     } catch (err) {
       console.error("loadPartners error", err);
     }
@@ -1250,9 +1875,7 @@ const InvoiceDetailPage: React.FC = () => {
 
   async function loadItems() {
     try {
-      const res = await api.get("/items", { params: { q: "", page: 1, pageSize: 1000 } });
-      const data = unwrap<any>(res);
-      const arr: any[] = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+      const arr: any[] = await fetchAllPages("/items"); // ✅ FIX: hết danh mục, không còn giới hạn 1000
       const mapped: Item[] = arr.map((i: any) => ({
         id: String(i.id),
         sku: i.sku || i.code,
@@ -1261,8 +1884,10 @@ const InvoiceDetailPage: React.FC = () => {
         // ✅ non-admin API chỉ trả sellPrice (không có price) — fallback để không bị mất giá
         price: Number(i.sellPrice ?? i.price ?? 0),
         stockQty: Number(i.stockQty ?? 0),
+        kind: i.kind,
       }));
       setItems(mapped);
+      lastLoadRef.current.items = Date.now();
     } catch (err) {
       console.error("loadItems error", err);
     }
@@ -1717,6 +2342,25 @@ const InvoiceDetailPage: React.FC = () => {
     // ✅ chặn lưu hoá đơn nếu chưa có partnerId hợp lệ
     if (!blockSaveIfPartnerMissing()) return;
 
+    // ✅ FIX: dòng đã gõ tên / giá nhưng CHƯA chọn sản phẩm từ danh sách -> trước đây BE lặng lẽ bỏ dòng đó
+    const badLines = invoice.lines
+      .map((l, i) => ({ l, i }))
+      .filter(({ l }) => !l.itemId && ((l.itemName || "").trim() !== "" || Number(l.price || 0) > 0));
+    if (badLines.length) {
+      toastError(
+        `Dòng ${badLines.map((x) => x.i + 1).join(", ")} chưa chọn sản phẩm từ danh sách gợi ý. Hãy chọn sản phẩm (hoặc xoá dòng) rồi lưu lại.`,
+        "Chưa chọn sản phẩm"
+      );
+      setOpenItemSuggestIndex(badLines[0].i);
+      return;
+    }
+
+    // ✅ MỚI: file nhập có cảnh báo quan trọng (nhập trùng / lệch tổng / HĐ điều chỉnh) -> phải tick "đã kiểm tra"
+    if (importInfo && !importInfo.confirmed && importInfo.critical.length && !importInfo.ack) {
+      toastError("File vừa nhập có cảnh báo quan trọng (khung đỏ phía trên bảng sản phẩm). Đọc kỹ rồi tick “Tôi đã kiểm tra” trước khi lưu.", "Chưa xác nhận cảnh báo");
+      return;
+    }
+
     const status = (invoice.status ?? "DRAFT") as InvoiceStatus;
     const vPrice = validatePurchasePrice(invoice);
     if (!vPrice.ok) {
@@ -1981,12 +2625,13 @@ const InvoiceDetailPage: React.FC = () => {
 
   if (loading || !invoice) {
     return (
-      <div style={styles.page}>
+      <div style={styles.page} className="inv-ui">
+        <style>{INV_CSS}</style>
         <div style={styles.header}>
           <h1 style={styles.headerTitle}>Hóa đơn</h1>
         </div>
         <div style={styles.body}>
-          <div style={styles.content}>Đang tải...</div>
+          <div style={{ ...styles.content, color: C.muted, padding: 24 }}>Đang tải...</div>
         </div>
 
         <ToastHost toasts={toasts} onClose={remove} />
@@ -2004,10 +2649,23 @@ const InvoiceDetailPage: React.FC = () => {
 
   const locked = !canEdit;
 
-  const partnerSuggestions =
-    invoice.partnerName
-      ? partners.filter((p) => p.name.toLowerCase().includes(invoice.partnerName.toLowerCase())).slice(0, 20)
-      : [];
+  // ✅ FIX: tìm không dấu, theo tên + mã + MST + SĐT (trước: phải gõ đúng dấu, chỉ theo tên)
+  const partnerSuggestions = (() => {
+    const q = normalizeVN(invoice.partnerName || "");
+    if (!q) return [];
+    const tokens = q.split(" ").filter(Boolean);
+    const qc = compactKey(q);
+    return partners
+      .map((p) => ({ p, hay: partnerHay(p) }))
+      .filter(({ p, hay }) => tokens.every((t) => hay.includes(t)) || (qc.length >= 4 && (compactKey(p.taxCode || "") + " " + compactKey(p.phone || "")).includes(qc)))
+      .sort((a, b) => {
+        const sc = (x: { p: Partner; hay: string }) =>
+          compactKey(x.p.taxCode || "") === qc || compactKey(x.p.phone || "") === qc ? 0 : normalizeVN(x.p.name).startsWith(q) ? 1 : 2;
+        return sc(a) - sc(b);
+      })
+      .slice(0, 20)
+      .map((x) => x.p);
+  })();
 
   const showPaidInput = (invoice.paymentStatus ?? "UNPAID") === "PARTIAL";
 
@@ -2062,23 +2720,45 @@ const InvoiceDetailPage: React.FC = () => {
 
   const partnerOk = status !== "DRAFT" ? true : isPartnerValid(invoice);
 
+  // ---- nhãn hiển thị (chỉ UI)
+  const statusPill =
+    status === "APPROVED"
+      ? pill("#dcfce7", "#166534")
+      : status === "SUBMITTED"
+        ? pill("#fef3c7", "#92400e")
+        : status === "REJECTED"
+          ? pill("#fee2e2", "#991b1b")
+          : pill("#e2e8f0", "#334155");
+  const partnerWord = isPurchase ? "Nhà cung cấp" : "Khách hàng";
+  const filledLines = invoice.lines.filter((l) => l.itemId).length;
+
   return (
-    <div style={styles.page}>
+    <div style={styles.page} className="inv-ui">
+      <style>{INV_CSS}</style>
+
       <div style={styles.header}>
+        <button type="button" style={styles.backBtn} onClick={goBackToInvoices} className="inv-btn">
+          ← Danh sách
+        </button>
         <h1 style={styles.headerTitle}>{title}</h1>
+        <span style={isPurchase ? pill("#e0f2fe", "#075985") : pill("#ede9fe", "#5b21b6")}>
+          {isPurchase ? "Nhập hàng" : "Bán hàng"}
+        </span>
+        <span style={statusPill}>● {statusText}</span>
+        {invoice.code ? (
+          <span style={{ marginLeft: "auto", fontSize: 13, color: C.muted }}>
+            Số HĐ: <b style={{ color: C.text }}>{invoice.code}</b>
+          </span>
+        ) : null}
       </div>
 
       <div style={styles.body}>
         <div style={styles.content}>
-          <button type="button" style={styles.backBtn} onClick={goBackToInvoices}>
-            ← Quay lại danh sách hóa đơn
-          </button>
-
           {/* APPROVED notice */}
           {status === "APPROVED" && !canEditApprovedAdjust && (
-            <div style={{ ...styles.notice, background: "#eef2ff", border: "1px solid #c7d2fe", color: "#3730a3" }}>
+            <div style={{ ...styles.notice, marginBottom: 16, background: "#eef2ff", border: "1px solid #c7d2fe", color: "#3730a3" }}>
               Hóa đơn đã <b>DUYỆT</b>. Không thể sửa trực tiếp hóa đơn gốc.
-              <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                 <span style={{ fontSize: 12.5, color: "#4f46e5" }}>
                   Nếu cần sửa: bấm <b>Mở lại để sửa</b> (rollback tồn kho và đưa về NHÁP) hoặc mở bằng chế độ điều chỉnh{" "}
                   <b>?adjust=1</b>.
@@ -2102,7 +2782,7 @@ const InvoiceDetailPage: React.FC = () => {
 
           {/* Adjust-mode notice */}
           {status === "APPROVED" && canEditApprovedAdjust && (
-            <div style={{ ...styles.notice, background: "#ecfeff", border: "1px solid #67e8f9", color: "#155e75" }}>
+            <div style={{ ...styles.notice, marginBottom: 16, background: "#ecfeff", border: "1px solid #67e8f9", color: "#155e75" }}>
               Bạn đang ở chế độ <b>ĐIỀU CHỈNH</b> (admin). Bấm <b>{saveLabel}</b> sẽ tự rollback movement cũ, lưu lại nội dung
               mới và post tồn kho lại (auto <b>APPROVED</b>).
               <div style={{ marginTop: 6, fontSize: 12.5, color: "#0e7490" }}>
@@ -2112,7 +2792,7 @@ const InvoiceDetailPage: React.FC = () => {
           )}
 
           {(status === "SUBMITTED" || status === "REJECTED") && (
-            <div style={{ ...styles.notice, ...styles.noticeError }}>
+            <div style={{ ...styles.notice, ...styles.noticeError, marginBottom: 16 }}>
               Hóa đơn đang ở trạng thái <b>{statusText}</b> nên không thể chỉnh sửa.
             </div>
           )}
@@ -2125,273 +2805,402 @@ const InvoiceDetailPage: React.FC = () => {
               else toastError("Không có thao tác lưu hợp lệ cho trạng thái hiện tại.");
             }}
           >
-            {/* Thông tin đơn hàng */}
-            <div style={styles.sectionBox}>
-              <div style={styles.sectionTitle}>Thông tin đơn hàng</div>
+            <div className="inv-grid-2">
+              <div className="inv-col">
+                {/* Thông tin đơn hàng */}
+                <div style={styles.sectionBox}>
+                  <div style={styles.sectionTitle}>Thông tin đơn hàng</div>
 
-              <div style={styles.formRow}>
-                <label style={styles.label}>Số hóa đơn *</label>
-                <input
-                  style={{
-                    ...styles.input,
-                    background: canEditInvoiceCode ? "#fff" : "#f8fafc",
-                    cursor: canEditInvoiceCode ? "text" : "not-allowed",
-                  }}
-                  value={invoice.code ?? ""}
-                  disabled={!canEditInvoiceCode}
-                  placeholder={canEditInvoiceCode ? "Nhập mã hóa đơn (để trống thì hệ thống tự nhảy)" : "số tự nhảy"}
-                  onChange={(e) => {
-                    if (!canEditInvoiceCode) return;
-                    markDirty();
-                    updateInvoice({ code: e.target.value });
-                  }}
-                />
-              </div>
+                  <div style={styles.formRow}>
+                    <label style={styles.label}>Số hóa đơn *</label>
+                    <input
+                      style={{
+                        ...styles.input,
+                        background: canEditInvoiceCode ? "#fff" : "#f8fafc",
+                        cursor: canEditInvoiceCode ? "text" : "not-allowed",
+                      }}
+                      value={invoice.code ?? ""}
+                      disabled={!canEditInvoiceCode}
+                      placeholder={canEditInvoiceCode ? "Để trống thì hệ thống tự nhảy số" : "số tự nhảy"}
+                      onChange={(e) => {
+                        if (!canEditInvoiceCode) return;
+                        markDirty();
+                        updateInvoice({ code: e.target.value });
+                      }}
+                    />
+                  </div>
 
-              <div style={{ ...styles.formRow, ...styles.rowInline }}>
-                <div style={styles.flex1}>
-                  <label style={styles.label}>Ngày hóa đơn</label>
-                  <input
-                    style={styles.input}
-                    type="date"
-                    value={invoice.date || ""}
-                    disabled={locked}
-                    onChange={(e) => {
-                      markDirty();
-                      updateInvoice({ date: e.target.value || undefined });
-                    }}
-                  />
-                </div>
-                <div style={styles.flex1}>
-                  <label style={styles.label}>Loại hóa đơn</label>
-                  <select
-                    style={styles.select}
-                    value={invoice.type}
-                    disabled={locked || status !== "DRAFT"}
-                    onChange={(e) => {
-                      markDirty();
-                      updateInvoice({ type: e.target.value as InvoiceType });
-                    }}
-                  >
-                    <option value="SALES">Bán hàng</option>
-                    <option value="PURCHASE">Nhập hàng</option>
-                  </select>
-                  {status !== "DRAFT" && (
-                    <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                      * Hóa đơn đã phát sinh nghiệp vụ nên không đổi loại.
+                  <div style={styles.rowInline} className="inv-inline">
+                    <div style={styles.flex1}>
+                      <label style={styles.label}>Ngày hóa đơn</label>
+                      <input
+                        style={styles.input}
+                        type="date"
+                        value={invoice.date || ""}
+                        disabled={locked}
+                        onChange={(e) => {
+                          markDirty();
+                          updateInvoice({ date: e.target.value || undefined });
+                        }}
+                      />
+                    </div>
+                    <div style={styles.flex1}>
+                      <label style={styles.label}>Loại hóa đơn</label>
+                      <select
+                        style={styles.select}
+                        value={invoice.type}
+                        disabled={locked || status !== "DRAFT"}
+                        onChange={(e) => {
+                          markDirty();
+                          updateInvoice({ type: e.target.value as InvoiceType });
+                        }}
+                      >
+                        <option value="SALES">Bán hàng</option>
+                        <option value="PURCHASE">Nhập hàng</option>
+                      </select>
+                      {status !== "DRAFT" && (
+                        <div style={{ fontSize: 12, color: C.muted }}>* Hóa đơn đã phát sinh nghiệp vụ nên không đổi loại.</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {invoice.type === "SALES" && (
+                    <div style={{ fontSize: 13, color: returnColor }}>
+                      {returnState === "FULL"
+                        ? "Trả hàng: Toàn bộ"
+                        : returnState === "PARTIAL"
+                          ? "Trả hàng: Một phần"
+                          : "Trả hàng: Không"}
+                      {invoice.returnMeta?.debtIgnore ? (
+                        <span style={{ marginLeft: 10, color: "#b91c1c" }}>(debtIgnore=true)</span>
+                      ) : null}
                     </div>
                   )}
                 </div>
-              </div>
 
-              {invoice.type === "SALES" && (
-                <div style={{ marginTop: 6, fontSize: 13, color: returnColor }}>
-                  {returnState === "FULL"
-                    ? "Trả hàng: Toàn bộ"
-                    : returnState === "PARTIAL"
-                      ? "Trả hàng: Một phần"
-                      : "Trả hàng: Không"}
-                  {invoice.returnMeta?.debtIgnore ? (
-                    <span style={{ marginLeft: 10, color: "#b91c1c" }}>(debtIgnore=true)</span>
-                  ) : null}
-                </div>
-              )}
-            </div>
+                {/* Nhân viên phụ trách */}
+                {invoice.type !== "PURCHASE" && (
+                  <div style={styles.sectionBox}>
+                    <div style={styles.sectionTitle}>Nhân viên phụ trách</div>
 
-            {/* Khách hàng */}
-            <div style={styles.sectionBox}>
-              <div style={styles.sectionTitle}>Khách hàng</div>
-
-              <div
-                style={{ ...styles.formRow, ...styles.autoWrapper }}
-                onBlur={() => setTimeout(() => setShowPartnerSuggest(false), 150)}
-              >
-                <label style={styles.label}>Tên khách hàng (gõ để tìm)</label>
-                <input
-                  ref={partnerInputRef}
-                  style={styles.input}
-                  value={invoice.partnerName}
-                  disabled={locked || status !== "DRAFT"} // policy: approved adjust-mode không cho đổi khách ở đây (đỡ rủi ro)
-                  onChange={(e) => handlePartnerNameChange(e.target.value)}
-                  onFocus={() => setShowPartnerSuggest(true)}
-                  placeholder="Nhập tên khách hàng..."
-                />
-
-                {/* ✅ warning inline để nhân viên khỏi quên bấm lưu khách */}
-                {status === "DRAFT" && !locked && !partnerOk && (
-                  <div style={{ marginTop: 6, fontSize: 12.5, color: "#b91c1c" }}>
-                    * Chưa chọn/chưa lưu khách hàng vào danh sách đối tác. Hãy chọn từ dropdown hoặc bấm “Lưu khách hàng vào
-                    danh sách đối tác” trước khi lưu hóa đơn.
-                  </div>
-                )}
-
-                {showPartnerSuggest && !locked && status === "DRAFT" && partnerSuggestions.length > 0 && (
-                  <div style={styles.suggestBox}>
-                    {partnerSuggestions.map((p) => (
-                      <div
-                        key={p.id}
-                        style={styles.suggestItem}
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          selectPartner(p);
-                        }}
-                      >
-                        {p.name}
-                        {p.code && <span style={{ color: "#6b7280", marginLeft: 4 }}>[{p.code}]</span>}
-                        {p.taxCode && <span style={{ color: "#9ca3af", marginLeft: 4 }}>({p.taxCode})</span>}
+                    <div style={styles.rowInline} className="inv-inline">
+                      <div style={{ ...styles.flex1, marginBottom: 0 }}>
+                        <label style={styles.label}>NV Sale</label>
+                        <select
+                          style={styles.select}
+                          value={invoice.saleUserId || ""}
+                          disabled={locked}
+                          onChange={(e) => {
+                            markDirty();
+                            updateInvoice({ saleUserId: safeId(e.target.value) });
+                          }}
+                        >
+                          <option value="">-- Chọn NV sale --</option>
+                          {staffs.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}
+                            </option>
+                          ))}
+                        </select>
                       </div>
+
+                      <div style={{ ...styles.flex1, marginBottom: 0 }}>
+                        <label style={styles.label}>NV kỹ thuật</label>
+                        <select
+                          style={styles.select}
+                          value={invoice.techUserId || ""}
+                          disabled={locked}
+                          onChange={(e) => {
+                            markDirty();
+                            updateInvoice({ techUserId: safeId(e.target.value) });
+                          }}
+                        >
+                          <option value="">-- Chọn NV kỹ thuật --</option>
+                          {staffs.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Khách hàng / Nhà cung cấp */}
+              <div style={styles.sectionBox}>
+                <div style={styles.sectionTitle}>
+                  <span>{partnerWord}</span>
+                  {status === "DRAFT" &&
+                    (partnerOk ? (
+                      <span style={pill("#dcfce7", "#166534")}>✓ Đã có trong danh sách</span>
+                    ) : (
+                      <span style={pill("#fee2e2", "#991b1b")}>Chưa chọn / chưa lưu</span>
                     ))}
+                </div>
+
+                <div
+                  style={{ ...styles.formRow, ...styles.autoWrapper }}
+                  onBlur={() => setTimeout(() => setShowPartnerSuggest(false), 150)}
+                >
+                  <label style={styles.label}>Tên {partnerWord.toLowerCase()} (gõ để tìm)</label>
+                  <input
+                    ref={partnerInputRef}
+                    style={{
+                      ...styles.input,
+                      ...(status === "DRAFT" && !locked && !partnerOk ? { borderColor: "#fca5a5" } : {}),
+                    }}
+                    value={invoice.partnerName}
+                    disabled={locked || status !== "DRAFT"} // policy: approved adjust-mode không cho đổi khách ở đây (đỡ rủi ro)
+                    onChange={(e) => handlePartnerNameChange(e.target.value)}
+                    onFocus={() => {
+                      setShowPartnerSuggest(true);
+                      refreshListsIfStale("partners");
+                    }}
+                    placeholder={`Nhập tên ${partnerWord.toLowerCase()}...`}
+                  />
+
+                  {/* ✅ warning inline để nhân viên khỏi quên bấm lưu khách */}
+                  {status === "DRAFT" && !locked && !partnerOk && (
+                    <div style={{ fontSize: 12.5, color: "#b91c1c" }}>
+                      Chọn từ danh sách gợi ý, hoặc bấm “Lưu vào danh sách đối tác” bên dưới trước khi lưu hóa đơn.
+                    </div>
+                  )}
+
+                  {showPartnerSuggest && !locked && status === "DRAFT" && partnerSuggestions.length > 0 && (
+                    <div style={styles.suggestBox}>
+                      {partnerSuggestions.map((p) => (
+                        <div
+                          key={p.id}
+                          className="inv-suggest-item"
+                          style={styles.suggestItem}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            selectPartner(p);
+                          }}
+                        >
+                          <div style={{ fontWeight: 600 }}>{p.name}</div>
+                          <div style={{ fontSize: 12, color: C.muted }}>
+                            {[p.code, p.taxCode ? `MST ${p.taxCode}` : "", p.phone].filter(Boolean).join(" · ")}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {status !== "DRAFT" && (
+                    <div style={{ fontSize: 12, color: C.muted }}>* Hóa đơn đã phát sinh nghiệp vụ: không đổi {partnerWord.toLowerCase()} tại đây.</div>
+                  )}
+                </div>
+
+                <div style={styles.rowInline} className="inv-inline">
+                  <div style={styles.flex1}>
+                    <label style={styles.label}>Mã {partnerWord.toLowerCase()}</label>
+                    <input
+                      style={styles.input}
+                      value={invoice.partnerCode || ""}
+                      disabled={locked || status !== "DRAFT"}
+                      onChange={(e) => {
+                        markDirty();
+                        updateInvoice({ partnerCode: e.target.value });
+                      }}
+                    />
                   </div>
-                )}
-                {status !== "DRAFT" && (
-                  <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                    * Hóa đơn đã phát sinh nghiệp vụ: không đổi khách hàng tại đây.
+                  <div style={styles.flex1}>
+                    <label style={styles.label}>Mã số thuế</label>
+                    <input
+                      style={styles.input}
+                      value={invoice.partnerTaxCode || ""}
+                      disabled={locked || status !== "DRAFT"}
+                      onChange={(e) => {
+                        markDirty();
+                        updateInvoice({ partnerTaxCode: e.target.value });
+                      }}
+                    />
                   </div>
-                )}
-              </div>
+                </div>
 
-              <div style={styles.formRow}>
-                <label style={styles.label}>Mã khách hàng</label>
-                <input
-                  style={styles.input}
-                  value={invoice.partnerCode || ""}
-                  disabled={locked || status !== "DRAFT"}
-                  onChange={(e) => {
-                    markDirty();
-                    updateInvoice({ partnerCode: e.target.value });
-                  }}
-                />
-              </div>
-
-              <div style={styles.formRow}>
-                <label style={styles.label}>Địa chỉ</label>
-                <input
-                  style={styles.input}
-                  value={invoice.partnerAddress || ""}
-                  disabled={locked || status !== "DRAFT"}
-                  onChange={(e) => {
-                    markDirty();
-                    updateInvoice({ partnerAddress: e.target.value });
-                  }}
-                />
-              </div>
-
-              <div style={{ ...styles.formRow, ...styles.rowInline }}>
-                <div style={styles.flex1}>
-                  <label style={styles.label}>Số điện thoại</label>
+                <div style={styles.formRow}>
+                  <label style={styles.label}>Địa chỉ</label>
                   <input
                     style={styles.input}
-                    value={invoice.partnerPhone || ""}
+                    value={invoice.partnerAddress || ""}
                     disabled={locked || status !== "DRAFT"}
                     onChange={(e) => {
                       markDirty();
-                      updateInvoice({ partnerPhone: e.target.value });
+                      updateInvoice({ partnerAddress: e.target.value });
                     }}
                   />
                 </div>
-                <div style={styles.flex1}>
-                  <label style={styles.label}>Mã số thuế</label>
-                  <input
-                    style={styles.input}
-                    value={invoice.partnerTaxCode || ""}
-                    disabled={locked || status !== "DRAFT"}
-                    onChange={(e) => {
-                      markDirty();
-                      updateInvoice({ partnerTaxCode: e.target.value });
-                    }}
-                  />
+
+                <div style={styles.rowInline} className="inv-inline">
+                  <div style={styles.flex1}>
+                    <label style={styles.label}>Số điện thoại</label>
+                    <input
+                      style={styles.input}
+                      value={invoice.partnerPhone || ""}
+                      disabled={locked || status !== "DRAFT"}
+                      onChange={(e) => {
+                        markDirty();
+                        updateInvoice({ partnerPhone: e.target.value });
+                      }}
+                    />
+                  </div>
+                  <div style={styles.flex1}>
+                    <label style={styles.label}>Email</label>
+                    <input
+                      style={styles.input}
+                      value={invoice.partnerEmail || ""}
+                      disabled={locked || status !== "DRAFT"}
+                      onChange={(e) => {
+                        markDirty();
+                        updateInvoice({ partnerEmail: e.target.value });
+                      }}
+                    />
+                  </div>
                 </div>
-              </div>
 
-              <div style={styles.formRow}>
-                <label style={styles.label}>Email</label>
-                <input
-                  style={styles.input}
-                  value={invoice.partnerEmail || ""}
-                  disabled={locked || status !== "DRAFT"}
-                  onChange={(e) => {
-                    markDirty();
-                    updateInvoice({ partnerEmail: e.target.value });
-                  }}
-                />
-              </div>
-
-              <div style={{ marginTop: 4 }}>
                 <button
                   type="button"
+                  className="inv-btn"
                   style={styles.secondarySmallBtn}
                   disabled={locked || status !== "DRAFT"}
                   onClick={handleSavePartner}
                 >
-                  Lưu khách hàng vào danh sách đối tác
+                  + Lưu vào danh sách đối tác
                 </button>
               </div>
             </div>
 
-            {/* Nhân viên phụ trách */}
-            {invoice.type !== "PURCHASE" && (
-              <div style={styles.sectionBox}>
-                <div style={styles.sectionTitle}>Nhân viên phụ trách</div>
-
-                <div style={{ ...styles.formRow, ...styles.rowInline }}>
-                  <div style={styles.flex1}>
-                    <label style={styles.label}>NV Sale</label>
-                    <select
-                      style={styles.select}
-                      value={invoice.saleUserId || ""}
-                      disabled={locked}
-                      onChange={(e) => {
-                        markDirty();
-                        updateInvoice({ saleUserId: safeId(e.target.value) });
-                      }}
-                    >
-                      <option value="">-- Chọn NV sale --</option>
-                      {staffs.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div style={styles.flex1}>
-                    <label style={styles.label}>NV kỹ thuật</label>
-                    <select
-                      style={styles.select}
-                      value={invoice.techUserId || ""}
-                      disabled={locked}
-                      onChange={(e) => {
-                        markDirty();
-                        updateInvoice({ techUserId: safeId(e.target.value) });
-                      }}
-                    >
-                      <option value="">-- Chọn NV kỹ thuật --</option>
-                      {staffs.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              </div>
-            )}
-
             {/* Dòng sản phẩm */}
             <div style={styles.sectionBox}>
-              <div style={styles.sectionTitle}>Dòng sản phẩm</div>
+              <div style={styles.sectionTitle}>
+                <span>Dòng sản phẩm</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {/* ✅ MỚI: nhập từ file */}
+                  {!locked && (invoice.type === "PURCHASE" || invoice.type === "SALES") && (
+                    <>
+                      <button
+                        type="button"
+                        style={{ ...styles.secondarySmallBtn, textTransform: "none", letterSpacing: 0 }}
+                        onClick={downloadImportTemplate}
+                        title="File Excel có sẵn toàn bộ mã hàng + cột ID ẩn: chỉ điền Số lượng, Đơn giá"
+                      >
+                        Tải file mẫu
+                      </button>
+                      <button
+                        type="button"
+                        style={{ ...primarySmallBtn(importBusy), textTransform: "none", letterSpacing: 0 }}
+                        disabled={importBusy}
+                        onClick={() => importFileRef.current?.click()}
+                        title="Excel container / file mẫu / hoá đơn điện tử .xml"
+                      >
+                        {importBusy ? "Đang đọc file..." : "Nhập từ file"}
+                      </button>
+                      <input
+                        ref={importFileRef}
+                        type="file"
+                        accept=".xlsx,.xls,.xlsm,.csv,.xml"
+                        style={{ display: "none" }}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) handleImportFile(f);
+                        }}
+                      />
+                    </>
+                  )}
+                  <span style={{ fontSize: 12, fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>
+                    {filledLines} / {invoice.lines.length} dòng đã chọn sản phẩm
+                  </span>
+                </span>
+              </div>
 
-              <div style={styles.gridHeader}>
+              {importInfo && !importInfo.confirmed && (() => {
+                const imp = invoice.lines.filter((l) => l._imp);
+                const auto = imp.filter((l) => l.itemId && l._imp!.status === "ok" && String(l.itemId) === String(l._imp!.autoItemId)).length;
+                const picked = imp.filter((l) => l.itemId).length;
+                const left = imp.length - picked;
+                const sum = imp.reduce((t, l) => t + Number(l.qty || 0) * Number(l.price || 0), 0);
+                const ft = importInfo.fileTotal;
+                const diff = ft == null ? null : Math.round(sum - ft);
+                const pm = importInfo.partner?.match;
+                return (
+                  <div style={{ border: `1px solid ${C.border}`, background: "#f8fafc", borderRadius: 10, padding: 12, marginBottom: 10, fontSize: 13, display: "grid", gap: 8 }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <b style={{ wordBreak: "break-all" }}>📄 {importInfo.fileName}</b>
+                      {importInfo.invoiceNo && <span style={{ color: C.muted }}>HĐ {importInfo.invoiceNo}</span>}
+                      <span style={{ ...pill("#dcfce7", "#166534") }}>🟢 Tự khớp {auto}</span>
+                      <span style={{ ...pill("#e0f2fe", "#075985") }}>✓ Đã chọn {picked - auto}</span>
+                      <span style={{ ...pill(left ? "#fef3c7" : "#f1f5f9", left ? "#92400e" : "#475569") }}>Còn phải chọn / tạo mã: {left}</span>
+                      <span style={{ flex: 1 }} />
+                      <button type="button" style={{ ...styles.secondarySmallBtn, textTransform: "none" }} disabled={locked} onClick={clearImportedLines}>
+                        Bỏ các dòng từ file
+                      </button>
+                    </div>
+                    <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                      <span>
+                        Tổng các dòng từ file: <b>{formatMoney(sum)} đ</b>
+                      </span>
+                      {ft != null && (
+                        <span style={{ color: diff ? "#b91c1c" : "#166534", fontWeight: 600 }}>
+                          Tổng ghi trong file: {formatMoney(ft)} đ {diff ? `· lệch ${formatMoney(diff)} đ` : "· khớp ✓"}
+                        </span>
+                      )}
+                    </div>
+                    {importInfo.partner?.data?.name && (
+                      <div>
+                        {invoice.type === "PURCHASE" ? "Nhà cung cấp" : "Khách hàng"} trong file: <b>{importInfo.partner.data.name}</b>
+                        {importInfo.partner.data.taxCode ? ` · MST ${importInfo.partner.data.taxCode}` : ""}
+                        {pm ? (
+                          String(invoice.partnerId || "") === String(pm.id) ? (
+                            <span style={{ color: "#166534", marginLeft: 8 }}>✓ đã chọn đúng</span>
+                          ) : (
+                            <button type="button" style={{ ...styles.secondarySmallBtn, marginLeft: 8, textTransform: "none" }} disabled={locked} onClick={() => selectPartner(pm as Partner)}>
+                              Chọn “{pm.name}” trong CRM
+                            </button>
+                          )
+                        ) : (
+                          <span style={{ color: "#92400e", marginLeft: 8 }}>chưa có trong CRM — nhập ở khung đối tác phía trên</span>
+                        )}
+                      </div>
+                    )}
+                    {importInfo.critical.length > 0 && (
+                      <div style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", borderRadius: 8, padding: "8px 10px", display: "grid", gap: 4 }}>
+                        {importInfo.critical.map((t, i) => (
+                          <div key={i}>⛔ {t}</div>
+                        ))}
+                        <label style={{ display: "flex", gap: 6, alignItems: "center", fontWeight: 600, marginTop: 4, cursor: "pointer" }}>
+                          <input type="checkbox" checked={importInfo.ack} onChange={(e) => setImportInfo((p) => (p ? { ...p, ack: e.target.checked } : p))} />
+                          Tôi đã kiểm tra các cảnh báo trên
+                        </label>
+                      </div>
+                    )}
+                    {importInfo.warnings.length > 0 && (
+                      <details>
+                        <summary style={{ cursor: "pointer", color: "#92400e" }}>{importInfo.warnings.length} lưu ý khi đọc file</summary>
+                        <div style={{ display: "grid", gap: 2, marginTop: 4, color: "#78350f" }}>
+                          {importInfo.warnings.map((t, i) => (
+                            <div key={i}>• {t}</div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                );
+              })()}
+
+              <div style={styles.gridHeader} className="inv-line-grid inv-line-head">
+                <div className="inv-col-stt" style={{ textAlign: "center" }}>#</div>
                 <div style={{ textAlign: "left" }}>Sản phẩm</div>
                 <div style={{ textAlign: "center" }}>SL</div>
                 <div style={{ textAlign: "right" }}>Đơn giá</div>
-                <div style={{ textAlign: "right" }}>Thành tiền</div>
+                <div className="inv-col-total" style={{ textAlign: "right" }}>Thành tiền</div>
                 <div />
               </div>
 
               {invoice.lines.length === 0 && (
-                <div style={{ fontSize: 13, color: "#6b7280", marginTop: 4 }}>
-                  Chưa có dòng sản phẩm, bấm “Thêm dòng sản phẩm”.
+                <div style={{ fontSize: 13, color: C.muted, padding: "18px 8px", textAlign: "center" }}>
+                  Chưa có dòng sản phẩm, bấm “+ Thêm dòng sản phẩm”.
                 </div>
               )}
 
@@ -2402,21 +3211,27 @@ const InvoiceDetailPage: React.FC = () => {
                 const qRaw = (line.itemName || "").trim();
                 const qNorm = normalizeVN(qRaw);
                 const qTokens = qNorm.split(" ").filter(Boolean);
+                const qCompact = compactKey(qRaw);
+                // ✅ FIX: dòng đã chọn hàng -> hiện dạng "thẻ" khoá, muốn đổi phải bấm ✕ (tránh chọn A rồi sửa chữ thành B)
+                const picked = !!line.itemId;
+                const missingItem = !line.itemId && ((line.itemName || "").trim() !== "" || Number(line.price || 0) > 0);
 
                 const itemSuggestions =
                   qTokens.length > 0
                     ? itemsSearchIndex
-                        .filter(({ normName, normSku }) => {
+                        .filter(({ normName, normSku, compact }) => {
                           const hay = `${normName} ${normSku}`;
                           // mỗi từ gõ vào phải xuất hiện đâu đó trong tên/mã
                           // (không cần đúng thứ tự, không cần dấu, không phân biệt hoa/thường)
-                          return qTokens.every((t) => hay.includes(t));
+                          if (qTokens.every((t) => hay.includes(t))) return true;
+                          // ✅ FIX: gõ liền không gạch/khoảng trắng (cke020, dz600, sh100)
+                          return qCompact.length >= 3 && compact.includes(qCompact);
                         })
                         // ✅ ưu tiên: khớp đúng mã SKU > tên bắt đầu bằng từ khoá > còn lại
                         .sort((a, b) => {
                           const score = (x: typeof a) => {
-                            if (x.normSku === qNorm) return 0;
-                            if (x.normSku.startsWith(qNorm)) return 1;
+                            if (x.normSku === qNorm || (qCompact && x.compactSku === qCompact)) return 0;
+                            if (x.normSku.startsWith(qNorm) || (qCompact.length >= 3 && x.compactSku.startsWith(qCompact))) return 1;
                             if (x.normName.startsWith(qNorm)) return 2;
                             return 3;
                           };
@@ -2427,18 +3242,174 @@ const InvoiceDetailPage: React.FC = () => {
                     : [];
 
                 return (
-                  <div key={line.id ?? `line-${idx}`} style={styles.gridRow}>
-                    <div style={styles.autoWrapper}>
+                  <div key={line.id ?? `line-${idx}`} style={styles.gridRow} className="inv-line-grid inv-line">
+                    <div className="inv-col-stt" style={{ textAlign: "center", fontSize: 12.5, color: "#94a3b8", fontWeight: 600 }}>
+                      {idx + 1}
+                    </div>
+
+                    <div style={styles.autoWrapper} className="inv-col-prod">
+                      {picked ? (
+                        <div
+                          style={{
+                            ...styles.smallInput,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
+                            background: locked ? "#f8fafc" : "#f8fafc",
+                            border: "1px solid #cbd5e1",
+                            overflow: "hidden",
+                          }}
+                          title={line.itemName}
+                        >
+                          {(() => {
+                            const it = items.find((x) => x.id === String(line.itemId));
+                            return it?.sku ? (
+                              <span style={{ background: C.soft, borderRadius: 6, padding: "1px 6px", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>
+                                {it.sku}
+                              </span>
+                            ) : null;
+                          })()}
+                          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{line.itemName}</span>
+                          {!locked && (
+                            <button
+                              type="button"
+                              className="inv-del"
+                              style={{ ...styles.smallBtn, width: 24, height: 24, fontSize: 13 }}
+                              title="Bỏ chọn để chọn sản phẩm khác"
+                              aria-label="Bỏ chọn sản phẩm"
+                              onClick={() => {
+                                markDirty();
+                                setInvoice((prev) => {
+                                  if (!prev) return prev;
+                                  const lines = prev.lines.map((l, i2) => (i2 === idx ? { ...l, itemId: undefined, itemName: "" } : l));
+                                  return recomputeInvoiceCore(prev, { lines });
+                                });
+                                setOpenItemSuggestIndex(idx);
+                              }}
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      ) : (
                       <input
-                        style={styles.smallInput}
+                        style={{
+                          ...styles.smallInput,
+                          ...(missingItem ? { border: "1px solid #ef4444", background: "#fef2f2" } : {}),
+                        }}
                         value={line.itemName}
                         disabled={locked}
+                        autoFocus={openItemSuggestIndex === idx && !line.itemName}
                         onChange={(e) => handleLineChange(idx, "itemName", e.target.value)}
-                        onFocus={() => setOpenItemSuggestIndex(idx)}
-                        placeholder="Gõ mã hoặc tên sản phẩm..."
+                        onFocus={() => {
+                          setOpenItemSuggestIndex(idx);
+                          refreshListsIfStale("items");
+                        }}
+                        onBlur={() => setTimeout(() => setOpenItemSuggestIndex((cur) => (cur === idx ? null : cur)), 150)}
+                        placeholder="Gõ mã hoặc tên sản phẩm (không dấu cũng được)..."
                       />
+                      )}
+                      {missingItem && !line._imp && (
+                        <div style={{ fontSize: 11.5, color: "#dc2626", marginTop: 3 }}>Chưa chọn sản phẩm từ danh sách — dòng này sẽ không được lưu</div>
+                      )}
 
-                      {openItemSuggestIndex === idx && !locked && line.itemName.length > 0 && (
+                      {/* ✅ MỚI: dòng từ file nhập */}
+                      {line._imp && (() => {
+                        const m = line._imp;
+                        const isAuto = !!line.itemId && m.status === "ok" && String(line.itemId) === String(m.autoItemId);
+                        const tag = line.itemId
+                          ? isAuto
+                            ? { t: "🟢 Tự khớp", bg: "#dcfce7", fg: "#166534" }
+                            : { t: "✓ Đã chọn", bg: "#e0f2fe", fg: "#075985" }
+                          : m.status === "new"
+                            ? { t: "🔵 Chưa có mã", bg: "#dbeafe", fg: "#1e40af" }
+                            : { t: "🟡 Cần chọn", bg: "#fef3c7", fg: "#92400e" };
+                        const cur = line.itemId ? items.find((x) => x.id === String(line.itemId)) : undefined;
+                        const pickCand = (c: ImpCand) => {
+                          const it: Item = items.find((x) => x.id === c.itemId) || {
+                            id: c.itemId,
+                            sku: c.sku,
+                            name: c.name,
+                            unit: c.unit,
+                            price: c.price,
+                            stockQty: c.stockQty,
+                            kind: c.kind,
+                          };
+                          selectItemForLine(idx, it);
+                        };
+                        return (
+                          <div style={{ marginTop: 4, display: "grid", gap: 4, fontSize: 12 }}>
+                            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", color: C.muted }}>
+                              <span style={pill(tag.bg, tag.fg)}>{tag.t}</span>
+                              <span>
+                                File dòng {m.row}: {m.code ? <b>[{m.code}] </b> : null}
+                                {m.name}
+                                {m.unit ? ` · ${m.unit}` : ""}
+                              </span>
+                              {!isAuto && <span style={{ fontStyle: "italic" }}>— {m.reason}</span>}
+                              {cur && invoice.type === "PURCHASE" && (
+                                <span>
+                                  · Tồn: {cur.stockQty ?? 0} → <b>{Number(cur.stockQty ?? 0) + Number(line.qty || 0)}</b>
+                                </span>
+                              )}
+                            </div>
+                            {m.flags.map((f, i) => (
+                              <div key={i} style={{ color: "#b45309" }}>
+                                ⚠ {f}
+                              </div>
+                            ))}
+                            {!line.itemId && !locked && (
+                              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                {m.candidates.map((c) => (
+                                  <button
+                                    key={c.itemId}
+                                    type="button"
+                                    onClick={() => pickCand(c)}
+                                    title={`${c.name} · tồn ${c.stockQty}`}
+                                    style={{
+                                      border: "1px solid #cbd5e1",
+                                      background: "#fff",
+                                      borderRadius: 8,
+                                      padding: "3px 8px",
+                                      fontSize: 12,
+                                      cursor: "pointer",
+                                      maxWidth: 340,
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                      whiteSpace: "nowrap",
+                                      textAlign: "left",
+                                    }}
+                                  >
+                                    <b>{c.sku}</b> · {c.name} <span style={{ color: C.muted }}>· tồn {c.stockQty}</span>
+                                  </button>
+                                ))}
+                                {canCreateItem ? (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setQuickCreate({
+                                        lineIdx: idx,
+                                        text: m.name,
+                                        sku: m.code,
+                                        name: m.name,
+                                        kind: /^may\b/.test(normalizeVN(m.name)) ? "MACHINE" : "PART",
+                                      })
+                                    }
+                                    style={{ border: "1px dashed #2563eb", color: "#1d4ed8", background: "#eff6ff", borderRadius: 8, padding: "3px 8px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+                                  >
+                                    + Tạo mã mới
+                                  </button>
+                                ) : (
+                                  m.status === "new" && <span style={{ color: C.muted }}>Chưa có mã — nhờ kế toán / admin tạo.</span>
+                                )}
+                                <span style={{ color: C.muted, alignSelf: "center" }}>hoặc gõ tìm ở ô trên</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {!picked && openItemSuggestIndex === idx && !locked && line.itemName.length > 0 && (
                         <div style={styles.suggestBox}>
                           {itemSuggestions.length > 0 ? (
                             itemSuggestions.map((it) => {
@@ -2450,6 +3421,7 @@ const InvoiceDetailPage: React.FC = () => {
                               return (
                                 <div
                                   key={it.id}
+                                  className="inv-suggest-item"
                                   style={{
                                     ...styles.suggestItem,
                                     ...(outOfStock ? { background: "#fef2f2" } : {}),
@@ -2464,10 +3436,22 @@ const InvoiceDetailPage: React.FC = () => {
                                     selectItemForLine(idx, it);
                                   }}
                                 >
-                                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                                    <span>
+                                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                                    <span style={{ minWidth: 0 }}>
                                       {it.sku ? (
-                                        <b style={{ marginRight: 6 }}>{highlightMatches(it.sku, qTokens)}</b>
+                                        <span
+                                          style={{
+                                            display: "inline-block",
+                                            marginRight: 8,
+                                            padding: "1px 6px",
+                                            borderRadius: 6,
+                                            background: C.soft,
+                                            fontSize: 12,
+                                            fontWeight: 700,
+                                          }}
+                                        >
+                                          {highlightMatches(it.sku, qTokens)}
+                                        </span>
                                       ) : null}
                                       {highlightMatches(it.name, qTokens)}
                                     </span>
@@ -2475,8 +3459,8 @@ const InvoiceDetailPage: React.FC = () => {
                                       style={{
                                         whiteSpace: "nowrap",
                                         fontSize: 12,
-                                        color: outOfStock ? "#dc2626" : "#6b7280",
-                                        fontWeight: outOfStock ? 700 : 400,
+                                        color: outOfStock ? "#dc2626" : C.muted,
+                                        fontWeight: outOfStock ? 700 : 500,
                                       }}
                                     >
                                       {outOfStock ? "Hết hàng" : `Tồn: ${it.stockQty ?? 0}`}
@@ -2489,6 +3473,25 @@ const InvoiceDetailPage: React.FC = () => {
                           ) : (
                             <div style={styles.suggestItemMuted}>Không tìm thấy sản phẩm</div>
                           )}
+                          {/* ✅ MỚI: tạo nhanh mã hàng (không đổi logic chọn hàng cũ) */}
+                          {!itemSuggestions.some((it) => normalizeVN(it.name) === qNorm || (!!qCompact && compactKey(it.sku || "") === qCompact)) &&
+                            (canCreateItem ? (
+                              <div
+                                className="inv-suggest-item"
+                                style={{ ...styles.suggestItem, borderTop: "1px dashed #cbd5e1", color: "#0f172a", fontWeight: 600 }}
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  setOpenItemSuggestIndex(null);
+                                  setQuickCreate({ lineIdx: idx, text: qRaw });
+                                }}
+                              >
+                                + Tạo mã mới: <span style={{ fontWeight: 700 }}>“{qRaw}”</span>
+                              </div>
+                            ) : (
+                              <div style={{ ...styles.suggestItemMuted, borderTop: "1px dashed #cbd5e1" }}>
+                                Không có mã cần tìm? Nhờ kế toán / admin tạo mã mới.
+                              </div>
+                            ))}
                         </div>
                       )}
                     </div>
@@ -2516,57 +3519,88 @@ const InvoiceDetailPage: React.FC = () => {
                       />
                     </div>
 
-                    <div>
+                    <div className="inv-col-total">
                       <div style={styles.totalBox}>{fmtMoneyInput(line.qty * line.price)}</div>
                     </div>
 
                     <div style={{ textAlign: "center" }}>
-                      <button type="button" style={styles.smallBtn} disabled={locked} onClick={() => removeLine(idx)}>
-                        Xóa
+                      <button
+                        type="button"
+                        className="inv-del"
+                        style={styles.smallBtn}
+                        disabled={locked}
+                        onClick={() => removeLine(idx)}
+                        title="Xóa dòng"
+                        aria-label="Xóa dòng"
+                      >
+                        ✕
                       </button>
                     </div>
                   </div>
                 );
               })}
 
-              <button type="button" style={styles.addLineBtn} disabled={locked} onClick={addLine}>
+              <button type="button" className="inv-add" style={styles.addLineBtn} disabled={locked} onClick={addLine}>
                 + Thêm dòng sản phẩm
               </button>
+            </div>
 
-              {/* Summary */}
-              <div style={{ marginTop: 8 }}>
+            {/* Ghi chú + Thanh toán */}
+            <div className="inv-grid-2">
+              <div style={styles.sectionBox}>
+                <div style={styles.sectionTitle}>Ghi chú</div>
+                <textarea
+                  style={{ ...styles.input, height: "auto", minHeight: 140, padding: "10px 12px", resize: "vertical", lineHeight: 1.5 }}
+                  value={invoice.note ?? ""}
+                  disabled={locked}
+                  placeholder="Ghi chú thêm cho hóa đơn (tùy chọn)..."
+                  onChange={(e) => {
+                    markDirty();
+                    updateInvoice({ note: e.target.value });
+                  }}
+                />
+              </div>
 
-                 {!isPurchase && (
+              <div style={styles.sectionBox}>
+                <div style={styles.sectionTitle}>Thanh toán</div>
+
+                {isPurchase && (
+                  <div style={styles.totalRow}>
+                    <span style={{ fontWeight: 600 }}>Tổng tiền hàng</span>
+                    <span style={{ fontWeight: 800, fontSize: 18, fontVariantNumeric: "tabular-nums" }}>
+                      {formatMoney(invoice.subtotal ?? 0)} đ
+                    </span>
+                  </div>
+                )}
+
+                {!isPurchase && (
                   <>
-                    <div style={styles.summaryRow}>
-                      <span style={styles.summaryLabel}>Tạm tính:</span>
+                    <div className="inv-sum-row" style={styles.summaryRow}>
+                      <span className="inv-sum-label" style={styles.summaryLabel}>Tạm tính</span>
                       <span style={styles.summaryValue}>{formatMoney(invoice.subtotal ?? 0)} đ</span>
                     </div>
 
-                    <div style={styles.summaryRow}>
-                      <span style={styles.summaryLabel}>VAT (thuế):</span>
-                      <span style={styles.summaryValue}>{formatMoney(vatAmount)} đ</span>
-                    </div>
-
-                    <div style={styles.summaryRow}>
-                      <span style={styles.summaryLabel}>Thuế (%)</span>
+                    <div className="inv-sum-row" style={styles.summaryRow}>
+                      <span className="inv-sum-label" style={styles.summaryLabel}>Thuế VAT</span>
 
                       <div
                         style={{
                           display: "flex",
                           alignItems: "stretch",
-                          width: "100%",
-                          border: "1px solid #d1d5db",
-                          borderRadius: 4,
+                          width: 110,
+                          height: 36,
+                          border: `1px solid ${C.borderInput}`,
+                          borderRadius: 8,
                           overflow: "hidden",
                           background: locked ? "#f8fafc" : "#fff",
                           boxSizing: "border-box",
+                          flexShrink: 0,
                         }}
                       >
                         <input
                           style={{
-                            padding: "5px 8px",
-                            fontSize: 13,
+                            padding: "0 8px",
+                            fontSize: 13.5,
                             boxSizing: "border-box",
                             flex: 1,
                             minWidth: 0,
@@ -2575,6 +3609,7 @@ const InvoiceDetailPage: React.FC = () => {
                             outline: "none",
                             background: "transparent",
                             textAlign: "right",
+                            boxShadow: "none",
                           }}
                           type="number"
                           min={0}
@@ -2595,24 +3630,23 @@ const InvoiceDetailPage: React.FC = () => {
                             padding: "0 10px",
                             display: "flex",
                             alignItems: "center",
-                            borderLeft: "1px solid #e5e7eb",
-                            background: "#f9fafb",
-                            color: "#374151",
+                            borderLeft: `1px solid ${C.border}`,
+                            background: C.soft,
+                            color: "#334155",
                             fontSize: 13,
-                            whiteSpace: "nowrap",
                           }}
                         >
                           %
                         </span>
                       </div>
 
-                      <span style={{ whiteSpace: "nowrap" }}>= {formatMoney(invoice.tax ?? 0)} đ</span>
+                      <span style={styles.summaryValue}>{formatMoney(vatAmount)} đ</span>
                     </div>
 
                     {/* Bảo hành */}
-                    <div style={styles.summaryRow}>
-                      <span style={styles.summaryLabel}>Bảo hành:</span>
-                      <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div className="inv-sum-row" style={styles.summaryRow}>
+                      <span className="inv-sum-label" style={styles.summaryLabel}>Bảo hành</span>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: locked ? "default" : "pointer" }}>
                         <input
                           type="checkbox"
                           disabled={locked}
@@ -2633,31 +3667,34 @@ const InvoiceDetailPage: React.FC = () => {
                     </div>
 
                     {!!invoice.hasWarrantyHold && (
-                      <div style={styles.summaryRow}>
-                        <span style={styles.summaryLabel}>Số tiền treo bảo hành:</span>
+                      <div className="inv-sum-row" style={{ ...styles.summaryRow, flexWrap: "wrap" }}>
+                        <span className="inv-sum-label" style={styles.summaryLabel}>Tiền treo bảo hành</span>
 
-                        <WarrantyHoldInput
-                          value={Number(invoice.warrantyHoldAmount || 0)}
-                          disabled={locked}
-                          onChange={(raw) => {
-                            markDirty();
-                            setWarrantyHoldManual(true);
-                            setInvoice((prev) => {
-                              if (!prev) return prev;
-                              const sub = Number(prev.subtotal || 0);
-                              const v = Math.max(0, raw);
-                              const clamped = sub > 0 ? Math.min(v, sub) : v;
-                              return { ...prev, warrantyHoldAmount: clamped };
-                            });
-                          }}
-                          styleInput={{ textAlign: "right" }}
-                        />
+                        <div style={{ flex: 1, minWidth: 160 }}>
+                          <WarrantyHoldInput
+                            value={Number(invoice.warrantyHoldAmount || 0)}
+                            disabled={locked}
+                            onChange={(raw) => {
+                              markDirty();
+                              setWarrantyHoldManual(true);
+                              setInvoice((prev) => {
+                                if (!prev) return prev;
+                                const sub = Number(prev.subtotal || 0);
+                                const v = Math.max(0, raw);
+                                const clamped = sub > 0 ? Math.min(v, sub) : v;
+                                return { ...prev, warrantyHoldAmount: clamped };
+                              });
+                            }}
+                            styleInput={{ textAlign: "right" }}
+                          />
+                        </div>
 
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                          <span style={{ color: "#6b7280", fontSize: 12 }}>(≈ {derivedHoldPct}% của tạm tính)</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", width: "100%", paddingLeft: 162 }} className="inv-hold-note">
+                          <span style={{ color: C.muted, fontSize: 12 }}>(≈ {derivedHoldPct}% của tạm tính)</span>
                           <button
                             type="button"
-                            style={styles.secondarySmallBtn}
+                            className="inv-btn"
+                            style={{ ...styles.secondarySmallBtn, height: 28, fontSize: 12 }}
                             disabled={locked}
                             title="Đặt về mặc định 5% theo tạm tính"
                             onClick={() => {
@@ -2677,69 +3714,23 @@ const InvoiceDetailPage: React.FC = () => {
                     )}
 
                     {invoice.type === "SALES" && returnedTotal > 0 && (
-                      <div style={styles.summaryRow}>
-                        <span style={styles.summaryLabel}>Đã trả hàng:</span>
+                      <div className="inv-sum-row" style={styles.summaryRow}>
+                        <span className="inv-sum-label" style={styles.summaryLabel}>Đã trả hàng</span>
                         <span style={{ ...styles.summaryValue, color: "#7c3aed" }}>{formatMoney(returnedTotal)} đ</span>
                       </div>
                     )}
 
-                    <div style={styles.summaryRow}>
-                      <span style={styles.summaryLabel}>Nhập số tiền đã thu:</span>
-                      <PaidAmountInput
-                        value={invoice.paidAmount ?? 0}
-                        disabled={!showPaidInput || locked}
-                        onChange={(raw) => {
-                          markDirty();
-                          applyPaymentStatus("PARTIAL", raw);
-                        }}
-                        styleInput={{ textAlign: "right", opacity: showPaidInput ? 1 : 0.7 }}
-                      />
+                    <div style={styles.totalRow}>
+                      <span style={{ fontWeight: 600 }}>Tổng cộng</span>
+                      <span style={{ fontWeight: 800, fontSize: 18, fontVariantNumeric: "tabular-nums" }}>
+                        {formatMoney(invoice.totalAmount)} đ
+                      </span>
                     </div>
+                  </>
+                )}
 
-                      <div style={styles.summaryRow}>
-                        <span style={styles.summaryLabel}>Tài khoản nhận tiền:</span>
-                        <select
-                          style={styles.select}
-                          value={invoice.receiveAccountId || ""}
-                          disabled={locked}
-                          onChange={(e) => {
-                            markDirty();
-                            updateInvoice({ receiveAccountId: safeId(e.target.value) });
-                          }}
-                        >
-                          <option value="">-- Chưa chọn --</option>
-                          {accounts.map((a) => (
-                            <option key={a.id} value={a.id}>
-                              {a.code} - {a.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                        {accountLoadError && <div style={{ ...styles.notice, ...styles.noticeError }}>{accountLoadError}</div>}
-
-                        <div style={styles.summaryRow}>
-                          <span style={styles.summaryLabel}>Tổng cộng:</span>
-                          <span style={styles.summaryValue}>{formatMoney(invoice.totalAmount)} đ</span>
-                        </div>
-
-                        <div style={styles.summaryRow}>
-                          <span style={styles.summaryLabel}>Đã thu:</span>
-                          <span style={styles.summaryValue}>{formatMoney(paidNormal)} đ</span>
-                        </div>
-
-                        <div style={styles.summaryRow}>
-                          <span style={styles.summaryLabel}>Còn phải thu:</span>
-                          <span style={{ ...styles.summaryValue, color: isReturnedFull(invoice) ? "#6b7280" : "#111827" }}>
-                            {formatMoney(debtNow)} đ
-                          </span>
-                        </div>
-                        
-                        </>
-                        )}
-
-                <div style={styles.summaryRow}>
-                  <span style={styles.summaryLabel}>Trạng thái thanh toán:</span>
+                <div className="inv-sum-row" style={styles.summaryRow}>
+                  <span className="inv-sum-label" style={styles.summaryLabel}>Trạng thái thanh toán</span>
                   <select
                     style={styles.select}
                     value={invoice.paymentStatus || "UNPAID"}
@@ -2753,110 +3744,118 @@ const InvoiceDetailPage: React.FC = () => {
                     <option value="PARTIAL">Thanh toán một phần</option>
                     <option value="PAID">Đã thanh toán đủ</option>
                   </select>
-                </div>    
-                <div style={{ ...styles.formRow, marginTop: 10 }}>
-                  <label style={styles.label}>Ghi chú</label>
-                  <textarea
-                    style={{ ...styles.input, minHeight: 80, resize: "vertical" }}
-                    value={invoice.note ?? ""}
-                    disabled={locked}
-                    onChange={(e) => {
-                      markDirty();
-                      updateInvoice({ note: e.target.value });
-                    }}
-                  />
                 </div>
-              </div>
 
-              {message && (
-                <div style={{ ...styles.notice, ...(message.type === "success" ? styles.noticeSuccess : styles.noticeError) }}>
-                  {message.text}
-                </div>
-              )}
+                {!isPurchase && (
+                  <>
+                    <div className="inv-sum-row" style={styles.summaryRow}>
+                      <span className="inv-sum-label" style={styles.summaryLabel}>Số tiền đã thu</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <PaidAmountInput
+                          value={invoice.paidAmount ?? 0}
+                          disabled={!showPaidInput || locked}
+                          onChange={(raw) => {
+                            markDirty();
+                            applyPaymentStatus("PARTIAL", raw);
+                          }}
+                          styleInput={{ textAlign: "right", opacity: showPaidInput ? 1 : 0.7 }}
+                        />
+                      </div>
+                    </div>
 
-              <div style={styles.postStatusRow}>
-                <span
-                  style={{
-                    fontSize: 13,
-                    color: status === "APPROVED" ? "#16a34a" : status === "REJECTED" ? "#ef4444" : "#f97316",
-                  }}
-                >
-                  Trạng thái: {statusText}
-                </span>
+                    <div className="inv-sum-row" style={styles.summaryRow}>
+                      <span className="inv-sum-label" style={styles.summaryLabel}>Tài khoản nhận tiền</span>
+                      <select
+                        style={styles.select}
+                        value={invoice.receiveAccountId || ""}
+                        disabled={locked}
+                        onChange={(e) => {
+                          markDirty();
+                          updateInvoice({ receiveAccountId: safeId(e.target.value) });
+                        }}
+                      >
+                        <option value="">-- Chưa chọn --</option>
+                        {accounts.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.code} - {a.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
 
-                <div style={{ display: "flex", gap: 8 }}>
-                  {/* staff: giữ nút gửi duyệt */}
-                  {!isAdmin && status === "DRAFT" && (
-                    <button
-                      type="button"
-                      style={styles.secondarySmallBtn}
-                      disabled={!invoice.id || dirtySinceLastSave}
-                      title={dirtySinceLastSave ? "Bạn đã sửa hoá đơn, hãy lưu trước khi gửi duyệt." : ""}
-                      onClick={handleSubmit}
-                    >
-                      Gửi duyệt
-                    </button>
-                  )}
+                    {accountLoadError && <div style={{ ...styles.notice, ...styles.noticeError, marginTop: 6 }}>{accountLoadError}</div>}
 
-                  {/* admin: duyệt/từ chối khi SUBMITTED */}
-                  {isAdmin && status === "SUBMITTED" && (
-                    <>
-                      <button type="button" style={styles.secondarySmallBtn} onClick={handleApprove}>
-                        Duyệt
-                      </button>
-                      <button type="button" style={styles.secondarySmallBtn} onClick={handleReject}>
-                        Từ chối
-                      </button>
-                    </>
-                  )}
-                </div>
+                    <div style={{ borderTop: `1px dashed ${C.border}`, marginTop: 8, paddingTop: 4 }}>
+                      <div className="inv-sum-row" style={styles.summaryRow}>
+                        <span className="inv-sum-label" style={styles.summaryLabel}>Đã thu</span>
+                        <span style={{ ...styles.summaryValue, color: C.green }}>{formatMoney(paidNormal)} đ</span>
+                      </div>
+
+                      <div className="inv-sum-row" style={styles.summaryRow}>
+                        <span className="inv-sum-label" style={{ ...styles.summaryLabel, fontWeight: 700, color: C.text }}>Còn phải thu</span>
+                        <span
+                          style={{
+                            ...styles.summaryValue,
+                            fontSize: 16,
+                            color: isReturnedFull(invoice) ? "#6b7280" : debtNow > 0 ? C.red : C.text,
+                          }}
+                        >
+                          {formatMoney(debtNow)} đ
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
+
+            {message && (
+              <div style={{ ...styles.notice, ...(message.type === "success" ? styles.noticeSuccess : styles.noticeError) }}>
+                {message.text}
+              </div>
+            )}
 
             {/* Lịch sử thanh toán */}
             {!isCreate && invoice.id && (
               <div style={styles.sectionBox}>
-                <div style={styles.sectionTitle}>Lịch sử thanh toán</div>
-
-                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+                <div style={styles.sectionTitle}>
+                  <span>Lịch sử thanh toán</span>
                   <button
                     type="button"
-                    style={styles.secondarySmallBtn}
+                    className="inv-btn"
+                    style={{ ...styles.secondarySmallBtn, height: 30 }}
                     onClick={loadPaymentHistoryForInvoice}
                     disabled={paymentHistoryLoading}
                   >
-                    {paymentHistoryLoading ? "Đang tải..." : "Tải lại"}
+                    {paymentHistoryLoading ? "Đang tải..." : "↻ Tải lại"}
                   </button>
-
-                  <div style={{ fontSize: 13, color: "#6b7280" }}>
-                    Tổng allocations vào HĐ: <b>{formatMoney(paidTotal)} đ</b>
-                    <span style={{ marginLeft: 10 }}>
-                      (NORMAL: <b>{formatMoney(paidNormal)} đ</b> • BH: <b>{formatMoney(paidWarranty)} đ</b>)
-                    </span>
-                  </div>
                 </div>
 
-                {paymentHistoryError && <div style={{ ...styles.notice, ...styles.noticeError }}>{paymentHistoryError}</div>}
+                <div style={{ fontSize: 13, color: C.muted, marginBottom: 10 }}>
+                  Tổng phân bổ vào HĐ: <b style={{ color: C.text }}>{formatMoney(paidTotal)} đ</b>
+                  <span style={{ marginLeft: 10 }}>
+                    (Thường: <b style={{ color: C.text }}>{formatMoney(paidNormal)} đ</b> • Bảo hành:{" "}
+                    <b style={{ color: C.text }}>{formatMoney(paidWarranty)} đ</b>)
+                  </span>
+                </div>
 
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                {paymentHistoryError && <div style={{ ...styles.notice, ...styles.noticeError, marginBottom: 10 }}>{paymentHistoryError}</div>}
+
+                <div style={{ overflowX: "auto", border: `1px solid ${C.border}`, borderRadius: 10 }}>
+                  <table className="inv-pay-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
-                      <tr style={{ background: "#f9fafb" }}>
-                        <th style={{ textAlign: "left", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>Ngày</th>
-                        <th style={{ textAlign: "left", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>Tài khoản</th>
-                        <th style={{ textAlign: "right", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>
-                          Số tiền áp vào HĐ
-                        </th>
-                        <th style={{ textAlign: "right", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>
-                          Tổng phiếu
-                        </th>
-                        <th style={{ textAlign: "left", padding: "8px 8px", borderBottom: "1px solid #e5e7eb" }}>Ghi chú</th>
+                      <tr style={{ background: C.soft, color: C.muted, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.3 }}>
+                        <th style={{ textAlign: "left" }}>Ngày</th>
+                        <th style={{ textAlign: "left" }}>Tài khoản</th>
+                        <th style={{ textAlign: "right" }}>Số tiền áp vào HĐ</th>
+                        <th style={{ textAlign: "right" }}>Tổng phiếu</th>
+                        <th style={{ textAlign: "left" }}>Ghi chú</th>
                       </tr>
                     </thead>
                     <tbody>
                       {paymentHistoryLoading && (
                         <tr>
-                          <td colSpan={5} style={{ padding: "10px 8px", color: "#6b7280" }}>
+                          <td colSpan={5} style={{ color: C.muted }}>
                             Đang tải lịch sử...
                           </td>
                         </tr>
@@ -2864,7 +3863,7 @@ const InvoiceDetailPage: React.FC = () => {
 
                       {!paymentHistoryLoading && paymentHistoryRows.length === 0 && (
                         <tr>
-                          <td colSpan={5} style={{ padding: "10px 8px", color: "#6b7280" }}>
+                          <td colSpan={5} style={{ color: C.muted, textAlign: "center", padding: 18 }}>
                             Chưa có phiếu thanh toán nào được phân bổ cho hóa đơn này.
                           </td>
                         </tr>
@@ -2880,30 +3879,13 @@ const InvoiceDetailPage: React.FC = () => {
 
                           return (
                             <tr key={p.id}>
-                              <td
-                                style={{
-                                  padding: "8px 8px",
-                                  borderBottom: "1px solid #f3f4f6",
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                {timeStr}
-                              </td>
-                              <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6" }}>{accText || "-"}</td>
-                              <td
-                                style={{
-                                  padding: "8px 8px",
-                                  borderBottom: "1px solid #f3f4f6",
-                                  textAlign: "right",
-                                  fontWeight: 600,
-                                }}
-                              >
+                              <td style={{ whiteSpace: "nowrap" }}>{timeStr}</td>
+                              <td>{accText || "-"}</td>
+                              <td style={{ textAlign: "right", fontWeight: 600 }}>
                                 {formatMoney((p as any).allocatedAmount || 0)} đ
                               </td>
-                              <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6", textAlign: "right" }}>
-                                {formatMoney(Number(p.amount || 0))} đ
-                              </td>
-                              <td style={{ padding: "8px 8px", borderBottom: "1px solid #f3f4f6" }}>{note}</td>
+                              <td style={{ textAlign: "right" }}>{formatMoney(Number(p.amount || 0))} đ</td>
+                              <td>{note}</td>
                             </tr>
                           );
                         })}
@@ -2913,29 +3895,79 @@ const InvoiceDetailPage: React.FC = () => {
               </div>
             )}
 
-            <div style={styles.formActions}>
-              <button type="button" style={styles.secondaryBtn} onClick={() => navigate("/invoices")} disabled={saving}>
-                Hủy
-              </button>
+            {/* Thanh hành động — dính đáy màn hình */}
+            <div style={styles.formActions} className="inv-actions">
+              <div style={styles.postStatusRow}>
+                <span style={statusPill}>● {statusText}</span>
+                <span className="inv-hide-sm" style={{ fontSize: 13, color: C.muted }}>
+                  {isPurchase ? "Tổng tiền hàng" : "Tổng cộng"}:{" "}
+                  <b style={{ color: C.text, fontVariantNumeric: "tabular-nums" }}>
+                    {formatMoney(isPurchase ? invoice.subtotal ?? 0 : invoice.totalAmount)} đ
+                  </b>
+                </span>
 
-              {canEdit ? (
-                <button
-                  type="submit"
-                  style={{
-                    ...styles.primaryBtn,
-                    background: status === "DRAFT" && !partnerOk ? "rgba(22, 163, 74, 0.45)" : styles.primaryBtn.background,
-                    cursor: status === "DRAFT" && !partnerOk ? "not-allowed" : "pointer",
-                  }}
-                  disabled={saving || locked || (status === "DRAFT" && !partnerOk)}
-                  title={status === "DRAFT" && !partnerOk ? "Bạn cần chọn/lưu khách hàng trước khi lưu hóa đơn." : ""}
-                >
-                  {saveLabel}
+                {/* staff: giữ nút gửi duyệt */}
+                {!isAdmin && status === "DRAFT" && (
+                  <button
+                    type="button"
+                    className="inv-btn"
+                    style={styles.secondarySmallBtn}
+                    disabled={!invoice.id || dirtySinceLastSave}
+                    title={dirtySinceLastSave ? "Bạn đã sửa hoá đơn, hãy lưu trước khi gửi duyệt." : ""}
+                    onClick={handleSubmit}
+                  >
+                    Gửi duyệt
+                  </button>
+                )}
+
+                {/* admin: duyệt/từ chối khi SUBMITTED */}
+                {isAdmin && status === "SUBMITTED" && (
+                  <>
+                    <button
+                      type="button"
+                      className="inv-btn"
+                      style={{ ...styles.secondarySmallBtn, background: C.green, borderColor: C.green, color: "#fff" }}
+                      onClick={handleApprove}
+                    >
+                      ✓ Duyệt
+                    </button>
+                    <button
+                      type="button"
+                      className="inv-btn"
+                      style={{ ...styles.secondarySmallBtn, color: C.red, borderColor: "#fecaca" }}
+                      onClick={handleReject}
+                    >
+                      Từ chối
+                    </button>
+                  </>
+                )}
+              </div>
+
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" className="inv-btn" style={styles.secondaryBtn} onClick={() => navigate("/invoices")} disabled={saving}>
+                  Hủy
                 </button>
-              ) : (
-                <button type="button" style={{ ...styles.primaryBtn, background: "#9ca3af", cursor: "not-allowed" }} disabled>
-                  Không thể lưu
-                </button>
-              )}
+
+                {canEdit ? (
+                  <button
+                    type="submit"
+                    className="inv-btn"
+                    style={{
+                      ...styles.primaryBtn,
+                      background: status === "DRAFT" && !partnerOk ? "rgba(15, 23, 42, 0.35)" : styles.primaryBtn.background,
+                      cursor: status === "DRAFT" && !partnerOk ? "not-allowed" : "pointer",
+                    }}
+                    disabled={saving || locked || (status === "DRAFT" && !partnerOk)}
+                    title={status === "DRAFT" && !partnerOk ? "Bạn cần chọn/lưu khách hàng trước khi lưu hóa đơn." : ""}
+                  >
+                    {saveLabel}
+                  </button>
+                ) : (
+                  <button type="button" style={{ ...styles.primaryBtn, background: "#94a3b8", cursor: "not-allowed" }} disabled>
+                    Không thể lưu
+                  </button>
+                )}
+              </div>
             </div>
           </form>
         </div>
@@ -2953,6 +3985,28 @@ const InvoiceDetailPage: React.FC = () => {
         busy={confirmBusy}
         onClose={closeConfirm}
         onConfirm={() => confirmCfg?.onConfirm?.()}
+      />
+
+      <QuickCreateItemModal
+        open={!!quickCreate}
+        initialText={quickCreate?.text || ""}
+        initialSku={quickCreate?.sku}
+        initialName={quickCreate?.name}
+        initialKind={quickCreate?.kind}
+        items={items}
+        onClose={() => setQuickCreate(null)}
+        onPickExisting={(it) => {
+          const qc = quickCreate;
+          setQuickCreate(null);
+          if (qc) selectItemForLine(qc.lineIdx, it);
+        }}
+        onCreated={(it) => {
+          const qc = quickCreate;
+          setQuickCreate(null);
+          setItems((prev) => [it, ...prev.filter((x) => x.id !== it.id)]);
+          if (qc) selectItemForLine(qc.lineIdx, it);
+          toastSuccess(`Đã tạo mã mới: ${it.sku ? `[${it.sku}] ` : ""}${it.name}`);
+        }}
       />
 
       <PromptModal

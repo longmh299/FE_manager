@@ -15,7 +15,7 @@ type GroupKey =
   | "quotes";
 
 
-const LS_KEY = "sidebar_groups_v2";
+const LS_KEY = "sidebar_open_group_v3"; // ✅ accordion: lưu 1 nhóm đang mở
 
 const Layout: React.FC = () => {
   const { user, logout } = useAuth();
@@ -44,6 +44,15 @@ const Layout: React.FC = () => {
   const navCls = ({ isActive }: { isActive: boolean }) =>
     `block rounded px-3 py-2 ${isActive ? "bg-slate-700" : "hover:bg-slate-800"
     }`;
+
+  // ✅ trang con trong nhóm: chữ nhỏ hơn, dòng sát hơn; trang đang xem có vạch xanh đè lên đường kẻ dọc
+  const subNavCls = ({ isActive }: { isActive: boolean }) =>
+    [
+      "block rounded-r py-1.5 text-[13px] leading-5 transition-colors",
+      isActive
+        ? "-ml-[9px] pl-[19px] pr-3 border-l-2 border-sky-400 bg-slate-800 text-white font-medium"
+        : "px-3 text-slate-300 hover:text-white hover:bg-slate-800/60",
+    ].join(" ");
 
   const linkMatch = (to: string) => {
     const p = location.pathname;
@@ -81,8 +90,9 @@ const Layout: React.FC = () => {
     if (isAdmin || isAccountant) list.push({ to: "stock-counts", label: "Kiểm kê tồn" });
     if (isAdmin)
       list.push({ to: "stock-import-opening", label: "Khởi tạo tồn đầu" });
+    if (isAdmin) list.push({ to: "/analytics", label: "Lượt truy cập Website" }); // ✅ chuyển từ Báo cáo sang Vận hành
     return list;
-  }, [isAdmin]);
+  }, [isAdmin, isAccountant]);
 
   const reportLinks = useMemo(() => {
     const list: Array<{ to: string; label: string }> = [];
@@ -95,7 +105,6 @@ const Layout: React.FC = () => {
       list.push({ to: "/reports/stock-inout", label: "Báo cáo XNT" });
     // ✅ chỉ admin xem được hàng bán chạy
     if (isAdmin) list.push({ to: "/reports/best-sellers", label: "Hàng bán chạy" });
-    if (isAdmin) list.push({ to: "/analytics", label: "Lượt truy cập Website" });
     return list;
   }, [isAdmin, isAccountant]);
 
@@ -205,28 +214,57 @@ const Layout: React.FC = () => {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // Load persisted groups (admin/accountant)
-  useEffect(() => {
-    if (isStaff) return;
-    try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object")
-        setOpenGroups((prev) => ({ ...prev, ...parsed }));
-    } catch { }
-  }, [isStaff]);
+  // ✅ MỖI LẦN CHỈ MỞ 1 NHÓM (accordion)
+  const ONLY = (k: GroupKey | null) =>
+    ({
+      inventory: false,
+      sales: false,
+      partner: false,
+      ops: false,
+      reports: false,
+      admin: false,
+      account: false,
+      quotes: false,
+      ...(k ? { [k]: true } : {}),
+    }) as Record<GroupKey, boolean>;
 
-  // Persist
+  const groupLinks: Array<[GroupKey, Array<{ to: string }>]> = [
+    ["inventory", invLinks],
+    ["sales", salesLinks],
+    ["reports", reportLinks],
+    ["quotes", quoteLinks],
+    ["ops", opsLinks],
+    ["admin", adminLinks],
+    ["partner", partnerLinks],
+    ["account", accountLinks],
+  ];
+
+  // ✅ vào trang nào -> tự mở đúng nhóm chứa trang đó (các nhóm khác đóng)
+  //    trang không thuộc nhóm nào (vd trang chủ) -> mở lại nhóm lần trước
   useEffect(() => {
     if (isStaff) return;
+    const hit = groupLinks.find(([, links]) => groupHasActive(links));
+    if (hit) {
+      setOpenGroups(ONLY(hit[0]));
+      return;
+    }
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify(openGroups));
+      const last = localStorage.getItem(LS_KEY) as GroupKey | null;
+      if (last && last in ONLY(null)) setOpenGroups(ONLY(last));
+    } catch { }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname, isStaff, role]); // role: danh sách trang theo quyền chỉ có sau khi tải xong user
+
+  // nhớ nhóm đang mở
+  useEffect(() => {
+    if (isStaff) return;
+    const k = (Object.keys(openGroups) as GroupKey[]).find((x) => openGroups[x]);
+    try {
+      if (k) localStorage.setItem(LS_KEY, k);
     } catch { }
   }, [openGroups, isStaff]);
 
-  const toggleGroup = (k: GroupKey) =>
-    setOpenGroups((prev) => ({ ...prev, [k]: !prev[k] }));
+  const toggleGroup = (k: GroupKey) => setOpenGroups((prev) => ONLY(prev[k] ? null : k));
 
   const Group = ({
     k,
@@ -243,24 +281,33 @@ const Layout: React.FC = () => {
     const active = groupHasActive(links);
 
     return (
-      <div className="mb-2">
+      <div className="mb-0.5">
         <button
           type="button"
           onClick={() => toggleGroup(k)}
-          className={`w-full flex items-center justify-between px-3 py-2 rounded text-xs uppercase tracking-wide ${active ? "text-slate-200" : "text-slate-400"
-            } hover:bg-slate-800`}
+          className={[
+            "w-full flex items-center justify-between px-3 py-2.5 rounded",
+            "text-[12px] font-semibold uppercase tracking-wider transition-colors",
+            opened || active ? "text-white" : "text-slate-300 hover:text-white",
+            opened ? "bg-slate-800/60" : "hover:bg-slate-800/60",
+          ].join(" ")}
           title={opened ? "Thu gọn" : "Mở rộng"}
+          aria-expanded={opened}
         >
           <span className={desktopCollapsed ? "hidden md:inline-block md:truncate" : ""}>
             {title}
           </span>
-          <span className={`transition-transform ${opened ? "rotate-90" : ""}`}>▶</span>
+          <span
+            className={`text-[9px] text-slate-500 transition-transform duration-150 ${opened ? "rotate-90" : ""}`}
+          >
+            ▶
+          </span>
         </button>
 
         {opened && !desktopCollapsed && (
-          <div className="mt-1 space-y-1">
+          <div className="ml-4 mt-1 mb-2 pl-2 border-l border-slate-700 space-y-0.5">
             {links.map((l) => (
-              <NavLink key={l.to} to={l.to} className={navCls}>
+              <NavLink key={l.to} to={l.to} className={subNavCls}>
                 {l.label}
               </NavLink>
             ))}
@@ -294,6 +341,11 @@ const Layout: React.FC = () => {
               {desktopCollapsed ? "HD" : "Quản lý hóa đơn"}
             </NavLink>
 
+            {/* ✅ thứ tự mới: Bán hàng → Báo cáo (doanh số) → Kho báo giá */}
+            <NavLink to="/me/sales" className={navCls}>
+              {desktopCollapsed ? "DS" : "Doanh số cá nhân"}
+            </NavLink>
+
             <NavLink to="quote-documents" className={navCls}>
               {desktopCollapsed ? "BG" : "Kho báo giá"}
             </NavLink>
@@ -314,10 +366,6 @@ const Layout: React.FC = () => {
             )}
             {/* ✅ staff KHÔNG thấy movements theo yêu cầu */}
 
-            <NavLink to="/me/sales" className={navCls}>
-              {desktopCollapsed ? "DS" : "Doanh số cá nhân"}
-            </NavLink>
-
             <NavLink to="partners" className={navCls}>
               {desktopCollapsed ? "KH" : "Khách hàng"}
             </NavLink>
@@ -328,14 +376,15 @@ const Layout: React.FC = () => {
           </div>
         ) : (
           <div>
+            {/* ✅ thứ tự mới: Tồn kho → Bán hàng → Báo cáo → Kho báo giá → Vận hành → Quản trị → Đối tác → Tài khoản */}
             <Group k="inventory" title={desktopCollapsed ? "TK" : "Tồn kho"} links={invLinks} />
-            <Group k="quotes" title={desktopCollapsed ? "BG" : "Kho báo giá & video"} links={quoteLinks} />
             <Group k="sales" title={desktopCollapsed ? "BH" : "Bán hàng"} links={salesLinks} />
             <Group
               k="reports"
               title={desktopCollapsed ? "BC" : "Báo cáo & công nợ"}
               links={reportLinks}
             />
+            <Group k="quotes" title={desktopCollapsed ? "BG" : "Kho báo giá & video"} links={quoteLinks} />
             <Group k="ops" title={desktopCollapsed ? "VH" : "Vận hành"} links={opsLinks} />
             <Group k="admin" title={desktopCollapsed ? "QT" : "Quản trị"} links={adminLinks} />
             <Group k="partner" title={desktopCollapsed ? "DT" : "Đối tác"} links={partnerLinks} />
