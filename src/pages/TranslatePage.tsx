@@ -4,6 +4,7 @@
 //   - Xem tiếng Việt (chạm đoạn bất kỳ để xem chữ gốc) hoặc song ngữ
 //   - Tab "Hỏi AI": hỏi đáp về tài liệu vừa dịch (thông số, vận hành, xử lý lỗi...)
 //   - Tải về Word song ngữ / Word tiếng Việt / Excel đã dịch
+//   - File Word: tải "Word giữ bố cục gốc" — thay chữ ngay trong file gốc, giữ hình ảnh / đánh số / bảng
 //   - LỊCH SỬ: dịch xong tự lưu (bản dịch + file gốc + nháp báo giá). Mở lại xem / hỏi AI / làm báo giá
 //     không phải dịch lại. Người dịch chỉ thấy tài liệu của mình, admin thấy hết.
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -16,6 +17,7 @@ import {
   type SheetData,
   type SrcItem,
   batchItems,
+  bytesToBase64,
   cellNeedsTranslate,
   docxToItems,
   downloadDocx,
@@ -23,6 +25,7 @@ import {
   imageToBase64,
   loadPdf,
   pagesToChatText,
+  pagesToDict,
   pagesToPlainVi,
   pdfSliceBase64,
   sheetsToChatText,
@@ -49,6 +52,19 @@ function errMessage(e: unknown): string {
   const err = e as { code?: string; message?: string; response?: { data?: { message?: string } } };
   if (err?.code === "ERR_CANCELED") return "Đã dừng";
   return err?.response?.data?.message || err?.message || "Dịch thất bại";
+}
+/** Lỗi khi gọi API với responseType "blob": nội dung lỗi JSON nằm trong Blob -> đọc ra lấy message */
+async function blobErrMessage(e: unknown): Promise<string> {
+  const data = (e as { response?: { data?: unknown } })?.response?.data;
+  if (data instanceof Blob) {
+    try {
+      const j = JSON.parse(await data.text());
+      if (j?.message) return j.message;
+    } catch {
+      /* không phải JSON */
+    }
+  }
+  return errMessage(e);
 }
 /** PUT thẳng file gốc lên R2 bằng link ký sẵn (không qua backend) */
 function putToR2(url: string, f: File): Promise<void> {
@@ -118,6 +134,7 @@ const TranslatePage: React.FC = () => {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [fixing, setFixing] = useState(false);
+  const [keeping, setKeeping] = useState(false); // đang tạo "Word giữ bố cục gốc"
   const [usage, setUsage] = useState<Record<string, UsageModel>>({});
   // ---- Lịch sử
   const [docId, setDocId] = useState<string | null>(null);
@@ -659,6 +676,54 @@ const TranslatePage: React.FC = () => {
     }
   }
 
+  // Word giữ bố cục gốc: gửi file .docx gốc + các câu đã dịch -> BE thay chữ ngay trong file gốc
+  // (hình ảnh, đánh số, bảng, header/footer giữ nguyên), chỉ dịch thêm những khúc còn thiếu.
+  async function downloadKeepLayout() {
+    if (keeping) return;
+    setKeeping(true);
+    try {
+      let file: Blob | null = picked.kind === "docx" ? picked.files[0] ?? null : null;
+      if (!file && docId) {
+        // Mở từ Lịch sử: lấy lại file gốc đã lưu
+        try {
+          const { data } = await api.get(`/translate/history/${docId}/sources`);
+          const url: string | undefined = data.files?.[0]?.url;
+          const res = url ? await fetch(url) : null;
+          if (res?.ok) file = await res.blob();
+        } catch {
+          /* không tải được -> báo bên dưới */
+        }
+      }
+      if (!file) {
+        setToast("Cần file Word gốc: chọn lại file .docx rồi dịch");
+        return;
+      }
+      const data = bytesToBase64(new Uint8Array(await file.arrayBuffer()));
+      const r = await api.post(
+        "/translate/docx",
+        { data, fileName: baseName, context: context.trim() || undefined, quality, dict: pagesToDict(donePages) },
+        { responseType: "blob", ...LONG }
+      );
+      try {
+        const h = r.headers["x-translate-usage"];
+        if (h) addUsage(JSON.parse(decodeURIComponent(String(h))).usage);
+      } catch {
+        /* thiếu thông tin chi phí thì bỏ qua */
+      }
+      const href = URL.createObjectURL(r.data as Blob);
+      const a = document.createElement("a");
+      a.href = href;
+      a.download = `${baseName}_giu-bo-cuc.docx`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(href), 10_000);
+      setSheetOpen(false);
+    } catch (e) {
+      setToast(await blobErrMessage(e));
+    } finally {
+      setKeeping(false);
+    }
+  }
+
   async function copyVi() {
     await navigator.clipboard.writeText(pagesToPlainVi(donePages));
     setSheetOpen(false);
@@ -1014,6 +1079,14 @@ const TranslatePage: React.FC = () => {
               <SheetBtn icon="📗" title="Excel đã dịch" sub="Giữ nguyên các sheet" onClick={() => { downloadTranslatedXlsx(sheets, `${baseName}_dich.xlsx`); setSheetOpen(false); }} />
             ) : (
               <>
+                {picked.kind === "docx" && !running && (
+                  <SheetBtn
+                    icon="🖼️"
+                    title="Word giữ bố cục gốc"
+                    sub={keeping ? "Đang tạo file… (tài liệu dài có thể mất 1–2 phút)" : "Giữ nguyên hình ảnh, đánh số, bảng như file gốc"}
+                    onClick={downloadKeepLayout}
+                  />
+                )}
                 <SheetBtn icon="📘" title="Word tiếng Việt" sub="Chỉ bản dịch, dễ in / gửi" onClick={() => { downloadDocx(donePages, `${baseName}_tieng-viet.docx`, "tieng-viet"); setSheetOpen(false); }} />
                 <SheetBtn icon="📑" title="Word song ngữ" sub="Bảng 2 cột: gốc | tiếng Việt" onClick={() => { downloadDocx(donePages, `${baseName}_song-ngu.docx`, "song-ngu"); setSheetOpen(false); }} />
                 <SheetBtn icon="📋" title="Copy bản dịch" sub="Dán vào Zalo, ghi chú…" onClick={copyVi} />

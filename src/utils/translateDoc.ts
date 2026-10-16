@@ -239,6 +239,29 @@ export async function downloadDocx(pages: DocPage[], fileName: string, mode: "so
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
+/**
+ * Các cặp [gốc, dịch] đã có trên trang -> gửi kèm khi tạo "Word giữ bố cục gốc"
+ * để BE dùng lại, không tốn tiền dịch lần 2 (BE chỉ dịch các khúc còn thiếu).
+ */
+export function pagesToDict(pages: DocPage[]): [string, string][] {
+  const out: [string, string][] = [];
+  const add = (a?: string, b?: string) => {
+    if (a?.trim() && b?.trim() && a.trim() !== b.trim()) out.push([a, b]);
+  };
+  for (const b of pages.flatMap((p) => p.blocks)) {
+    if (b.type === "table") {
+      (b.srcRows || []).forEach((r, i) => r.forEach((c, j) => add(c, b.viRows?.[i]?.[j])));
+      continue;
+    }
+    add(b.src, b.vi);
+    // Danh sách: mỗi mục 1 dòng -> ghép từng dòng nếu số dòng khớp
+    const s = (b.src || "").split("\n");
+    const v = (b.vi || "").split("\n");
+    if (s.length > 1 && s.length === v.length) s.forEach((line, i) => add(line, v[i]));
+  }
+  return out;
+}
+
 export function pagesToPlainVi(pages: DocPage[]) {
   return pages
     .map((p) =>
