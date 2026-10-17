@@ -50,12 +50,22 @@ type Source = {
   aiCost: number;
   updatedAt: string;
 };
+type VoiceStyle = "nu-bac" | "nam-bac" | "nu-nam" | "nam-nam";
+const VOICE_STYLES: [VoiceStyle, string][] = [
+  ["nu-bac", "Nữ Bắc"],
+  ["nam-bac", "Nam Bắc"],
+  ["nu-nam", "Nữ Nam"],
+  ["nam-nam", "Nam Nam"],
+];
+
 type Summary = {
   counts: Record<string, number>;
   processing: number;
   waitingVideos: number;
   totalRaw?: number;
   auto?: boolean;
+  voice?: { enabled: boolean; provider: "google" | "fpt"; style: VoiceStyle }; // ✅ MỚI: giọng đọc AI
+  clipSec?: { min: number; max: number };
   workerSeenAt: string | null;
   telegram: boolean;
 };
@@ -156,7 +166,7 @@ const MktPage: React.FC = () => {
     if (!ids.length) return setToast("Không có video nào cần làm");
     if (list.length > 1 && !window.confirm(`Cho AI làm ${ids.length} video thô này?`)) return;
     try {
-      const { data } = await api.post("/mkt/sources/queue", { videoIds: ids });
+      const { data } = await api.post("/mkt/sources/queue", { videoIds: ids, ...(srcVoice !== "mac-dinh" ? { voice: srcVoice } : {}) });
       setToast(`Đã đưa ${data.queued} video lên đầu hàng chờ — máy công ty làm trong vài phút tới`);
       load();
     } catch (e) {
@@ -169,6 +179,21 @@ const MktPage: React.FC = () => {
     const t = setTimeout(() => setToast(null), 2500);
     return () => clearTimeout(t);
   }, [toast]);
+
+  // ✅ MỚI: giọng đọc riêng cho lần "Cho AI làm" / "Làm lại" tiếp theo
+  const [srcVoice, setSrcVoice] = useState<"mac-dinh" | "co" | "khong">("mac-dinh");
+
+  /** ✅ MỚI — Admin: bật/tắt giọng đọc AI + chọn giọng */
+  async function saveVoice(patch: Partial<NonNullable<Summary["voice"]>>) {
+    try {
+      await api.post("/mkt/settings/voice", patch);
+      setToast(patch.enabled === undefined ? "Đã đổi giọng đọc" : patch.enabled ? "Đã bật giọng đọc AI" : "Đã tắt giọng đọc AI");
+      load();
+    } catch (e) {
+      const err = e as { response?: { status?: number } };
+      setToast(err?.response?.status === 403 ? "Chỉ admin được đổi giọng đọc" : errMsg(e));
+    }
+  }
 
   /** Admin: gạt chế độ Tự động / Bán tự động */
   async function setAuto(on: boolean) {
@@ -203,7 +228,7 @@ const MktPage: React.FC = () => {
     )
       return;
     try {
-      const { data } = await api.post(`/mkt/sources/${s.videoId}/reset`);
+      const { data } = await api.post(`/mkt/sources/${s.videoId}/reset`, srcVoice !== "mac-dinh" ? { voice: srcVoice } : {});
       setToast(`Đã xoá ${data.deleted} clip · video đã về hàng chờ dựng lại`);
       load();
     } catch (e) {
@@ -290,6 +315,58 @@ const MktPage: React.FC = () => {
         </div>
       )}
 
+      {/* ✅ MỚI: giọng đọc AI (tuỳ chọn) */}
+      {sum && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border bg-white px-3 py-2">
+          <span className="text-sm font-medium text-slate-700">🎙️ Giọng đọc AI</span>
+          <div className="inline-flex rounded-full bg-slate-100 p-0.5 text-sm">
+            {(
+              [
+                [true, "Bật"],
+                [false, "Tắt"],
+              ] as const
+            ).map(([v, label]) => (
+              <button
+                key={label}
+                onClick={() => (sum.voice?.enabled ?? false) !== v && saveVoice({ enabled: v })}
+                className={`rounded-full px-3 py-1 ${(sum.voice?.enabled ?? false) === v ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {sum.voice?.enabled && (
+            <>
+              <select
+                value={sum.voice.style}
+                onChange={(e) => saveVoice({ style: e.target.value as VoiceStyle })}
+                className="rounded-lg border bg-white px-2 py-1 text-sm"
+              >
+                {VOICE_STYLES.map(([k, l]) => (
+                  <option key={k} value={k}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={sum.voice.provider}
+                onChange={(e) => saveVoice({ provider: e.target.value as "google" | "fpt" })}
+                className="rounded-lg border bg-white px-2 py-1 text-sm"
+              >
+                <option value="google">Google</option>
+                <option value="fpt">FPT.AI</option>
+              </select>
+            </>
+          )}
+          <span className="text-xs text-slate-500">
+            {sum.voice?.enabled
+              ? "Clip có lời thuyết minh + phụ đề chạy chữ, tiếng máy tự hạ nhỏ."
+              : "Clip chỉ có chữ (câu mở, nhãn từng cảnh) + tiếng máy."}
+            {sum.clipSec ? ` Độ dài clip ${sum.clipSec.min}–${sum.clipSec.max} giây.` : ""}
+          </span>
+        </div>
+      )}
+
       <div className="-mx-3 mb-3 flex gap-2 overflow-x-auto px-3 pb-1 md:mx-0 md:px-0">
         {TABS.map((t) => {
           const n = t.k === "sources" ? undefined : t.k === "da_dang" ? (sum?.counts.da_dang ?? 0) + (sum?.counts.dang_dang ?? 0) : sum?.counts[t.k];
@@ -312,6 +389,15 @@ const MktPage: React.FC = () => {
             {sum?.auto === false
               ? "Đang TẮT tự động: máy công ty chỉ làm video được bấm “Cho AI làm”."
               : "Video thô mới upload sẽ được máy công ty TỰ ĐỘNG làm (khoảng 10 phút / lượt). Muốn làm ngay video nào thì bấm “Cho AI làm” — video đó được ưu tiên lên đầu."}
+          </div>
+          {/* ✅ MỚI: chọn giọng đọc riêng cho lần làm tiếp theo */}
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+            <span>Giọng đọc cho lần “Cho AI làm” / “Làm lại” tiếp theo:</span>
+            <select value={srcVoice} onChange={(e) => setSrcVoice(e.target.value as "mac-dinh" | "co" | "khong")} className="rounded-lg border bg-white px-2 py-1 text-xs">
+              <option value="mac-dinh">Theo cài đặt chung ({sum?.voice?.enabled ? "có giọng" : "không giọng"})</option>
+              <option value="co">Có giọng đọc</option>
+              <option value="khong">Không giọng đọc</option>
+            </select>
           </div>
           <div className="flex gap-2">
             <input
