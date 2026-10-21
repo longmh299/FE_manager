@@ -108,7 +108,7 @@ const StockInOutReportPage: React.FC = () => {
     let mounted = true;
     (async () => {
       try {
-        const res = await api.get(`/units`);
+        const res = await api.get(`/items/units`); // ✅ sửa: BE không có /units (trước đây luôn 404)
         const payload = res?.data?.data ?? res?.data;
 
         const list: any[] = Array.isArray(payload)
@@ -260,7 +260,8 @@ const StockInOutReportPage: React.FC = () => {
       // style header border
       for (let c = 1; c <= 8; c++) {
         const cell = ws.getRow(headerRowIdx).getCell(c);
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F4F6" } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E3A5F" } };
+        cell.font = { ...(cell.font || {}), bold: true, color: { argb: "FFFFFFFF" } }; // ✅ màu tiêu đề cột thống nhất với các file Excel khác
         cell.border = {
           top: { style: "thin", color: { argb: "FFE5E7EB" } },
           left: { style: "thin", color: { argb: "FFE5E7EB" } },

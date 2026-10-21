@@ -315,9 +315,9 @@ async function buildReceivablesExcel(params: {
 
   for (let c = 1; c <= headers.length; c++) {
     const h = ws.getCell(headerRow, c);
-    h.font = { bold: true, size: 11, color: { argb: "FF0F172A" } };
+    h.font = { bold: true, size: 11, color: { argb: "FFFFFFFF" } }; // ✅ màu tiêu đề cột thống nhất với các file Excel khác
     h.alignment = { vertical: "middle", horizontal: c >= 6 ? "right" : "left", wrapText: true };
-    h.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+    h.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E3A5F" } };
     h.border = {
       top: { style: "thin", color: { argb: "FFE2E8F0" } },
       left: { style: "thin", color: { argb: "FFE2E8F0" } },

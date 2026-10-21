@@ -112,8 +112,28 @@ const ItemsMasterPage: React.FC = () => {
     }
   };
 
+  // ✅ tải qua api (có gửi kèm đăng nhập). Trước đây mở thẳng link nên server từ chối (chưa đăng nhập) -> không tải được
+  const downloadBlob = async (path: string, filename: string) => {
+    try {
+      const res = await api.get(path, { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error("Download error", err);
+      alert(err?.response?.status === 403 ? "Bạn không có quyền tải file này." : "Không tải được file. Thử lại sau.");
+    }
+  };
+
   const handleDownloadTemplate = () => {
-    window.open(`${import.meta.env.VITE_API_BASE_URL}/items/export`, "_blank");
+    const d = new Date();
+    const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+    void downloadBlob("/items/export", `danh-muc-hang_${ymd}.xlsx`);
   };
 
   // ====== Phân trang client-side ======

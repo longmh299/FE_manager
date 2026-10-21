@@ -1,6 +1,6 @@
 // src/pages/StockOpeningImportPage.tsx
 import React, { useState } from "react";
-import api, { getApiBaseUrl } from "../api/client";
+import api from "../api/client";
 
 type ImportSummary = {
   createdItems?: number;
@@ -64,11 +64,26 @@ const StockOpeningImportPage: React.FC = () => {
   };
 
   // 🔹 Tải file Excel mẫu
+  // ✅ tải qua api (có gửi kèm đăng nhập). Trước đây mở thẳng link nên server từ chối (chưa đăng nhập) -> không tải được
+  const downloadBlob = async (path: string, filename: string) => {
+    try {
+      const res = await api.get(path, { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error("Download error", err);
+      alert(err?.response?.status === 403 ? "Bạn không có quyền tải file này." : "Không tải được file. Thử lại sau.");
+    }
+  };
+
   const handleDownloadTemplate = () => {
-    const base = getApiBaseUrl();
-    // BE sẽ tạo route GET /api/imports/stocks/opening-template
-    const url = base + "/api/imports/stocks/opening-template";
-    window.open(url, "_blank");
+    void downloadBlob("/imports/stocks/opening-template", "mau-nhap-ton-dau.xlsx");
   };
 
   return (
