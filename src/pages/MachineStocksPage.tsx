@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import ItemStockHistory from "../components/ItemStockHistory"; // ✅ lịch sử nhập xuất từng mặt hàng
 import api, { extractList } from "../api/client";
 import { useAuth } from "../context/AuthContext";
+import DeleteItemDialog, { type DeleteItemTarget } from "../components/DeleteItemDialog"; // ✅ xoá mặt hàng (admin + mật khẩu cấp 2)
 
 type MachineStockRow = {
   itemId?: string; // ✅ now provided by BE
@@ -71,6 +72,8 @@ function normalizeForMachineSort(name: string) {
 
 const MachineStocksPage: React.FC = () => {
   const { user } = useAuth();
+  const isAdminUser = user?.role === "admin";
+  const [deleteTarget, setDeleteTarget] = useState<DeleteItemTarget | null>(null);
   // isPrivileged = admin OR accountant => được quyền tương tự admin
   const isPrivileged = user?.role === "admin" || user?.role === "accountant";
   const canEditNote = user?.role === "admin" || user?.role === "accountant";
@@ -1295,6 +1298,26 @@ const MachineStocksPage: React.FC = () => {
                             >
                               Sửa
                             </button>
+                            {isAdminUser && row.itemId && (
+                              <button
+                                type="button"
+                                onClick={() => setDeleteTarget({ itemId: String(row.itemId), sku: row.sku, name: row.name })}
+                                title="Xoá mặt hàng (chỉ khi chưa phát sinh chứng từ)"
+                                style={{
+                                  marginLeft: 6,
+                                  padding: "6px 10px",
+                                  borderRadius: 6,
+                                  border: "1px solid #fecdd3",
+                                  backgroundColor: "#fff1f2",
+                                  color: "#be123c",
+                                  fontSize: 13,
+                                  fontWeight: 700,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                Xoá
+                              </button>
+                            )}
                           </td>
                         </>
                       )}
@@ -1424,6 +1447,7 @@ const MachineStocksPage: React.FC = () => {
                       <div className="text-slate-400">Giá vốn TB: {fmtMoney(row.avgCost || 0)}</div>
                       <div className="text-slate-400">Giá trị tồn: {fmtMoney(row.stockValue || 0)}</div>
                     </div>
+                    <div className="flex shrink-0">
                     <button
                       type="button"
                       onClick={() => openEdit(row)}
@@ -1432,6 +1456,17 @@ const MachineStocksPage: React.FC = () => {
                     >
                       Sửa
                     </button>
+                    {isAdminUser && row.itemId && (
+                      <button
+                        type="button"
+                        onClick={() => setDeleteTarget({ itemId: String(row.itemId), sku: row.sku, name: row.name })}
+                        className="ml-2 rounded border px-3 py-2 text-sm font-semibold"
+                        style={{ borderColor: "#fecdd3", backgroundColor: "#fff1f2", color: "#be123c" }}
+                      >
+                        Xoá
+                      </button>
+                    )}
+                    </div>
                   </div>
                 )}
 
@@ -1893,6 +1928,14 @@ const MachineStocksPage: React.FC = () => {
         </div>
       )}
       {/* ========================= END VIEW NOTE MODAL ========================= */}
+      <DeleteItemDialog
+        target={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onDeleted={() => {
+          setDeleteTarget(null);
+          fetchStocks(q);
+        }}
+      />
     </div>
   );
 };

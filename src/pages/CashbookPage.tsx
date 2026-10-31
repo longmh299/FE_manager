@@ -1,7 +1,7 @@
 // src/pages/CashbookPage.tsx
 // ✅ THU CHI / SỔ QUỸ
 // Bố cục: cột trái là danh sách quỹ / tài khoản (như ví), bên phải là tài khoản đang chọn:
-//   số dư + đường tồn quỹ theo ngày + thao tác, rồi sổ chi tiết gom theo ngày (thu / chi / tồn).
+//   số dư + đường số dư theo ngày + thao tác, rồi sổ chi tiết gom theo ngày (thu / chi / số dư).
 // Màu chỉ dùng cho chiều tiền: thu = teal, chi = rose. Quỹ tiền mặt có dấu hiệu riêng (màu đồng).
 // Huỷ phiếu bắt buộc mật khẩu cấp 2 (VoidPaymentDialog, server kiểm tra).
 // API: /cashbook/*, PATCH /payments/:id/account, POST /payments/:id/void
@@ -113,6 +113,24 @@ const inputCls = `w-full ${inputBase}`;
 const labelCls = "mb-1 block text-sm font-medium text-slate-700";
 const focusRing = "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500";
 
+// ✅ icon nhỏ cho 2 nút thao tác trên từng phiếu
+const RowIcon = {
+  swap: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7" />
+    </svg>
+  ),
+  void: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M5.7 5.7l12.6 12.6" />
+    </svg>
+  ),
+};
+const rowBtnBase = "inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors";
+const rowBtnAcc = `${rowBtnBase} border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50`;
+const rowBtnVoid = `${rowBtnBase} border-rose-200 bg-white text-rose-700 hover:border-rose-300 hover:bg-rose-50`;
+
 const Icon = {
   cash: (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
@@ -221,7 +239,7 @@ const AccountSelect: React.FC<{ accounts: AccSum[]; value: string; onChange: (v:
       .filter((a) => a.isActive && a.id !== exclude && (!onlyCash || isCash(a.type)))
       .map((a) => (
         <option key={a.id} value={a.id}>
-          {a.name} ({a.code}) – tồn {money(a.closing)} đ
+          {a.name} ({a.code}) – số dư {money(a.closing)} đ
         </option>
       ))}
   </select>
@@ -262,7 +280,7 @@ const Sparkline: React.FC<{ points: TrendPoint[] }> = ({ points }) => {
         setHover(Math.max(0, Math.min(points.length - 1, i)));
       }}
     >
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="h-[72px] w-full" role="img" aria-label="Tồn cuối ngày trong kỳ">
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="h-[72px] w-full" role="img" aria-label="Số dư cuối ngày trong kỳ">
         <path d={area} fill="#0f172a" opacity="0.05" />
         {hasNeg && <line x1={pad} x2={W - pad} y1={y(0)} y2={y(0)} stroke="#be123c" strokeWidth="1" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />}
         <path d={d} fill="none" stroke="#0f172a" strokeWidth="2" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
@@ -547,8 +565,8 @@ const CashbookPage: React.FC = () => {
   }, [rows]);
 
   const ledgerCols = showBalance
-    ? "grid-cols-[28px_minmax(0,1fr)_auto] md:grid-cols-[32px_minmax(0,1fr)_120px_120px_130px_110px]"
-    : "grid-cols-[28px_minmax(0,1fr)_auto] md:grid-cols-[32px_minmax(0,1fr)_120px_120px_110px]";
+    ? "grid-cols-[28px_minmax(0,1fr)_auto] md:grid-cols-[32px_minmax(0,1fr)_120px_120px_130px_176px]"
+    : "grid-cols-[28px_minmax(0,1fr)_auto] md:grid-cols-[32px_minmax(0,1fr)_120px_120px_176px]";
 
   /* ========================= render ========================= */
   return (
@@ -591,7 +609,7 @@ const CashbookPage: React.FC = () => {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
         {/* ================= rail ================= */}
         <aside className="lg:sticky lg:top-0 lg:self-start">
-          <div className="flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0">
+          <div className="grid grid-cols-2 gap-2 lg:flex lg:flex-col lg:gap-1">
             {[{ id: "", name: "Tất cả", code: "", type: "ALL", closing: summary?.total.closing ?? 0, openingDate: null, isActive: true } as any, ...accounts].map((a: any) => {
               const on = sel === a.id;
               const cash = isCash(a.type);
@@ -602,8 +620,8 @@ const CashbookPage: React.FC = () => {
                   type="button"
                   onClick={() => setSel(a.id)}
                   aria-pressed={on}
-                  className={`group relative min-w-[200px] shrink-0 rounded-xl px-3 py-2.5 text-left transition-colors lg:min-w-0 ${
-                    on ? "bg-white shadow-sm ring-1 ring-slate-200" : "hover:bg-white/70"
+                  className={`group relative min-w-0 rounded-xl px-3 py-2.5 text-left transition-colors ${
+                    on ? "bg-white shadow-sm ring-1 ring-slate-200" : "bg-white/50 hover:bg-white/70 lg:bg-transparent"
                   } ${!a.isActive ? "opacity-60" : ""} ${focusRing}`}
                 >
                   {on && <span className="absolute inset-y-2 left-0 w-1 rounded-r bg-slate-900" aria-hidden="true" />}
@@ -622,8 +640,10 @@ const CashbookPage: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                  <div className={`mt-1.5 pl-[42px] text-[15px] font-semibold tabular-nums ${a.closing < 0 ? "text-rose-700" : "text-slate-900"}`}>{money(a.closing)} đ</div>
-                  {noOpen && <div className="mt-0.5 pl-[42px] text-xs text-amber-700">Chưa khai báo số dư đầu</div>}
+                  <div className={`mt-1.5 text-[15px] font-semibold tabular-nums lg:pl-[42px] ${a.closing < 0 ? "text-rose-700" : "text-slate-900"}`}>
+                    {money(a.closing)} đ
+                  </div>
+                  {noOpen && <div className="mt-0.5 text-xs text-amber-700 lg:pl-[42px]">Chưa khai báo số dư đầu</div>}
                 </button>
               );
             })}
@@ -677,19 +697,19 @@ const CashbookPage: React.FC = () => {
                 <div className={`mt-1 text-[34px] font-semibold leading-tight tracking-tight tabular-nums ${(head?.closing ?? 0) < 0 ? "text-rose-700" : "text-slate-900"}`}>
                   {money(head?.closing ?? 0)} <span className="text-xl font-medium text-slate-400">đ</span>
                 </div>
-                <div className="text-sm text-slate-500">Tồn cuối ngày {viDate(to < today ? to : today)}</div>
+                <div className="text-sm text-slate-500">Số dư cuối ngày {viDate(to < today ? to : today)}</div>
                 <dl className="mt-4 grid max-w-md grid-cols-3 gap-4 text-sm">
                   <div>
-                    <dt className="text-slate-500">Đầu kỳ</dt>
+                    <dt className="text-slate-500">Số dư đầu kỳ</dt>
                     <dd className="font-medium tabular-nums text-slate-900">{money(head?.opening ?? 0)}</dd>
                   </div>
                   <div>
                     <dt className="text-slate-500">Thu vào</dt>
-                    <dd className="font-medium tabular-nums text-teal-700">+{money(head?.thu ?? 0)}</dd>
+                    <dd className="font-medium tabular-nums text-teal-700">{head?.thu ? "+" : ""}{money(head?.thu ?? 0)}</dd>
                   </div>
                   <div>
                     <dt className="text-slate-500">Chi ra</dt>
-                    <dd className="font-medium tabular-nums text-rose-700">−{money(head?.chi ?? 0)}</dd>
+                    <dd className="font-medium tabular-nums text-rose-700">{head?.chi ? "−" : ""}{money(head?.chi ?? 0)}</dd>
                   </div>
                 </dl>
               </div>
@@ -699,19 +719,19 @@ const CashbookPage: React.FC = () => {
                     <Sparkline points={trend} />
                     <div className="mt-1 flex justify-between text-xs text-slate-400">
                       <span>{viDate(trend[0].d)}</span>
-                      <span>Tồn cuối mỗi ngày</span>
+                      <span>Số dư cuối mỗi ngày</span>
                       <span>{viDate(trend[trend.length - 1].d)}</span>
                     </div>
                   </>
                 ) : (
-                  <p className="text-sm text-slate-400 md:text-right">{selAcc ? "" : "Chọn một quỹ để xem đường tồn theo ngày."}</p>
+                  <p className="text-sm text-slate-400 md:text-right">{selAcc ? "" : "Chọn một quỹ để xem số dư theo từng ngày."}</p>
                 )}
               </div>
             </div>
 
             {selAcc && isCash(selAcc.type) && !selAcc.openingDate && (
               <div className="mx-5 mb-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                Quỹ chưa khai báo số dư đầu nên số tồn đang là cộng dồn từ phiếu cũ và chưa chặn chi quá tồn.
+                Quỹ chưa khai báo số dư đầu kỳ nên số dư đang là cộng dồn từ các phiếu cũ, và chưa chặn chi quá số dư.
                 {isAdmin ? " Bấm “Số dư đầu kỳ” và nhập số tiền đếm thực tế." : " Nhờ admin khai báo số dư đầu kỳ."}
               </div>
             )}
@@ -795,12 +815,12 @@ const CashbookPage: React.FC = () => {
               <span>Nội dung</span>
               <span className="text-right">Thu</span>
               <span className="text-right">Chi</span>
-              {showBalance && <span className="text-right">Tồn</span>}
-              <span />
+              {showBalance && <span className="text-right">Số dư</span>}
+              <span className="text-right">{isAdmin ? "Thao tác" : ""}</span>
             </div>
 
             {ledger?.filtered && ledger.account && (
-              <div className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-xs text-slate-500">Đang lọc nên ẩn cột tồn. Bỏ lọc để xem tồn sau từng phiếu.</div>
+              <div className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-xs text-slate-500">Đang lọc nên ẩn cột số dư. Bỏ lọc để xem số dư sau từng phiếu.</div>
             )}
 
             {days.length === 0 && (
@@ -829,7 +849,7 @@ const CashbookPage: React.FC = () => {
                     {g.thu > 0 && <span className="text-teal-700">+{money(g.thu)}</span>}
                     {g.thu > 0 && g.chi > 0 && <span className="px-1.5 text-slate-300">/</span>}
                     {g.chi > 0 && <span className="text-rose-700">−{money(g.chi)}</span>}
-                    {showBalance && g.end != null && <span className="ml-3 text-slate-700">Tồn cuối ngày {money(g.end)}</span>}
+                    {showBalance && g.end != null && <span className="ml-3 text-slate-700">Số dư cuối ngày {money(g.end)}</span>}
                   </span>
                 </div>
                 {g.list
@@ -877,16 +897,17 @@ const CashbookPage: React.FC = () => {
                           )}
                           {/* actions on mobile */}
                           {!r.voided && (
-                            <div className="mt-1.5 flex gap-3 md:hidden">
+                            <div className="mt-2 flex flex-wrap gap-2 md:hidden">
                               {isAdmin && r.category !== "TRANSFER" && ( /* ✅ đổi TK của phiếu: chỉ quản trị + mật khẩu cấp 2 */
-                                <button type="button" className="text-xs font-medium text-slate-600" onClick={() => (setFormErr(null), setChangeAcc({ row: r, accountId: "" }))}>
+                                <button type="button" className={`${rowBtnAcc} !min-h-[34px] px-3 text-[13px]`} onClick={() => (setFormErr(null), setChangeAcc({ row: r, accountId: "" }))}>
+                                  {RowIcon.swap}
                                   Đổi tài khoản
                                 </button>
                               )}
                               {isAdmin && ( // ✅ huỷ phiếu cần mật khẩu cấp 2 — chỉ quản trị
                               <button
                                 type="button"
-                                className="text-xs font-medium text-rose-700"
+                                className={`${rowBtnVoid} !min-h-[34px] px-3 text-[13px]`}
                                 onClick={() =>
                                   setVoidTarget({
                                     id: r.id,
@@ -900,6 +921,7 @@ const CashbookPage: React.FC = () => {
                                   })
                                 }
                               >
+                                {RowIcon.void}
                                 Huỷ phiếu
                               </button>
                               )}
@@ -911,7 +933,7 @@ const CashbookPage: React.FC = () => {
                         <div className={`text-right text-sm font-semibold tabular-nums md:hidden ${r.voided ? "text-slate-400 line-through" : thu ? "text-teal-700" : "text-rose-700"}`}>
                           {thu ? "+" : "−"}
                           {money(r.amount)}
-                          {showBalance && r.balance != null && <div className="text-xs font-normal text-slate-500">tồn {money(r.balance)}</div>}
+                          {showBalance && r.balance != null && <div className="text-xs font-normal text-slate-500">số dư {money(r.balance)}</div>}
                         </div>
 
                         {/* desktop columns */}
@@ -928,21 +950,22 @@ const CashbookPage: React.FC = () => {
                         )}
                         <span className="hidden justify-end gap-1 md:flex">
                           {!r.voided && (
-                            <span className="flex gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                            <span className="flex gap-1.5">
                               {isAdmin && r.category !== "TRANSFER" && ( /* ✅ đổi TK của phiếu: chỉ quản trị + mật khẩu cấp 2 */
                                 <button
                                   type="button"
-                                  title="Đổi tài khoản"
+                                  title="Chuyển phiếu sang quỹ / tài khoản khác (cần mật khẩu cấp 2)"
                                   onClick={() => (setFormErr(null), setChangeAcc({ row: r, accountId: "" }))}
-                                  className={`rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 ${focusRing}`}
+                                  className={`${rowBtnAcc} ${focusRing}`}
                                 >
+                                  {RowIcon.swap}
                                   Đổi TK
                                 </button>
                               )}
                               {isAdmin && ( // ✅ huỷ phiếu cần mật khẩu cấp 2 — chỉ quản trị
                               <button
                                 type="button"
-                                title="Huỷ phiếu"
+                                title="Huỷ phiếu (giữ lại để tra, cần mật khẩu cấp 2)"
                                 onClick={() =>
                                   setVoidTarget({
                                     id: r.id,
@@ -955,8 +978,9 @@ const CashbookPage: React.FC = () => {
                                     isTransfer: r.category === "TRANSFER",
                                   })
                                 }
-                                className={`rounded-md px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50 ${focusRing}`}
+                                className={`${rowBtnVoid} ${focusRing}`}
                               >
+                                {RowIcon.void}
                                 Huỷ
                               </button>
                               )}
@@ -973,14 +997,17 @@ const CashbookPage: React.FC = () => {
               <div className={`grid ${ledgerCols} gap-3 rounded-b-2xl border-t border-slate-200 bg-slate-50 px-4 py-3 text-sm`}>
                 <span />
                 <span className="font-medium text-slate-700">
-                  Cộng phát sinh
-                  {showBalance && ledger.opening != null && <span className="ml-2 font-normal text-slate-500">đầu kỳ {money(ledger.opening)}</span>}
+                  Cộng trong kỳ
+                  {showBalance && ledger.opening != null && (
+                    <span className="block font-normal text-slate-500 md:ml-2 md:inline">Số dư đầu kỳ {money(ledger.opening)}</span>
+                  )}
                 </span>
                 <span className="hidden text-right font-semibold tabular-nums text-teal-700 md:block">{money(ledger.thu)}</span>
                 <span className="hidden text-right font-semibold tabular-nums text-rose-700 md:block">{money(ledger.chi)}</span>
                 {showBalance && <span className="hidden text-right font-semibold tabular-nums text-slate-900 md:block">{money(ledger.closing ?? 0)}</span>}
                 <span className="text-right text-sm tabular-nums md:hidden">
                   <span className="text-teal-700">+{money(ledger.thu)}</span> <span className="text-rose-700">−{money(ledger.chi)}</span>
+                  {showBalance && <span className="block font-semibold text-slate-900">Số dư cuối {money(ledger.closing ?? 0)}</span>}
                 </span>
               </div>
             )}
@@ -1194,7 +1221,7 @@ const CashbookPage: React.FC = () => {
               </div>
             )}
             <p className="text-sm text-slate-500">
-              Phiếu trước ngày này không tính vào số dư.{isCash(opening.acc.type) && " Từ ngày này quỹ tiền mặt không được chi quá số tồn."}
+              Phiếu trước ngày này không tính vào số dư.{isCash(opening.acc.type) && " Từ ngày này quỹ tiền mặt không được chi quá số dư."}
             </p>
             {formErr && <div className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{formErr}</div>}
           </>
@@ -1205,7 +1232,7 @@ const CashbookPage: React.FC = () => {
       <DialogShell
         open={!!changeAcc}
         title="Đổi tài khoản của phiếu"
-        subtitle="Dùng khi chọn nhầm nơi nhận hoặc chi tiền. Có kiểm tra khoá kỳ và tồn quỹ."
+        subtitle="Dùng khi chọn nhầm nơi nhận hoặc chi tiền. Có kiểm tra khoá kỳ và số dư quỹ."
         onClose={() => setChangeAcc(null)}
         footer={
           <>

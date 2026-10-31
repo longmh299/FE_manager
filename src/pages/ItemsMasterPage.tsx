@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type { Item } from "../types";
 import { extractList } from "../utils/apiHelpers";
 import { useAuth } from "../context/AuthContext";
+import DeleteItemDialog, { type DeleteItemTarget } from "../components/DeleteItemDialog";
 
 const PAGE_SIZE = 50;
 
@@ -76,16 +77,9 @@ const ItemsMasterPage: React.FC = () => {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Xóa mặt hàng này?")) return;
-    try {
-      await api.delete(`/items/${id}`);
-      fetchItems();
-    } catch (err: any) {
-      console.error("Delete item error", err);
-      alert(err?.response?.data?.message || "Không xóa được mặt hàng");
-    }
-  };
+  // ✅ xoá: kiểm tra đã phát sinh chứng từ chưa + mật khẩu cấp 2 (hộp DeleteItemDialog)
+  const [deleteTarget, setDeleteTarget] = useState<DeleteItemTarget | null>(null);
+  const handleDelete = (it: any) => setDeleteTarget({ itemId: String(it.id), sku: it.sku, name: it.name });
 
   const handleImport = async () => {
     if (!importFile) {
@@ -268,7 +262,7 @@ const ItemsMasterPage: React.FC = () => {
                     </button>
                     <button
                       className="px-2 py-1 rounded bg-red-600 text-white text-xs"
-                      onClick={() => handleDelete(it.id)}
+                      onClick={() => handleDelete(it)}
                     >
                       Xóa
                     </button>
@@ -421,6 +415,14 @@ const ItemsMasterPage: React.FC = () => {
           </div>
         </div>
       )}
+      <DeleteItemDialog
+        target={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onDeleted={() => {
+          setDeleteTarget(null);
+          fetchItems();
+        }}
+      />
     </div>
   );
 };
