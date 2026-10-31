@@ -1,5 +1,6 @@
 // src/pages/PartStocksPage.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import ItemStockHistory from "../components/ItemStockHistory"; // ✅ lịch sử nhập xuất từng mặt hàng
 import api, { extractList } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 
@@ -76,6 +77,15 @@ const PartStocksPage: React.FC = () => {
   const canEditNote = user?.role === "admin" || user?.role === "accountant";
 
   const [rows, setRows] = useState<PartStockRow[]>([]);
+
+  // ✅ bấm 1 dòng tồn -> xổ lịch sử nhập xuất của mặt hàng đó ngay bên dưới (đối soát)
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const toggleHistory = (e: React.MouseEvent, itemId?: string) => {
+    if (!itemId) return;
+    // bấm vào nút / ô nhập trong dòng (sửa ghi chú, sửa...) thì không xổ
+    if ((e.target as HTMLElement).closest("button, input, textarea, select, a, label")) return;
+    setExpandedId((cur) => (cur === itemId ? null : itemId));
+  };
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1075,7 +1085,14 @@ const PartStocksPage: React.FC = () => {
                   const showEye = noteText.trim().length > 60;
 
                   return (
-                    <tr key={row.itemId || row.sku || row.name}>
+                    <React.Fragment key={row.itemId || row.sku || row.name}>
+                    <tr
+                      onClick={(e) => toggleHistory(e, row.itemId)}
+                      aria-expanded={!!row.itemId && expandedId === row.itemId}
+                      title={row.itemId ? "Bấm để xem lịch sử nhập xuất" : undefined}
+                      className={row.itemId ? "cursor-pointer hover:bg-slate-50" : undefined}
+                      style={{ backgroundColor: row.itemId && expandedId === row.itemId ? "#f1f5f9" : undefined }}
+                    >
                       <td
                         style={{
                           padding: "8px 10px",
@@ -1084,6 +1101,18 @@ const PartStocksPage: React.FC = () => {
                           whiteSpace: "nowrap",
                         }}
                       >
+                        <span
+                          aria-hidden="true"
+                          style={{
+                            display: "inline-block",
+                            width: 14,
+                            color: "#64748b",
+                            transition: "transform .15s",
+                            transform: row.itemId && expandedId === row.itemId ? "rotate(90deg)" : "none",
+                          }}
+                        >
+                          ▸
+                        </span>{" "}
                         {row.sku}
                       </td>
 
@@ -1314,6 +1343,14 @@ const PartStocksPage: React.FC = () => {
                         </>
                       )}
                     </tr>
+                    {row.itemId && expandedId === row.itemId && (
+                      <tr>
+                        <td colSpan={isPrivileged ? 8 : 5} style={{ padding: 0, borderTop: B_ROW }}>
+                          <ItemStockHistory itemId={row.itemId} unitLabel={(row as any).unitName || (row as any).unit || ""} />
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
                   );
                 })
               )}
@@ -1346,7 +1383,7 @@ const PartStocksPage: React.FC = () => {
             const showEye = noteText.trim().length > 60;
 
             return (
-              <div key={row.itemId || row.sku || row.name} className="rounded border bg-white p-3 shadow-sm">
+              <div key={row.itemId || row.sku || row.name} className="overflow-hidden rounded border bg-white p-3 shadow-sm">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="text-xs text-slate-500">{row.sku}</div>
@@ -1439,6 +1476,27 @@ const PartStocksPage: React.FC = () => {
                     >
                       Sửa
                     </button>
+                  </div>
+                )}
+
+                {row.itemId && (
+                  <div className="mt-2 border-t pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedId((cur) => (cur === row.itemId ? null : row.itemId!))}
+                      aria-expanded={expandedId === row.itemId}
+                      className="flex w-full items-center justify-between py-1 text-sm font-medium text-slate-700"
+                    >
+                      <span>Lịch sử nhập xuất</span>
+                      <span aria-hidden="true" className={`transition-transform ${expandedId === row.itemId ? "rotate-180" : ""}`}>
+                        ▾
+                      </span>
+                    </button>
+                  </div>
+                )}
+                {row.itemId && expandedId === row.itemId && (
+                  <div className="-mx-3 -mb-3 mt-1">
+                    <ItemStockHistory itemId={row.itemId} unitLabel={(row as any).unitName || (row as any).unit || ""} />
                   </div>
                 )}
               </div>

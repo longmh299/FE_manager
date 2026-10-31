@@ -1,62 +1,89 @@
-// src/pages/SalesReturnFormPage.tsx
-import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+// src/pages/SalesReturnsPage.tsx
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useIsMobile } from "../hooks/uselsMobile";
+import { useNavigate } from "react-router-dom";
 import api from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
+import { CurrencyInput } from "../components/CurrencyInput";
 
 type InvoiceStatus = "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
 type UserRole = "staff" | "accountant" | "admin";
 
-type ItemOption = { id: string; name: string; sku?: string };
-
-type InvoiceOption = {
+type InvoiceListItem = {
   id: string;
   code: string;
   issueDate?: string;
-  partnerId?: string | null;
+
   partnerName?: string | null;
-  saleUserId?: string | null;
-  saleUserName?: string | null;
-  techUserId?: string | null;
-  techUserName?: string | null;
-  total?: number;
+  partnerId?: string | null;
+
+  refInvoiceId?: string | null;
+  refInvoiceCode?: string | null;
+
+  total: number;
+  status: InvoiceStatus;
 };
 
-type LineDraft = {
-  itemId: string;
-  itemName: string;
-  qty: number;
-  price: number;
-};
-
-type RefInvoiceDetail = {
+type PartnerOpt = { id: string; name: string; code?: string };
+type PaymentAccountOpt = { id: string; code: string; name: string };
+type SalesInvoiceOpt = {
   id: string;
-  code?: string;
+  code: string;
   issueDate?: string;
-  partnerName?: string;
-
-  // tổng của HĐ gốc (thường là GROSS)
-  total?: number;
-
-  // VAT data (nếu API có trả)
-  taxPercent?: number;
-  tax?: number;
-
-  lines?: Array<{
-    id?: string;
-    itemId: string;
-    itemName?: string | null;
-    itemSku?: string | null;
-    qty: any;
-    price: any;
-    amount?: any;
-  }>;
+  total: number;
+  partnerName?: string | null;
 };
 
-function unwrap<T = any>(res: any): T {
-  const body = res?.data;
-  if (body && typeof body === "object" && "data" in body) return body.data as T;
-  return body as T;
+type AllocationRow = {
+  id: string;
+  amount: number;
+  kind: "NORMAL" | "WARRANTY_HOLD" | string;
+  createdAt?: string;
+  payment?: {
+    id: string;
+    date?: string;
+    type?: "RECEIPT" | "PAYMENT" | string;
+    amount?: number;
+    method?: string | null;
+    refNo?: string | null;
+    note?: string | null;
+    account?: { code?: string; name?: string } | null;
+  } | null;
+};
+
+type SalesInvoiceDetail = {
+  id: string;
+  code: string;
+  issueDate?: string;
+  total: number;
+  paidAmount: number;
+
+  // ✅ hold fields (để hiển thị/giới hạn)
+  hasWarrantyHold?: boolean;
+  warrantyHoldAmount?: number;
+  warrantyHoldPct?: number;
+  warrantyDueDate?: string | null;
+
+  partnerName?: string | null;
+  allocations?: AllocationRow[];
+};
+
+function formatDateDisplay(raw?: string) {
+  if (!raw) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [y, m, d] = raw.split("-");
+    return `${d}/${m}/${y}`;
+  }
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+function formatMoney(n: number) {
+  return Number(n || 0).toLocaleString("vi-VN");
 }
 
 async function fetchMeRole(): Promise<UserRole | null> {
@@ -66,21 +93,6 @@ async function fetchMeRole(): Promise<UserRole | null> {
   } catch {
     return null;
   }
-}
-
-function formatMoney(n: number) {
-  return Number(n || 0).toLocaleString("vi-VN");
-}
-
-function formatDate(raw?: string) {
-  if (!raw) return "";
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw.split("-").reverse().join("/");
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return String(raw);
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yy = d.getFullYear();
-  return `${dd}/${mm}/${yy}`;
 }
 
 function statusLabel(st: InvoiceStatus) {
@@ -96,12 +108,13 @@ function statusPillStyle(st: InvoiceStatus): React.CSSProperties {
     display: "inline-flex",
     alignItems: "center",
     gap: 6,
-    padding: "7px 12px",
+    padding: "6px 10px",
     borderRadius: 999,
     fontSize: 12,
-    fontWeight: 900,
+    fontWeight: 800,
     letterSpacing: 0.2,
     border: "1px solid",
+    whiteSpace: "nowrap",
   };
   if (st === "DRAFT") return { ...base, background: "#FFF7ED", borderColor: "#FDBA74", color: "#9A3412" };
   if (st === "SUBMITTED") return { ...base, background: "#EFF6FF", borderColor: "#93C5FD", color: "#1D4ED8" };
@@ -112,194 +125,274 @@ function statusPillStyle(st: InvoiceStatus): React.CSSProperties {
 
 function primaryBtnStyle(): React.CSSProperties {
   return {
-    padding: "10px 14px",
-    borderRadius: 12,
+    padding: "8px 12px",
+    borderRadius: 10,
     border: "1px solid #111827",
     background: "#111827",
     color: "#fff",
-    fontWeight: 800,
+    fontWeight: 700,
     cursor: "pointer",
   };
 }
 
 function ghostBtnStyle(): React.CSSProperties {
   return {
-    padding: "10px 14px",
-    borderRadius: 12,
-    border: "1px solid #D1D5DB",
+    padding: "8px 12px",
+    borderRadius: 10,
+    border: "1px solid #E5E7EB",
     background: "#fff",
     color: "#111827",
+    fontWeight: 700,
+    cursor: "pointer",
+  };
+}
+
+function dangerBtnStyle(): React.CSSProperties {
+  return {
+    padding: "8px 12px",
+    borderRadius: 10,
+    border: "1px solid #FCA5A5",
+    background: "#FEF2F2",
+    color: "#991B1B",
     fontWeight: 800,
     cursor: "pointer",
   };
 }
 
-function dangerGhostBtnStyle(): React.CSSProperties {
+/** ===== Refund Modal styles ===== **/
+function modalOverlayStyle(): React.CSSProperties {
   return {
-    padding: "10px 14px",
-    borderRadius: 12,
-    border: "1px solid #FCA5A5",
-    background: "#fff",
-    color: "#991B1B",
-    fontWeight: 900,
-    cursor: "pointer",
+    position: "fixed",
+    inset: 0,
+    background: "rgba(15, 23, 42, 0.45)",
+    zIndex: 9999,
+    padding: 16,
+    overflowY: "auto",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
   };
 }
 
-const styles: Record<string, React.CSSProperties> = {
-  autoWrapper: { position: "relative", zIndex: 20 },
-
-  suggestBox: {
-    position: "absolute",
-    top: "100%",
-    left: 0,
-    right: 0,
+function modalCardStyle(): React.CSSProperties {
+  return {
+    width: 620,
+    maxWidth: "100%",
+    maxHeight: "92vh",
     background: "#fff",
-    border: "1px solid #e5e7eb",
-    borderRadius: 12,
-    maxHeight: 240,
+    borderRadius: 16,
+    border: "1px solid #E5E7EB",
+    boxShadow: "0 12px 30px rgba(0,0,0,0.18)",
+    overflow: "hidden",
+    display: "flex",
+    flexDirection: "column",
+  };
+}
+
+function modalHeaderStyle(): React.CSSProperties {
+  return {
+    padding: "12px 14px",
+    borderBottom: "1px solid #E5E7EB",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    flex: "0 0 auto",
+    background: "#fff",
+  };
+}
+
+function modalBodyStyle(): React.CSSProperties {
+  return {
+    padding: 14,
     overflowY: "auto",
-    zIndex: 9999,
-    marginTop: 6,
-    boxShadow: "0 10px 18px rgba(0,0,0,0.08)",
-  },
-  suggestItem: { padding: "10px 12px", fontSize: 13, cursor: "pointer" },
-  suggestItemMuted: { padding: "10px 12px", fontSize: 12, color: "#9ca3af" },
-};
+    flex: "1 1 auto",
+  };
+}
 
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: 12,
-  border: "1px solid #D1D5DB",
-  borderRadius: 12,
-  outline: "none",
-};
+function modalFooterStyle(): React.CSSProperties {
+  return {
+    padding: 14,
+    borderTop: "1px solid #E5E7EB",
+    background: "#fff",
+    flex: "0 0 auto",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+  };
+}
 
-const readOnlyInputStyle: React.CSSProperties = {
-  ...inputStyle,
-  background: "#F9FAFB",
-};
+/** ====== Input styles: rõ viền + hover + focus ring ====== */
+const inputBaseBorder = "#CBD5E1";
+const inputHoverBorder = "#94A3B8";
+const inputFocusBorder = "#2563EB";
+const inputFocusRing = "rgba(37, 99, 235, 0.18)";
 
-const returnNoticeStyle: React.CSSProperties = {
-  marginTop: 10,
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: "1px solid #fde68a",
-  background: "#fffbeb",
-  color: "#92400e",
-  fontSize: 13,
-  fontWeight: 700,
-  lineHeight: 1.4,
-};
+function inputStyle(): React.CSSProperties {
+  return {
+    width: "100%",
+    padding: "10px 12px",
+    border: `1px solid ${inputBaseBorder}`,
+    borderRadius: 12,
+    outline: "none",
+    background: "#fff",
+    boxShadow: "0 1px 0 rgba(0,0,0,0.03)",
+    transition: "border-color .15s ease, box-shadow .15s ease, background-color .15s ease",
+  };
+}
 
-const refBoxStyle: React.CSSProperties = {
-  marginTop: 12,
-  border: "1px solid #E5E7EB",
-  borderRadius: 14,
-  background: "#fff",
-  padding: 14,
-};
+function labelStyle(): React.CSSProperties {
+  return { fontWeight: 800, marginBottom: 6 };
+}
 
-function toNum(x: any) {
-  const n = Number(x ?? 0);
+function rowStyle(): React.CSSProperties {
+  return { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 };
+}
+
+function debounce<T extends (...args: any[]) => void>(fn: T, ms: number) {
+  let t: any;
+  return (...args: Parameters<T>) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+}
+
+function unwrapList(res: any): any[] {
+  const body = res?.data;
+  const raw = body?.data?.items ?? body?.items ?? body?.data ?? body;
+  return Array.isArray(raw) ? raw : [];
+}
+
+function toNum(v: any): number {
+  if (v == null) return 0;
+  const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
 
-function clampPct(x: any) {
-  const n = toNum(x);
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(100, n));
+function nearlyEqual(a: number, b: number, eps = 0.0001) {
+  return Math.abs((a || 0) - (b || 0)) <= eps;
 }
 
-function roundMoney(n: number) {
-  return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+/** ===== Center Alert (overlay) ===== */
+type CenterAlert = { type: "error" | "warning" | "success"; title: string; message: string } | null;
+
+function centerAlertStyles(type: "error" | "warning" | "success") {
+  const base = {
+    borderRadius: 16,
+    border: "1px solid",
+    padding: 14,
+    lineHeight: 1.45,
+  } as React.CSSProperties;
+  if (type === "error") return { ...base, background: "#FEF2F2", borderColor: "#FCA5A5", color: "#991B1B" };
+  if (type === "warning") return { ...base, background: "#FFFBEB", borderColor: "#FDE68A", color: "#92400E" };
+  return { ...base, background: "#ECFDF5", borderColor: "#6EE7B7", color: "#065F46" };
 }
 
-export default function SalesReturnFormPage() {
+function applyFocusStyle(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.borderColor = inputFocusBorder;
+  el.style.boxShadow = `0 0 0 4px ${inputFocusRing}, 0 1px 0 rgba(0,0,0,0.03)`;
+}
+
+function applyBlurStyle(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.borderColor = inputBaseBorder;
+  el.style.boxShadow = "0 1px 0 rgba(0,0,0,0.03)";
+}
+
+function applyHoverStyle(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null) {
+  if (!el) return;
+  if (document.activeElement === el) return;
+  el.style.borderColor = inputHoverBorder;
+}
+
+function applyLeaveStyle(el: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null) {
+  if (!el) return;
+  if (document.activeElement === el) return;
+  el.style.borderColor = inputBaseBorder;
+}
+
+/**
+ * FE display-only fallback cho invoice cũ:
+ * - nếu hasWarrantyHold=true mà warrantyHoldAmount=0 và warrantyHoldPct>0 => derive hold = total * pct / 100
+ */
+function computeEffectiveHoldAmount(inv?: SalesInvoiceDetail | null) {
+  if (!inv) return 0;
+  if (!inv.hasWarrantyHold) return 0;
+
+  const amt = Math.max(0, toNum(inv.warrantyHoldAmount));
+  if (amt > 0) return amt;
+
+  const pct = Math.max(0, toNum(inv.warrantyHoldPct));
+  if (pct > 0) {
+    return Math.round(((toNum(inv.total) * pct) / 100 + Number.EPSILON) * 100) / 100;
+  }
+
+  return 0;
+}
+
+export default function SalesReturnsPage() {
+  const isMobile = useIsMobile(); // ✅ điện thoại: danh sách dạng thẻ
   const nav = useNavigate();
-  const { id } = useParams();
-  const isNew = !id || id === "new";
-
   const toast = useToast();
 
   const [role, setRole] = useState<UserRole | null>(null);
   const [loadingRole, setLoadingRole] = useState(true);
 
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState<"" | InvoiceStatus>("");
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
+
   const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState<InvoiceStatus>("DRAFT");
+  const [rows, setRows] = useState<InvoiceListItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(total / pageSize)), [total]);
 
-  const [code, setCode] = useState("");
-  const [issueDate, setIssueDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  // ===== Refund modal state =====
+  const [refundOpen, setRefundOpen] = useState(false);
+  const [refundInv, setRefundInv] = useState<InvoiceListItem | null>(null);
 
-  // ✅ Hướng A: SALES_RETURN bắt buộc chọn HĐ gốc (SALES APPROVED)
-  const [refInvoiceId, setRefInvoiceId] = useState<string>("");
-  const [refInvoiceLabel, setRefInvoiceLabel] = useState<string>("");
-  const [refInvoiceQuery, setRefInvoiceQuery] = useState<string>("");
-  const [refSuggestOpen, setRefSuggestOpen] = useState(false);
-  const [refLoading, setRefLoading] = useState(false);
-  const [refOptions, setRefOptions] = useState<InvoiceOption[]>([]);
+  const [refundAmount, setRefundAmount] = useState<number>(0);
+  const [refundMethod, setRefundMethod] = useState<string>("");
+  const [refundRefNo, setRefundRefNo] = useState<string>("");
+  const [refundNote, setRefundNote] = useState<string>("");
 
-  // ✅ chi tiết hóa đơn gốc (để “Trả full”)
-  const [refDetail, setRefDetail] = useState<RefInvoiceDetail | null>(null);
-  const [loadingRefDetail, setLoadingRefDetail] = useState(false);
+  // partner select (search)
+  const [refundPartnerId, setRefundPartnerId] = useState<string>("");
+  const [partnerQuery, setPartnerQuery] = useState<string>("");
+  const [partnerLoading, setPartnerLoading] = useState<boolean>(false);
+  const [partnerOptions, setPartnerOptions] = useState<PartnerOpt[]>([]);
+  const [partnerDropdownOpen, setPartnerDropdownOpen] = useState<boolean>(false);
+  const partnerBoxRef = useRef<HTMLDivElement | null>(null);
 
-  // ✅ VAT% của phiếu trả (mặc định lấy theo HĐ gốc)
-  const [taxPercent, setTaxPercent] = useState<number>(0);
+  // payment accounts
+  const [accounts, setAccounts] = useState<PaymentAccountOpt[]>([]);
+  const [refundAccountId, setRefundAccountId] = useState<string>("");
 
-  // snapshot (để hiển thị)
-  const [partnerId, setPartnerId] = useState<string>("");
-  const [partnerName, setPartnerName] = useState<string>("");
+  // sales invoice select
+  const [salesInvId, setSalesInvId] = useState<string>("");
+  const [salesInvLabel, setSalesInvLabel] = useState<string>("");
+  const [salesInvQuery, setSalesInvQuery] = useState<string>("");
+  const [salesInvLoading, setSalesInvLoading] = useState<boolean>(false);
+  const [salesInvOptions, setSalesInvOptions] = useState<SalesInvoiceOpt[]>([]);
+  const [salesInvDropdownOpen, setSalesInvDropdownOpen] = useState<boolean>(false);
+  const salesInvBoxRef = useRef<HTMLDivElement | null>(null);
 
-  // staff (hiển thị thôi; approve BE sẽ copy từ invoice gốc)
-  const [saleUserName, setSaleUserName] = useState<string>("");
-  const [techUserName, setTechUserName] = useState<string>("");
+  // sales invoice detail
+  const [salesInvDetailLoading, setSalesInvDetailLoading] = useState<boolean>(false);
+  const [salesInvDetail, setSalesInvDetail] = useState<SalesInvoiceDetail | null>(null);
 
-  const [note, setNote] = useState("");
+  // center alert overlay
+  const [centerAlert, setCenterAlert] = useState<CenterAlert>(null);
 
-  const [items, setItems] = useState<ItemOption[]>([]);
-  const [openItemSuggestIndex, setOpenItemSuggestIndex] = useState<number | null>(null);
-  const [lines, setLines] = useState<LineDraft[]>([]);
+  // track user edits refund amount to avoid auto overriding
+  const userEditedRefundAmountRef = useRef(false);
 
-  // subtotal = tổng dòng hàng (chưa VAT)
-  const subtotal = useMemo(
-    () => lines.reduce((s, l) => s + Number(l.qty || 0) * Number(l.price || 0), 0),
-    [lines]
-  );
-
-  const taxAmount = useMemo(() => {
-    const pct = clampPct(taxPercent);
-    return roundMoney((toNum(subtotal) * pct) / 100);
-  }, [subtotal, taxPercent]);
-
-  const grossTotal = useMemo(() => roundMoney(toNum(subtotal) + toNum(taxAmount)), [subtotal, taxAmount]);
-
-  const refSubtotal = useMemo(() => {
-    const ls = refDetail?.lines || [];
-    return ls.reduce((s, l) => s + toNum(l.qty) * toNum(l.price), 0);
-  }, [refDetail]);
-
-  const refTax = useMemo(() => {
-    // ưu tiên field tax nếu API có
-    if (refDetail?.tax != null) return Math.max(0, toNum(refDetail.tax));
-    // fallback: total - subtotal
-    const t = refDetail?.total != null ? toNum(refDetail.total) : 0;
-    const sub = toNum(refSubtotal);
-    return Math.max(0, roundMoney(t - sub));
-  }, [refDetail, refSubtotal]);
-
-  const refGross = useMemo(() => {
-    const t = refDetail?.total != null ? toNum(refDetail.total) : 0;
-    if (t > 0) return t;
-    return roundMoney(toNum(refSubtotal) + toNum(refTax));
-  }, [refDetail, refSubtotal, refTax]);
-
-  const refTaxPctDerived = useMemo(() => {
-    if (refDetail?.taxPercent != null) return clampPct(refDetail.taxPercent);
-    const sub = toNum(refSubtotal);
-    const tx = toNum(refTax);
-    if (sub <= 0 || tx <= 0) return 0;
-    return clampPct(roundMoney((tx / sub) * 100));
-  }, [refDetail, refSubtotal, refTax]);
+  function showCenterAlert(type: "error" | "warning" | "success", title: string, message: string) {
+    setCenterAlert({ type, title, message });
+  }
 
   useEffect(() => {
     (async () => {
@@ -317,877 +410,823 @@ export default function SalesReturnFormPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load items ONCE
+  async function load() {
+    setLoading(true);
+    try {
+      const params: any = {
+        q: q || undefined,
+        page,
+        pageSize,
+        type: "SALES_RETURN",
+        status: status || undefined,
+      };
+      const res = await api.get("/invoices", { params });
+      const data = res.data?.data ?? [];
+      setRows(
+        (Array.isArray(data) ? data : []).map((x: any) => ({
+          id: String(x.id),
+          code: String(x.code),
+          issueDate: x.issueDate,
+          partnerName: x.partnerName ?? "",
+          partnerId: x.partnerId ?? null,
+          refInvoiceId: x.refInvoiceId != null ? String(x.refInvoiceId) : null,
+          refInvoiceCode:
+            x.refInvoice?.code != null
+              ? String(x.refInvoice.code)
+              : x.refInvoiceCode != null
+              ? String(x.refInvoiceCode)
+              : null,
+          total: Number(x.total ?? 0),
+          status: x.status as InvoiceStatus,
+        }))
+      );
+      setTotal(Number(res.data?.total ?? 0));
+    } catch (e: any) {
+      toast.push({ type: "error", title: "Lỗi", message: e?.response?.data?.message || e?.message || "Không tải được." });
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
     if (role !== "admin") return;
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role, page, status]);
 
+  // Load payment accounts
+  useEffect(() => {
+    if (role !== "admin") return;
     (async () => {
       try {
-        const res = await api.get("/items", { params: { q: "", page: 1, pageSize: 1000 } });
-        const data = unwrap<any[]>(res);
-        const mapped: ItemOption[] = (Array.isArray(data) ? data : []).map((x: any) => ({
-          id: String(x.id),
-          name: String(x.name ?? x.sku ?? x.id),
-          sku: x.sku ? String(x.sku) : undefined,
-        }));
-        setItems(mapped);
-      } catch (e: any) {
-        console.error("loadItems error", e);
-        setItems([]);
-        toast.push({
-          type: "error",
-          title: "Lỗi",
-          message: e?.response?.data?.message || e?.message || "Không tải được danh sách sản phẩm (/items).",
-        });
+        const res = await api.get("/payment-accounts", { params: { active: 1 } });
+        const list = unwrapList(res);
+        setAccounts(
+          list
+            .map((a: any) => ({ id: String(a.id), code: String(a.code || ""), name: String(a.name || "") }))
+            .filter((x: any) => x.id && x.code)
+        );
+      } catch {
+        setAccounts([]);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [role]);
 
-  // ✅ Search invoice gốc (SALES đã duyệt) (debounced)
-  useEffect(() => {
-    if (role !== "admin") return;
-    if (!refSuggestOpen) return;
+  async function actSubmit(id: string) {
+    try {
+      await api.post(`/invoices/${id}/submit`);
+      toast.push({ type: "success", title: "Thành công", message: "Đã gửi duyệt." });
+      await load();
+    } catch (e: any) {
+      showCenterAlert("error", "Lỗi", e?.response?.data?.message || e?.message || "Không gửi duyệt được.");
+    }
+  }
 
-    const q = (refInvoiceQuery || "").trim();
-    if (!q) {
-      setRefOptions([]);
+  async function actRecall(id: string) {
+    try {
+      await api.post(`/invoices/${id}/recall`);
+      toast.push({ type: "success", title: "Thành công", message: "Đã hủy gửi duyệt." });
+      await load();
+    } catch (e: any) {
+      showCenterAlert("error", "Lỗi", e?.response?.data?.message || e?.message || "Không hủy được.");
+    }
+  }
+
+  async function actApprove(id: string) {
+    try {
+      await api.post(`/invoices/${id}/approve`, {});
+      toast.push({ type: "success", title: "Đã duyệt", message: "Phiếu đã được duyệt và nhập kho." });
+      await load();
+    } catch (e: any) {
+      showCenterAlert("error", "Lỗi", e?.response?.data?.message || e?.message || "Không duyệt được.");
+    }
+  }
+
+  async function actReject(id: string) {
+    try {
+      await api.post(`/invoices/${id}/reject`, {});
+      toast.push({ type: "warning", title: "Đã từ chối", message: "Phiếu đã bị từ chối." });
+      await load();
+    } catch (e: any) {
+      showCenterAlert("error", "Lỗi", e?.response?.data?.message || e?.message || "Không từ chối được.");
+    }
+  }
+
+  async function actDelete(id: string) {
+    const ok = window.confirm("Bạn chắc chắn muốn xoá phiếu này?");
+    if (!ok) return;
+
+    try {
+      await api.delete(`/invoices/${id}`);
+      toast.push({ type: "success", title: "Đã xoá", message: "Phiếu đã được xoá." });
+      await load();
+    } catch (e: any) {
+      showCenterAlert("error", "Lỗi", e?.response?.data?.message || e?.message || "Không xoá được.");
+    }
+  }
+
+  function resetSalesInvoiceSelection() {
+    setSalesInvId("");
+    setSalesInvLabel("");
+    setSalesInvQuery("");
+    setSalesInvOptions([]);
+    setSalesInvDropdownOpen(true);
+    setSalesInvDetail(null);
+  }
+
+  function openRefund(inv: InvoiceListItem) {
+    if (inv.status !== "APPROVED") {
+      showCenterAlert("warning", "Chưa duyệt", "Chỉ hoàn tiền khi phiếu trả hàng đã ở trạng thái ĐÃ DUYỆT.");
+      return;
+    }
+
+    userEditedRefundAmountRef.current = false;
+
+    setRefundInv(inv);
+
+    // default: hoàn đúng bằng tổng phiếu trả (sau khi load HĐ gốc sẽ tự clamp nếu vượt khả dụng)
+    setRefundAmount(Number(inv.total || 0));
+    setRefundMethod("");
+    setRefundRefNo("");
+    setRefundNote(`Hoàn tiền phiếu trả hàng ${inv.code} (cấn vào HĐ SALES gốc).`);
+
+    setRefundPartnerId(inv.partnerId ? String(inv.partnerId) : "");
+    setPartnerQuery(inv.partnerName ? String(inv.partnerName) : "");
+    setPartnerOptions([]);
+    setPartnerDropdownOpen(!inv.partnerId);
+
+    setRefundAccountId("");
+
+    // auto select SALES gốc theo refInvoiceId nếu có
+    const rid = inv.refInvoiceId ? String(inv.refInvoiceId) : "";
+    const rcode = inv.refInvoiceCode ? String(inv.refInvoiceCode) : "";
+    if (rid) {
+      setSalesInvId(rid);
+      setSalesInvLabel(rcode ? `${rcode} (HĐ gốc)` : `${rid} (HĐ gốc)`);
+      setSalesInvQuery("");
+      setSalesInvOptions([]);
+      setSalesInvDropdownOpen(false);
+    } else {
+      resetSalesInvoiceSelection();
+    }
+
+    setRefundOpen(true);
+  }
+
+  function closeRefund() {
+    setRefundOpen(false);
+    setRefundInv(null);
+    setPartnerDropdownOpen(false);
+    setSalesInvDropdownOpen(false);
+    setSalesInvDetail(null);
+  }
+
+  /** ===== Partner search ===== **/
+  async function searchPartners(keyword: string) {
+    const k = (keyword || "").trim();
+    if (!k) {
+      setPartnerOptions([]);
+      return;
+    }
+    setPartnerLoading(true);
+    try {
+      const res = await api.get("/partners", { params: { q: k, page: 1, pageSize: 20 } });
+      const list = unwrapList(res);
+      const mapped: PartnerOpt[] = list
+        .map((p: any) => ({
+          id: String(p.id),
+          name: String(p.name ?? p.partnerName ?? p.fullName ?? p.code ?? p.id),
+          code: p.code ? String(p.code) : undefined,
+        }))
+        .filter((x) => x.id && x.name);
+      setPartnerOptions(mapped);
+    } catch (e) {
+      console.error("searchPartners error", e);
+      setPartnerOptions([]);
+    } finally {
+      setPartnerLoading(false);
+    }
+  }
+
+  const debouncedSearchPartners = useMemo(() => debounce(searchPartners, 300), []);
+
+  useEffect(() => {
+    if (!refundOpen) return;
+    if (refundPartnerId) return;
+    debouncedSearchPartners(partnerQuery);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partnerQuery, refundOpen, refundPartnerId]);
+
+  /** ===== Sales invoice search ===== **/
+  async function searchSalesInvoices(keyword: string) {
+    const inv = refundInv;
+    if (!inv) return;
+
+    const k = (keyword || "").trim();
+    if (!k && !refundPartnerId) {
+      setSalesInvOptions([]);
+      return;
+    }
+
+    setSalesInvLoading(true);
+    try {
+      const params: any = {
+        q: k || undefined,
+        page: 1,
+        pageSize: 20,
+        type: "SALES",
+        status: "APPROVED",
+        partnerId: refundPartnerId || undefined,
+      };
+
+      const res = await api.get("/invoices", { params });
+      const list = Array.isArray(res.data?.data) ? res.data.data : [];
+      const mapped: SalesInvoiceOpt[] = list.map((x: any) => ({
+        id: String(x.id),
+        code: String(x.code),
+        issueDate: x.issueDate,
+        total: Number(x.total ?? 0),
+        partnerName: x.partnerName ?? "",
+      }));
+      setSalesInvOptions(mapped);
+    } catch (e) {
+      console.error("searchSalesInvoices error", e);
+      setSalesInvOptions([]);
+    } finally {
+      setSalesInvLoading(false);
+    }
+  }
+
+  const debouncedSearchSalesInvoices = useMemo(() => debounce(searchSalesInvoices, 300), []);
+
+  useEffect(() => {
+    if (!refundOpen) return;
+    if (salesInvId) return;
+    if (!refundPartnerId) {
+      setSalesInvOptions([]);
+      return;
+    }
+    debouncedSearchSalesInvoices(salesInvQuery);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refundOpen, refundPartnerId, salesInvQuery, salesInvId]);
+
+  // click outside đóng dropdown
+  useEffect(() => {
+    function onDocClick(e: any) {
+      if (!refundOpen) return;
+
+      if (partnerBoxRef.current && partnerBoxRef.current.contains(e.target)) return;
+      if (salesInvBoxRef.current && salesInvBoxRef.current.contains(e.target)) return;
+
+      setPartnerDropdownOpen(false);
+      setSalesInvDropdownOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [refundOpen]);
+
+  // load sales invoice detail when selected
+  useEffect(() => {
+    if (!refundOpen) return;
+    if (!salesInvId) {
+      setSalesInvDetail(null);
       return;
     }
 
     let alive = true;
-    const t = setTimeout(async () => {
-      setRefLoading(true);
+    (async () => {
+      setSalesInvDetailLoading(true);
       try {
-        const res = await api.get("/invoices", {
-          params: {
-            q,
-            page: 1,
-            pageSize: 30,
-            type: "SALES",
-            status: "APPROVED",
-          },
-        });
+        const res = await api.get(`/invoices/${salesInvId}`);
+        const inv = res?.data?.data ?? res?.data;
 
-        const body = (res as any)?.data;
-        const raw = body?.data?.items ?? body?.items ?? body?.data ?? body;
-        const rows = Array.isArray(raw) ? raw : [];
+        const detail: SalesInvoiceDetail = {
+          id: String(inv.id),
+          code: String(inv.code || salesInvId),
+          issueDate: inv.issueDate,
+          total: toNum(inv.total),
+          paidAmount: toNum(inv.paidAmount),
 
-        const mapped: InvoiceOption[] = rows
-          .map((x: any) => ({
-            id: String(x.id),
-            code: String(x.code ?? x.id),
-            issueDate: x.issueDate ? String(x.issueDate) : undefined,
-            partnerId: x.partnerId ? String(x.partnerId) : null,
-            partnerName: x.partnerName ? String(x.partnerName) : null,
-            saleUserId: x.saleUserId ? String(x.saleUserId) : null,
-            saleUserName: x.saleUserName ? String(x.saleUserName) : null,
-            techUserId: x.techUserId ? String(x.techUserId) : null,
-            techUserName: x.techUserName ? String(x.techUserName) : null,
-            total: x.total != null ? Number(x.total) : undefined,
-          }))
-          .filter((x: InvoiceOption) => x.id && x.code);
+          hasWarrantyHold: inv.hasWarrantyHold === true,
+          warrantyHoldAmount: toNum(inv.warrantyHoldAmount),
+          warrantyHoldPct: toNum(inv.warrantyHoldPct),
+          warrantyDueDate: inv.warrantyDueDate ?? null,
 
-        if (alive) setRefOptions(mapped);
-      } catch (e) {
-        console.error("searchRefInvoices error", e);
-        if (alive) setRefOptions([]);
+          partnerName: inv.partnerName ?? null,
+          allocations: Array.isArray(inv.allocations)
+            ? inv.allocations.map((a: any) => ({
+                id: String(a.id),
+                amount: toNum(a.amount),
+                kind: String(a.kind || ""),
+                createdAt: a.createdAt,
+                payment: a.payment
+                  ? {
+                      id: String(a.payment.id),
+                      date: a.payment.date,
+                      type: a.payment.type,
+                      amount: toNum(a.payment.amount),
+                      method: a.payment.method ?? null,
+                      refNo: a.payment.refNo ?? null,
+                      note: a.payment.note ?? null,
+                      account: a.payment.account ? { code: a.payment.account.code, name: a.payment.account.name } : null,
+                    }
+                  : null,
+              }))
+            : [],
+        };
+
+        if (!alive) return;
+        setSalesInvDetail(detail);
+      } catch (e: any) {
+        console.error("loadSalesInvoiceDetail error", e);
+        if (!alive) return;
+        setSalesInvDetail(null);
+        showCenterAlert(
+          "error",
+          "Không tải được hoá đơn SALES gốc",
+          e?.response?.data?.message || e?.message || "Vui lòng thử lại."
+        );
       } finally {
-        if (alive) setRefLoading(false);
+        if (alive) setSalesInvDetailLoading(false);
       }
-    }, 250);
+    })();
 
     return () => {
       alive = false;
-      clearTimeout(t);
     };
-  }, [refInvoiceQuery, refSuggestOpen, role]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refundOpen, salesInvId]);
 
-  async function loadRefInvoiceDetail(invoiceId: string) {
-    if (!invoiceId) {
-      setRefDetail(null);
-      return;
+  /** =========================
+   * ✅ Option A (đã đồng bộ với BE mới):
+   * - Refund = PAYMENT + allocations âm (NORMAL và/hoặc WARRANTY_HOLD)
+   * - Hoàn "tất cả tiền" nhưng chỉ hoàn được phần nào khách đã trả thật (NORMAL/HOLD net >= 0)
+   * - Nếu khách chưa trả HOLD thì HOLD net = 0 => không hoàn HOLD
+   ========================= **/
+
+  const normalNet = useMemo(() => {
+    const allocs = salesInvDetail?.allocations || [];
+    let sum = 0;
+    for (const a of allocs) if (String(a.kind) === "NORMAL") sum += toNum(a.amount);
+    return sum; // NET (đã trừ hoàn trước đó)
+  }, [salesInvDetail]);
+
+  const holdNet = useMemo(() => {
+    const allocs = salesInvDetail?.allocations || [];
+    let sum = 0;
+    for (const a of allocs) if (String(a.kind) === "WARRANTY_HOLD") sum += toNum(a.amount);
+    return sum; // NET (đã trừ hoàn trước đó)
+  }, [salesInvDetail]);
+
+  const refundedNormalBefore = useMemo(() => {
+    const allocs = salesInvDetail?.allocations || [];
+    let sum = 0;
+    for (const a of allocs) {
+      if (String(a.kind) !== "NORMAL") continue;
+      if (toNum(a.amount) < 0) sum += Math.abs(toNum(a.amount));
     }
-    setLoadingRefDetail(true);
-    try {
-      const r = await api.get(`/invoices/${invoiceId}`);
-      const inv = r.data?.data ?? r.data;
+    return sum;
+  }, [salesInvDetail]);
 
-      const detail: RefInvoiceDetail = {
-        id: String(inv?.id ?? invoiceId),
-        code: inv?.code ? String(inv.code) : undefined,
-        issueDate: inv?.issueDate ? String(inv.issueDate) : undefined,
-        partnerName: inv?.partnerName ? String(inv.partnerName) : undefined,
-        total: inv?.total != null ? Number(inv.total) : undefined,
-
-        // VAT fields (nếu BE trả)
-        taxPercent: inv?.taxPercent != null ? Number(inv.taxPercent) : undefined,
-        tax: inv?.tax != null ? Number(inv.tax) : undefined,
-
-        lines: Array.isArray(inv?.lines)
-          ? inv.lines.map((l: any) => ({
-              id: l.id ? String(l.id) : undefined,
-              itemId: String(l.itemId ?? ""),
-              itemName: l.itemName != null ? String(l.itemName) : null,
-              itemSku: l.itemSku != null ? String(l.itemSku) : null,
-              qty: l.qty,
-              price: l.price,
-              amount: l.amount,
-            }))
-          : [],
-      };
-
-      setRefDetail(detail);
-
-      // ✅ auto set VAT% theo hóa đơn gốc (nếu đang tạo phiếu mới hoặc đang chưa set)
-      const pctFromRef =
-        detail.taxPercent != null
-          ? clampPct(detail.taxPercent)
-          : (() => {
-              const sub = (detail.lines || []).reduce((s, l) => s + toNum(l.qty) * toNum(l.price), 0);
-              const tx =
-                detail.tax != null
-                  ? Math.max(0, toNum(detail.tax))
-                  : Math.max(0, roundMoney(toNum(detail.total) - toNum(sub)));
-              if (sub <= 0 || tx <= 0) return 0;
-              return clampPct(roundMoney((tx / sub) * 100));
-            })();
-
-      // chỉ tự động set nếu đang NEW hoặc taxPercent đang =0 (tránh overwrite khi user đang chỉnh)
-      setTaxPercent((cur) => {
-        const curN = clampPct(cur);
-        if (isNew || curN <= 0.0001) return pctFromRef;
-        return curN;
-      });
-    } catch (e: any) {
-      console.error("loadRefInvoiceDetail error", e);
-      setRefDetail(null);
-      toast.push({
-        type: "error",
-        title: "Lỗi",
-        message: e?.response?.data?.message || e?.message || "Không tải được chi tiết hóa đơn gốc (/invoices/:id).",
-      });
-    } finally {
-      setLoadingRefDetail(false);
+  const refundedHoldBefore = useMemo(() => {
+    const allocs = salesInvDetail?.allocations || [];
+    let sum = 0;
+    for (const a of allocs) {
+      if (String(a.kind) !== "WARRANTY_HOLD") continue;
+      if (toNum(a.amount) < 0) sum += Math.abs(toNum(a.amount));
     }
-  }
+    return sum;
+  }, [salesInvDetail]);
 
-  function clearRefInvoice() {
-    setRefInvoiceId("");
-    setRefInvoiceLabel("");
-    setRefInvoiceQuery("");
-    setRefOptions([]);
+  const refundableNormalNow = useMemo(() => Math.max(0, normalNet), [normalNet]);
+  const refundableHoldNow = useMemo(() => Math.max(0, holdNet), [holdNet]);
+  const refundableTotalNow = useMemo(
+    () => Math.max(0, refundableNormalNow + refundableHoldNow),
+    [refundableNormalNow, refundableHoldNow]
+  );
 
-    setPartnerId("");
-    setPartnerName("");
-    setSaleUserName("");
-    setTechUserName("");
-
-    setRefDetail(null);
-
-    // reset VAT% về 0 khi đổi HĐ gốc
-    setTaxPercent(0);
-  }
-
-  async function selectRefInvoice(opt: InvoiceOption) {
-    setRefInvoiceId(opt.id);
-
-    const label = `${opt.code}${opt.partnerName ? ` - ${opt.partnerName}` : ""}`;
-    setRefInvoiceLabel(label);
-    setRefInvoiceQuery(label);
-    setRefSuggestOpen(false);
-
-    setPartnerId(String(opt.partnerId || ""));
-    setPartnerName(String(opt.partnerName || ""));
-
-    setSaleUserName(String(opt.saleUserName || ""));
-    setTechUserName(String(opt.techUserName || ""));
-
-    await loadRefInvoiceDetail(opt.id);
-  }
-
-  // ✅ “Trả full”: copy toàn bộ lines từ hóa đơn gốc
-  function applyReturnFullFromRef() {
-    if (!refInvoiceId || !refDetail) {
-      toast.push({
-        type: "warning",
-        title: "Chưa chọn hóa đơn gốc",
-        message: "Hãy chọn Hóa đơn gốc (SALES đã duyệt) trước khi bấm “Trả full”.",
-      });
-      return;
-    }
-
-    const refLines = Array.isArray(refDetail.lines) ? refDetail.lines : [];
-    if (refLines.length === 0) {
-      toast.push({
-        type: "warning",
-        title: "Hóa đơn gốc không có hàng",
-        message: "Hóa đơn gốc không có dòng hàng để trả.",
-      });
-      return;
-    }
-
-    const newLines: LineDraft[] = refLines
-      .filter((l) => String(l.itemId || "").trim())
-      .map((l) => {
-        const displayName =
-          l.itemSku && l.itemName ? `${l.itemSku} - ${l.itemName}` : l.itemName || l.itemSku || l.itemId;
-
-        return {
-          itemId: String(l.itemId),
-          itemName: String(displayName || ""),
-          qty: Math.max(0, toNum(l.qty)),
-          price: Math.max(0, toNum(l.price)),
-        };
-      });
-
-    setLines(newLines.length ? newLines : [{ itemId: "", itemName: "", qty: 1, price: 0 }]);
-
-    // ✅ đảm bảo VAT% đang theo hóa đơn gốc
-    if (refTaxPctDerived > 0.0001) {
-      setTaxPercent((cur) => {
-        const curN = clampPct(cur);
-        if (curN <= 0.0001) return refTaxPctDerived;
-        return curN;
-      });
-    }
-
-    toast.push({
-      type: "success",
-      title: "Đã nạp hàng từ hóa đơn gốc",
-      message: "Bạn có thể chỉnh lại số lượng/giá trước khi Lưu/Gửi duyệt.",
-    });
-  }
-
-  // Load invoice if edit
+  // auto clamp initial refund amount to refundableTotalNow when invoice detail arrives
   useEffect(() => {
-    if (role !== "admin") return;
+    if (!refundOpen) return;
+    if (!salesInvDetail) return;
+    if (userEditedRefundAmountRef.current) return;
 
-    if (isNew) {
-      setLines([{ itemId: "", itemName: "", qty: 1, price: 0 }]);
-      clearRefInvoice();
+    const cur = toNum(refundAmount);
+    if (cur <= 0) return;
+    if (refundableTotalNow <= 0) return;
+
+    if (cur > refundableTotalNow + 0.0001) {
+      setRefundAmount(refundableTotalNow);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refundOpen, salesInvDetail, refundableTotalNow]);
+
+  const overRefund = useMemo(() => {
+    const amt = toNum(refundAmount);
+    if (!salesInvId) return false;
+    if (!salesInvDetail) return false;
+    if (amt <= 0) return false;
+    return amt > refundableTotalNow + 0.0001;
+  }, [refundAmount, salesInvId, salesInvDetail, refundableTotalNow]);
+
+  const confirmDisabled = useMemo(() => {
+    if (!refundInv) return true;
+    const amt = toNum(refundAmount);
+    if (!Number.isFinite(amt) || amt <= 0) return true;
+    if (!refundPartnerId) return true;
+    if (!salesInvId) return true;
+    if (salesInvDetailLoading) return true;
+    if (!salesInvDetail) return true;
+    if (overRefund) return true;
+    return false;
+  }, [refundInv, refundAmount, refundPartnerId, salesInvId, salesInvDetailLoading, salesInvDetail, overRefund]);
+
+  function buildRefundAllocations(totalRefund: number) {
+    // totalRefund: số dương user muốn hoàn
+    const amt = Math.max(0, toNum(totalRefund));
+
+    const normalAvail = Math.max(0, refundableNormalNow);
+    const holdAvail = Math.max(0, refundableHoldNow);
+    const totalAvail = Math.max(0, normalAvail + holdAvail);
+
+    if (amt <= 0) {
+      return { ok: false as const, message: "Số tiền hoàn phải > 0.", allocations: [] as any[] };
+    }
+
+    if (amt > totalAvail + 0.0001) {
+      return {
+        ok: false as const,
+        message: `Số tiền hoàn vượt quá số khách đã thanh toán thực tế. Hiện chỉ còn có thể hoàn tối đa ${formatMoney(
+          totalAvail
+        )} (NORMAL: ${formatMoney(normalAvail)}, HOLD: ${formatMoney(holdAvail)}).`,
+        allocations: [] as any[],
+      };
+    }
+
+    // ✅ ưu tiên hoàn NORMAL trước, thiếu thì hoàn HOLD
+    const normalPart = Math.min(amt, normalAvail);
+    const holdPart = Math.max(0, amt - normalPart);
+
+    const allocations: any[] = [];
+    if (normalPart > 0) allocations.push({ invoiceId: salesInvId, amount: -normalPart, kind: "NORMAL" });
+    if (holdPart > 0) allocations.push({ invoiceId: salesInvId, amount: -holdPart, kind: "WARRANTY_HOLD" });
+
+    // ✅ sanity: abs sum must equal amt (match BE validation)
+    const expected = allocations.reduce((s, a) => s + Math.abs(toNum(a.amount)), 0);
+    if (!nearlyEqual(expected, amt)) {
+      return {
+        ok: false as const,
+        message: "Lỗi tính phân bổ hoàn tiền (không khớp tổng). Vui lòng thử lại.",
+        allocations: [] as any[],
+      };
+    }
+
+    return { ok: true as const, message: "", allocations, split: { normalPart, holdPart } };
+  }
+
+  async function confirmRefund() {
+    const inv = refundInv;
+    if (!inv) return;
+
+    const amt = Number(refundAmount || 0);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      showCenterAlert("warning", "Thiếu dữ liệu", "Số tiền hoàn phải > 0.");
       return;
     }
 
-    (async () => {
-      setLoading(true);
-      try {
-        const r = await api.get(`/invoices/${id}`);
-        const inv = r.data?.data ?? r.data;
-        if (!inv) return;
-
-        if (inv.type !== "SALES_RETURN") {
-          toast.push({ type: "error", title: "Sai loại phiếu", message: "Đây không phải phiếu Khách trả hàng." });
-          nav("/sales-returns", { replace: true });
-          return;
-        }
-
-        setStatus(inv.status as InvoiceStatus);
-        setCode(String(inv.code ?? ""));
-        setIssueDate(inv.issueDate ? String(inv.issueDate).slice(0, 10) : new Date().toISOString().slice(0, 10));
-
-        const rid = String(inv.refInvoiceId ?? "");
-        setRefInvoiceId(rid);
-
-        const refCode = String(inv.refInvoice?.code ?? "");
-        const refPartner = String(inv.refInvoice?.partnerName ?? inv.partnerName ?? "");
-        const label = refCode ? `${refCode}${refPartner ? ` - ${refPartner}` : ""}` : rid;
-        setRefInvoiceLabel(label);
-        setRefInvoiceQuery(label);
-
-        setPartnerId(String(inv.partnerId ?? ""));
-        setPartnerName(String(inv.partnerName ?? ""));
-
-        setSaleUserName(String(inv.saleUserName ?? inv.saleUser?.username ?? inv.saleUser?.name ?? ""));
-        setTechUserName(String(inv.techUserName ?? inv.techUser?.username ?? inv.techUser?.name ?? ""));
-
-        setNote(String(inv.note ?? ""));
-
-        // ✅ load VAT% của phiếu trả (nếu có)
-        setTaxPercent(inv.taxPercent != null ? clampPct(inv.taxPercent) : 0);
-
-        const ls: LineDraft[] =
-          (inv.lines ?? []).map((l: any) => ({
-            itemId: String(l.itemId ?? ""),
-            itemName: String(l.itemName ?? l.item?.name ?? ""),
-            qty: Number(l.qty ?? 0),
-            price: Number(l.price ?? 0),
-          })) || [];
-        setLines(ls.length ? ls : [{ itemId: "", itemName: "", qty: 1, price: 0 }]);
-
-        // ✅ load ref detail để có nút “Trả full” và preview
-        if (rid) {
-          await loadRefInvoiceDetail(rid);
-        } else {
-          setRefDetail(null);
-        }
-      } catch (e: any) {
-        toast.push({
-          type: "error",
-          title: "Lỗi",
-          message: e?.response?.data?.message || e?.message || "Không tải được phiếu.",
-        });
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [role, isNew, id, nav]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const locked = status === "APPROVED" || status === "REJECTED";
-  const editable = status === "DRAFT";
-
-  function addLine() {
-    setLines((cur) => [...cur, { itemId: "", itemName: "", qty: 1, price: 0 }]);
-  }
-
-  function removeLine(idx: number) {
-    setLines((cur) => cur.filter((_, i) => i !== idx));
-  }
-
-  function updateLine(idx: number, patch: Partial<LineDraft>) {
-    setLines((cur) => cur.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
-  }
-
-  function selectItemForLine(idx: number, it: ItemOption) {
-    updateLine(idx, { itemId: it.id, itemName: it.sku ? `${it.sku} - ${it.name}` : it.name });
-    setOpenItemSuggestIndex(null);
-  }
-
-  async function save() {
-    const validLines = lines
-      .map((l) => ({
-        itemId: String(l.itemId || "").trim(),
-        itemName: String(l.itemName || "").trim(),
-        qty: Number(l.qty || 0),
-        price: Number(l.price || 0),
-      }))
-      .filter((l) => l.itemId && l.qty > 0);
-
-    if (!refInvoiceId) {
-      toast.push({ type: "warning", title: "Thiếu thông tin", message: "Vui lòng chọn Hóa đơn gốc (SALES đã duyệt)." });
+    const pid = String(refundPartnerId || "").trim();
+    if (!pid) {
+      showCenterAlert("warning", "Thiếu dữ liệu", "Bạn cần chọn Khách hàng (partnerId) để tạo phiếu chi hoàn tiền.");
       return;
     }
 
-    if (!partnerId) {
-      toast.push({ type: "warning", title: "Thiếu thông tin", message: "Thiếu khách hàng của hóa đơn gốc (partnerId)." });
+    if (!salesInvId) {
+      showCenterAlert("warning", "Thiếu dữ liệu", "Bạn cần chọn HÓA ĐƠN SALES GỐC để cấn hoàn tiền (Option A).");
       return;
     }
 
-    if (validLines.length === 0) {
-      toast.push({ type: "warning", title: "Thiếu dòng hàng", message: "Phải có ít nhất 1 dòng hàng." });
+    if (!salesInvDetail) {
+      showCenterAlert("warning", "Thiếu dữ liệu", "Chưa tải được thông tin hoá đơn SALES gốc. Vui lòng thử lại.");
       return;
     }
 
-    const pct = clampPct(taxPercent);
-    const computedTax = roundMoney((toNum(subtotal) * pct) / 100);
+    if (amt > refundableTotalNow + 0.0001) {
+      showCenterAlert(
+        "warning",
+        "Số tiền hoàn vượt quá mức cho phép",
+        `Hoá đơn SALES gốc hiện chỉ còn có thể hoàn tối đa ${formatMoney(refundableTotalNow)} (NORMAL: ${formatMoney(
+          refundableNormalNow
+        )}, HOLD: ${formatMoney(refundableHoldNow)}).`
+      );
+      return;
+    }
 
-    const body: any = {
-      type: "SALES_RETURN",
-      code: code.trim() || undefined,
-      issueDate,
+    if (!refundAccountId) {
+      showCenterAlert("warning", "Thiếu tài khoản", "Chọn quỹ / tài khoản chi tiền hoàn cho khách (tiền mặt hay ngân hàng).");
+      return;
+    }
 
-      refInvoiceId,
+    const built = buildRefundAllocations(amt);
+    if (!built.ok) {
+      showCenterAlert("warning", "Không thể hoàn", built.message);
+      return;
+    }
 
-      partnerId,
-      partnerName: partnerName.trim() || undefined,
+    const splitText =
+      built?.split && (built.split.normalPart > 0 || built.split.holdPart > 0)
+        ? ` (tách: NORMAL ${formatMoney(built.split.normalPart)}${
+            built.split.holdPart > 0 ? ` + HOLD ${formatMoney(built.split.holdPart)}` : ""
+          })`
+        : "";
 
-      note: note || "",
-
-      saleUserId: null,
-      techUserId: null,
-
-      lines: validLines.map((l) => ({
-        itemId: l.itemId,
-        qty: l.qty,
-        price: l.price,
-        itemName: l.itemName,
-      })),
-
-      paymentStatus: "UNPAID",
-      paidAmount: 0,
-
-      // ✅ FIX: trả hàng phải mang theo VAT% và VAT amount
-      taxPercent: pct,
-      tax: computedTax,
-    };
-
-    setLoading(true);
     try {
-      if (isNew) {
-        const r = await api.post("/invoices", body);
-        const inv = r.data?.data ?? r.data;
-        toast.push({ type: "success", title: "Thành công", message: "Đã tạo phiếu." });
-        nav(`/sales-returns/${inv.id}`, { replace: true });
-      } else {
-        await api.put(`/invoices/${id}`, body);
-        toast.push({ type: "success", title: "Thành công", message: "Đã lưu phiếu." });
-      }
-    } catch (e: any) {
-      toast.push({ type: "error", title: "Lỗi", message: e?.response?.data?.message || e?.message || "Không lưu được." });
-    } finally {
-      setLoading(false);
-    }
-  }
+      await api.post("/payments", {
+        date: new Date().toISOString().slice(0, 10),
+        partnerId: pid,
+        type: "PAYMENT",
+        amount: amt,
+        accountId: refundAccountId,
+        method: refundMethod || undefined,
+        refNo: refundRefNo || undefined,
+        note: refundNote || `Hoàn tiền phiếu trả hàng ${inv.code} (cấn vào HĐ SALES gốc, Option A)${splitText}.`,
+        allocations: built.allocations,
+      });
 
-  async function submit() {
-    if (!id) return;
-    setLoading(true);
-    try {
-      await api.post(`/invoices/${id}/submit`);
-      toast.push({ type: "success", title: "Đã gửi duyệt", message: "Phiếu đã chuyển sang CHỜ DUYỆT." });
-      nav("/sales-returns", { replace: true });
+      toast.push({ type: "success", title: "Thành công", message: "Đã tạo phiếu chi hoàn tiền." });
+      closeRefund();
+      await load();
     } catch (e: any) {
-      toast.push({ type: "error", title: "Lỗi", message: e?.response?.data?.message || e?.message || "Không gửi duyệt được." });
-    } finally {
-      setLoading(false);
+      const msg = e?.response?.data?.message || e?.message || "Không tạo được phiếu chi hoàn tiền.";
+      showCenterAlert("error", "Lỗi hoàn tiền", msg);
     }
   }
 
   if (loadingRole) return <div style={{ padding: 16 }}>Đang kiểm tra đăng nhập…</div>;
   if (role !== "admin") return null;
 
+  const effectiveHoldAmount = computeEffectiveHoldAmount(salesInvDetail);
+
+  // ✅ nút thao tác dùng chung cho bảng (máy tính) và thẻ (điện thoại)
+  const renderActions = (r: any, isLocked: boolean) => (
+    <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
+      {isLocked ? (
+        <>
+          <button style={ghostBtnStyle()} onClick={() => nav(`/sales-returns/${r.id}`)}>
+            Xem
+          </button>
+
+          {r.status === "APPROVED" ? (
+            <button style={primaryBtnStyle()} onClick={() => openRefund(r)}>
+              Hoàn tiền
+            </button>
+          ) : null}
+        </>
+      ) : (
+        <>
+          <button style={ghostBtnStyle()} onClick={() => nav(`/sales-returns/${r.id}`)}>
+            Xem/Sửa
+          </button>
+
+          {r.status === "DRAFT" && (
+            <>
+              <button style={primaryBtnStyle()} onClick={() => actSubmit(r.id)}>
+                Gửi duyệt
+              </button>
+              <button style={dangerBtnStyle()} onClick={() => actDelete(r.id)}>
+                Xoá
+              </button>
+            </>
+          )}
+
+          {r.status === "SUBMITTED" && (
+            <>
+              <button style={primaryBtnStyle()} onClick={() => actApprove(r.id)}>
+                Duyệt
+              </button>
+              <button style={dangerBtnStyle()} onClick={() => actReject(r.id)}>
+                Từ chối
+              </button>
+              <button style={ghostBtnStyle()} onClick={() => actRecall(r.id)}>
+                Hủy gửi
+              </button>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+
   return (
     <div style={{ padding: 16 }}>
       <ToastHost toasts={toast.toasts} onClose={toast.remove} />
 
-      {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <h2 style={{ margin: 0 }}>{isNew ? "Tạo phiếu Khách trả hàng" : `Phiếu trả hàng: ${code || id}`}</h2>
-            {!isNew ? <span style={statusPillStyle(status)}>{statusLabel(status)}</span> : null}
-          </div>
-
-          <div style={{ color: "#6b7280" }}>{locked ? "Phiếu đã chốt, chỉ xem." : "Duyệt phiếu sẽ nhập kho."}</div>
-
-          <div style={returnNoticeStyle}>
-            ⚠️ <b>Phiếu trả hàng</b> chỉ ghi nhận <b>hàng khách trả</b> và <b>nhập kho khi DUYỆT</b>.<br />
-            Việc <b>hoàn tiền</b> (nếu có) sẽ làm <b>riêng</b> tại màn <b>Quản lý hóa đơn bán</b> bằng phiếu chi (alloc NORMAL âm) để có lịch sử.
+      {/* Center Alert */}
+      {centerAlert ? (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.45)",
+            zIndex: 10050,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+          onMouseDown={() => setCenterAlert(null)}
+        >
+          <div
+            style={{
+              width: 560,
+              maxWidth: "100%",
+              background: "#fff",
+              borderRadius: 18,
+              border: `1px solid ${inputBaseBorder}`,
+              boxShadow: "0 18px 40px rgba(0,0,0,0.22)",
+              overflow: "hidden",
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                padding: "12px 14px",
+                borderBottom: `1px solid ${inputBaseBorder}`,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+              }}
+            >
+              <div style={{ fontWeight: 900 }}>{centerAlert.title}</div>
+              <button style={ghostBtnStyle()} onClick={() => setCenterAlert(null)}>
+                ✕
+              </button>
+            </div>
+            <div style={{ padding: 14 }}>
+              <div style={centerAlertStyles(centerAlert.type)}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>
+                  {centerAlert.type === "error" ? "❌" : centerAlert.type === "warning" ? "⚠️" : "✅"} {centerAlert.title}
+                </div>
+                <div style={{ fontWeight: 700 }}>{centerAlert.message}</div>
+              </div>
+              <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
+                <button style={primaryBtnStyle()} onClick={() => setCenterAlert(null)}>
+                  Đã hiểu
+                </button>
+              </div>
+            </div>
           </div>
         </div>
+      ) : null}
 
-        <button style={ghostBtnStyle()} onClick={() => nav("/sales-returns")}>
-          ← Danh sách
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+        <div>
+          <h1  style={{ margin: 0, fontSize:26, fontWeight: "bold" }}>Khách trả hàng</h1>
+          
+        </div>
+
+        <button style={primaryBtnStyle()} onClick={() => nav("/sales-returns/new")}>
+          + Tạo phiếu
         </button>
       </div>
 
-      {/* Info Card */}
-      <div style={{ marginTop: 14, border: "1px solid #E5E7EB", borderRadius: 14, padding: 14, background: "#fff" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 12 }}>
-          <div>
-            <div style={{ fontWeight: 800, marginBottom: 6 }}>Mã phiếu</div>
-            <input
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              disabled={!editable}
-              style={inputStyle}
-              placeholder="Để trống sẽ tự sinh"
-            />
-          </div>
+      {/* Filters */}
+      <div
+        style={{
+          marginTop: 14,
+          display: "flex",
+          gap: 10,
+          alignItems: "center",
+          flexWrap: "wrap",
+          padding: 12,
+          borderRadius: 12,
+          border: `1px solid ${inputBaseBorder}`,
+          background: "#fff",
+        }}
+      >
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Tìm mã / khách hàng..."
+          style={{ ...inputStyle(), width: 340, maxWidth: "100%" }}
+          onFocus={(e) => applyFocusStyle(e.currentTarget)}
+          onBlur={(e) => applyBlurStyle(e.currentTarget)}
+          onMouseEnter={(e) => applyHoverStyle(e.currentTarget)}
+          onMouseLeave={(e) => applyLeaveStyle(e.currentTarget)}
+        />
 
-          <div>
-            <div style={{ fontWeight: 800, marginBottom: 6 }}>Ngày</div>
-            <input
-              type="date"
-              value={issueDate}
-              onChange={(e) => setIssueDate(e.target.value)}
-              disabled={!editable}
-              style={inputStyle}
-            />
-          </div>
+        <select
+          value={status}
+          onChange={(e) => {
+            setPage(1);
+            setStatus(e.target.value as any);
+          }}
+          style={{ ...inputStyle(), width: 220 }}
+          onFocus={(e) => applyFocusStyle(e.currentTarget)}
+          onBlur={(e) => applyBlurStyle(e.currentTarget)}
+          onMouseEnter={(e) => applyHoverStyle(e.currentTarget)}
+          onMouseLeave={(e) => applyLeaveStyle(e.currentTarget)}
+        >
+          <option value="">Tất cả trạng thái</option>
+          <option value="DRAFT">NHÁP</option>
+          <option value="SUBMITTED">CHỜ DUYỆT</option>
+          <option value="APPROVED">ĐÃ DUYỆT</option>
+          <option value="REJECTED">TỪ CHỐI</option>
+        </select>
 
-          {/* ✅ Hóa đơn gốc */}
-          <div style={{ gridColumn: "1 / -1" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 10 }}>
-              <div style={{ fontWeight: 800, marginBottom: 6 }}>Hóa đơn gốc (SALES đã duyệt) *</div>
+        <button
+          style={ghostBtnStyle()}
+          onClick={() => {
+            setPage(1);
+            load();
+          }}
+          disabled={loading}
+        >
+          Tìm
+        </button>
+      </div>
 
-              {editable ? (
-                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <button
-                    type="button"
-                    style={primaryBtnStyle()}
-                    onClick={applyReturnFullFromRef}
-                    disabled={loadingRefDetail || !refInvoiceId}
-                    title={!refInvoiceId ? "Chọn hóa đơn gốc trước" : "Copy toàn bộ dòng hàng từ hóa đơn gốc"}
-                  >
-                    Trả full
-                  </button>
-
-                  <button
-                    type="button"
-                    style={dangerGhostBtnStyle()}
-                    onClick={() => {
-                      setLines([{ itemId: "", itemName: "", qty: 1, price: 0 }]);
-                      toast.push({ type: "info", title: "Đã reset", message: "Đã reset danh sách dòng hàng." });
-                    }}
-                  >
-                    Reset dòng
-                  </button>
-                </div>
-              ) : null}
-            </div>
-
-            {editable ? (
-              <div style={{ ...styles.autoWrapper, zIndex: 50 }} onBlur={() => setTimeout(() => setRefSuggestOpen(false), 120)}>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <input
-                    value={refInvoiceQuery}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setRefInvoiceQuery(v);
-                      setRefSuggestOpen(true);
-
-                      if (!v.trim() || v.trim() !== refInvoiceLabel.trim()) {
-                        setRefInvoiceId("");
-                        setRefInvoiceLabel("");
-                        setPartnerId("");
-                        setPartnerName("");
-                        setSaleUserName("");
-                        setTechUserName("");
-                        setRefDetail(null);
-                        setTaxPercent(0);
-                      }
-                    }}
-                    onFocus={() => setRefSuggestOpen(true)}
-                    style={inputStyle}
-                    placeholder="Gõ để tìm theo mã hóa đơn / khách hàng..."
-                  />
-
-                  {refInvoiceId ? (
-                    <button
-                      type="button"
-                      style={{ ...ghostBtnStyle(), padding: "10px 12px", whiteSpace: "nowrap" }}
-                      onClick={() => clearRefInvoice()}
-                    >
-                      Đổi
-                    </button>
-                  ) : null}
-                </div>
-
-                {refSuggestOpen && (refInvoiceQuery || "").trim().length > 0 ? (
-                  <div style={styles.suggestBox}>
-                    {refLoading ? (
-                      <div style={styles.suggestItemMuted}>Đang tìm…</div>
-                    ) : refOptions.length > 0 ? (
-                      refOptions.map((it) => (
-                        <div
-                          key={it.id}
-                          style={styles.suggestItem}
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            selectRefInvoice(it);
-                          }}
-                        >
-                          <div style={{ fontWeight: 900 }}>
-                            {it.code}{" "}
-                            <span style={{ fontWeight: 700, color: "#6b7280" }}>{it.issueDate ? `• ${formatDate(it.issueDate)}` : ""}</span>
-                          </div>
-                          <div style={{ fontSize: 12, color: "#6b7280" }}>
-                            {it.partnerName ? `KH: ${it.partnerName}` : ""}
-                            {it.total != null ? ` • Tổng: ${formatMoney(it.total)}` : ""}
-                          </div>
-                          {(it.saleUserName || it.techUserName) && (
-                            <div style={{ fontSize: 12, color: "#6b7280" }}>
-                              {it.saleUserName ? `Sale: ${it.saleUserName}` : ""}
-                              {it.saleUserName && it.techUserName ? " • " : ""}
-                              {it.techUserName ? `Tech: ${it.techUserName}` : ""}
-                            </div>
-                          )}
-                        </div>
-                      ))
-                    ) : (
-                      <div style={styles.suggestItemMuted}>Không tìm thấy hóa đơn phù hợp</div>
-                    )}
-                  </div>
-                ) : null}
-
-                <div style={{ marginTop: 6, fontSize: 12, color: refInvoiceId ? "#16a34a" : "#991B1B", fontWeight: 800 }}>
-                  {refInvoiceId ? "✓ Đã chọn hóa đơn gốc" : "Chưa chọn hóa đơn gốc (phải chọn từ danh sách)"}
-                </div>
-              </div>
-            ) : (
-              <input value={refInvoiceLabel || refInvoiceId || ""} readOnly style={readOnlyInputStyle} />
-            )}
-
-            {/* Preview hóa đơn gốc */}
-            {refInvoiceId ? (
-              <div style={refBoxStyle}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                  <div style={{ fontWeight: 900 }}>
-                    Hóa đơn gốc: <span style={{ color: "#111827" }}>{refDetail?.code || refInvoiceLabel || refInvoiceId}</span>
-                    {refDetail?.issueDate ? <span style={{ color: "#6b7280", fontWeight: 800 }}> • {formatDate(refDetail.issueDate)}</span> : null}
-                  </div>
-
-                  <div style={{ color: "#111827", fontWeight: 900 }}>
-                    Tổng HĐ gốc: {formatMoney(refGross)}
-                  </div>
-                </div>
-
-                {/* breakdown VAT */}
-                <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                  <div style={{ padding: 10, border: "1px solid #E5E7EB", borderRadius: 12, background: "#F9FAFB" }}>
-                    <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 800 }}>Tạm tính (HĐ gốc)</div>
-                    <div style={{ fontWeight: 900 }}>{formatMoney(refSubtotal)}</div>
-                  </div>
-                  <div style={{ padding: 10, border: "1px solid #E5E7EB", borderRadius: 12, background: "#F9FAFB" }}>
-                    <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 800 }}>VAT (HĐ gốc)</div>
-                    <div style={{ fontWeight: 900 }}>
-                      {formatMoney(refTax)} {refTaxPctDerived > 0 ? <span style={{ color: "#6b7280", fontWeight: 800 }}>({refTaxPctDerived}%)</span> : null}
+      {/* ✅ ĐIỆN THOẠI: mỗi phiếu 1 thẻ */}
+      {isMobile ? (
+        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+          {loading ? (
+            <div style={{ padding: 16 }}>Đang tải…</div>
+          ) : rows.length === 0 ? (
+            <div style={{ padding: 16 }}>Không có dữ liệu.</div>
+          ) : (
+            rows.map((r) => {
+              const isLocked = r.status === "APPROVED" || r.status === "REJECTED";
+              return (
+                <div key={r.id} style={{ border: `1px solid ${inputBaseBorder}`, borderRadius: 12, padding: 12, background: "#fff" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 800 }}>
+                        {r.code} <span style={{ fontWeight: 400, fontSize: 12, color: "#64748b" }}>{formatDateDisplay(r.issueDate)}</span>
+                      </div>
+                      <div style={{ fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.partnerName || "—"}</div>
+                      {r.refInvoiceCode ? <div style={{ fontSize: 12, color: "#64748b" }}>HĐ gốc {r.refInvoiceCode}</div> : null}
+                    </div>
+                    <div style={{ textAlign: "right", flexShrink: 0 }}>
+                      <span style={statusPillStyle(r.status)}>{statusLabel(r.status)}</span>
+                      <div style={{ marginTop: 6, fontWeight: 800 }}>{formatMoney(r.total)}</div>
                     </div>
                   </div>
-                  <div style={{ padding: 10, border: "1px solid #E5E7EB", borderRadius: 12, background: "#F9FAFB" }}>
-                    <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 800 }}>Tổng (HĐ gốc)</div>
-                    <div style={{ fontWeight: 900 }}>{formatMoney(refGross)}</div>
-                  </div>
+                  <div style={{ marginTop: 10 }}>{renderActions(r, isLocked)}</div>
                 </div>
-
-                <div style={{ marginTop: 8, color: "#6b7280", fontSize: 12, fontWeight: 800 }}>
-                  {loadingRefDetail
-                    ? "Đang tải chi tiết hóa đơn gốc…"
-                    : "Dòng hàng dưới đây lấy từ hóa đơn gốc (dùng cho nút “Trả full”)."}
-                </div>
-
-                {!loadingRefDetail ? (
-                  <div style={{ marginTop: 10, border: "1px solid #E5E7EB", borderRadius: 12, overflow: "hidden" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                      <thead style={{ background: "#F9FAFB" }}>
-                        <tr>
-                          <th style={{ textAlign: "left", padding: 12, borderBottom: "1px solid #E5E7EB" }}>Sản phẩm (HĐ gốc)</th>
-                          <th style={{ textAlign: "right", padding: 12, borderBottom: "1px solid #E5E7EB", width: 120 }}>SL</th>
-                          <th style={{ textAlign: "right", padding: 12, borderBottom: "1px solid #E5E7EB", width: 180 }}>Đơn giá</th>
-                          <th style={{ textAlign: "right", padding: 12, borderBottom: "1px solid #E5E7EB", width: 180 }}>Thành tiền</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(refDetail?.lines || []).length === 0 ? (
-                          <tr>
-                            <td colSpan={4} style={{ padding: 12, color: "#6b7280" }}>
-                              Không có dòng hàng.
-                            </td>
-                          </tr>
-                        ) : (
-                          (refDetail?.lines || []).map((l, i) => {
-                            const name = l.itemSku && l.itemName ? `${l.itemSku} - ${l.itemName}` : l.itemName || l.itemSku || l.itemId;
-                            const qty = toNum(l.qty);
-                            const price = toNum(l.price);
-                            const amt = qty * price;
-                            return (
-                              <tr key={`${l.itemId}-${i}`}>
-                                <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", fontWeight: 800 }}>{name}</td>
-                                <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", textAlign: "right", fontWeight: 900 }}>
-                                  {formatMoney(qty)}
-                                </td>
-                                <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", textAlign: "right", fontWeight: 900 }}>
-                                  {formatMoney(price)}
-                                </td>
-                                <td style={{ padding: 12, borderBottom: "1px solid #F1F5F9", textAlign: "right", fontWeight: 900 }}>
-                                  {formatMoney(amt)}
-                                </td>
-                              </tr>
-                            );
-                          })
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : null}
-
-                {/* <div style={{ marginTop: 8, fontSize: 12, color: "#92400e", fontWeight: 800 }}>
-                  * Chưa hiển thị “đã trả trước đó / còn lại” vì backend listInvoices chưa lọc theo refInvoiceId. Khi bạn thêm filter đó, mình nối tiếp ngay.
-                </div> */}
-              </div>
-            ) : null}
-          </div>
-
-          {/* ✅ VAT% cho phiếu trả */}
-          <div>
-            <div style={{ fontWeight: 800, marginBottom: 6 }}>VAT (%)</div>
-            {editable ? (
-              <input
-                type="number"
-                min={0}
-                max={100}
-                step={0.1}
-                value={taxPercent}
-                onChange={(e) => setTaxPercent(clampPct(e.target.value))}
-                style={{ ...inputStyle, textAlign: "right" }}
-                placeholder="0"
-              />
-            ) : (
-              <input value={String(clampPct(taxPercent))} readOnly style={{ ...readOnlyInputStyle, textAlign: "right" }} />
-            )}
-            {/* <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280", fontWeight: 700 }}>
-              * Mặc định lấy theo HĐ gốc. Trả full mà thiếu VAT sẽ lệch số ở danh sách.
-            </div> */}
-          </div>
-
-          <div>
-            <div style={{ fontWeight: 800, marginBottom: 6 }}>Trạng thái</div>
-            <input value={statusLabel(status)} readOnly style={readOnlyInputStyle} />
-          </div>
-
-          {/* ✅ Snapshot KH + NV (read-only) */}
-          <div>
-            <div style={{ fontWeight: 800, marginBottom: 6 }}>Khách hàng</div>
-            <input value={partnerName || ""} readOnly style={readOnlyInputStyle} placeholder="Tự lấy theo hóa đơn gốc" />
-          </div>
-
-          <div>
-            <div style={{ fontWeight: 800, marginBottom: 6 }}>NV Sale</div>
-            <input value={saleUserName || ""} readOnly style={readOnlyInputStyle} placeholder="Tự lấy theo hóa đơn gốc" />
-          </div>
-
-          <div>
-            <div style={{ fontWeight: 800, marginBottom: 6 }}>NV Kỹ thuật</div>
-            <input value={techUserName || ""} readOnly style={readOnlyInputStyle} placeholder="Tự lấy theo hóa đơn gốc" />
-          </div>
-
-          <div style={{ gridColumn: "1 / -1" }}>
-            <div style={{ fontWeight: 800, marginBottom: 6 }}>Ghi chú</div>
-            <textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              disabled={!editable}
-              style={{ ...inputStyle, minHeight: 90 }}
-              placeholder="Lý do trả hàng..."
-            />
-          </div>
+              );
+            })
+          )}
         </div>
-      </div>
-
-      {/* Lines header */}
-      <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <h3 style={{ margin: 0 }}>Dòng hàng trả</h3>
-
-        {editable ? (
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button style={ghostBtnStyle()} onClick={addLine}>
-              + Thêm dòng
-            </button>
-            <button style={primaryBtnStyle()} onClick={applyReturnFullFromRef} disabled={loadingRefDetail || !refInvoiceId}>
-              Trả full (copy từ HĐ gốc)
-            </button>
-          </div>
-        ) : null}
-      </div>
-
-      {/* Lines table */}
-      <div style={{ marginTop: 10, border: "1px solid #E5E7EB", borderRadius: 14, background: "#fff" }}>
+      ) : (
+      <div style={{ marginTop: 14, border: `1px solid ${inputBaseBorder}`, borderRadius: 14, overflow: "hidden", background: "#fff" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead style={{ background: "#F9FAFB" }}>
             <tr>
-              <th style={{ textAlign: "left", padding: 14, borderBottom: "1px solid #E5E7EB" }}>Sản phẩm</th>
-              <th style={{ textAlign: "right", padding: 14, borderBottom: "1px solid #E5E7EB", width: 120 }}>SL</th>
-              <th style={{ textAlign: "right", padding: 14, borderBottom: "1px solid #E5E7EB", width: 200 }}>Giá trả lại</th>
-              <th style={{ textAlign: "right", padding: 14, borderBottom: "1px solid #E5E7EB", width: 200 }}>Thành tiền</th>
-              {editable ? <th style={{ textAlign: "center", padding: 14, borderBottom: "1px solid #E5E7EB", width: 90 }}>Xoá</th> : null}
+              <th style={{ textAlign: "left", padding: 14, borderBottom: `1px solid ${inputBaseBorder}` }}>Mã</th>
+              <th style={{ textAlign: "left", padding: 14, borderBottom: `1px solid ${inputBaseBorder}` }}>Ngày</th>
+              <th style={{ textAlign: "left", padding: 14, borderBottom: `1px solid ${inputBaseBorder}` }}>Khách hàng</th>
+              <th style={{ textAlign: "left", padding: 14, borderBottom: `1px solid ${inputBaseBorder}` }}>HĐ gốc</th>
+              <th style={{ textAlign: "right", padding: 14, borderBottom: `1px solid ${inputBaseBorder}` }}>Tổng</th>
+              <th style={{ textAlign: "center", padding: 14, borderBottom: `1px solid ${inputBaseBorder}` }}>Trạng thái</th>
+              <th style={{ textAlign: "right", padding: 14, borderBottom: `1px solid ${inputBaseBorder}`, width: 420 }}>Thao tác</th>
             </tr>
           </thead>
 
           <tbody>
-            {lines.length === 0 ? (
+            {loading ? (
               <tr>
-                <td colSpan={editable ? 5 : 4} style={{ padding: 16, color: "#6b7280" }}>
-                  Chưa có dòng nào.
+                <td colSpan={7} style={{ padding: 16 }}>
+                  Đang tải…
+                </td>
+              </tr>
+            ) : rows.length === 0 ? (
+              <tr>
+                <td colSpan={7} style={{ padding: 16 }}>
+                  Không có dữ liệu.
                 </td>
               </tr>
             ) : (
-              lines.map((l, idx) => {
-                const amount = Number(l.qty || 0) * Number(l.price || 0);
-
-                const q = (l.itemName || "").toLowerCase().trim();
-                const suggestions =
-                  q.length > 0
-                    ? items
-                        .filter((it) => {
-                          const name = (it.name || "").toLowerCase();
-                          const sku = (it.sku || "").toLowerCase();
-                          return name.includes(q) || sku.includes(q);
-                        })
-                        .slice(0, 50)
-                    : [];
+              rows.map((r) => {
+                const isLocked = r.status === "APPROVED" || r.status === "REJECTED";
+                const refText = r.refInvoiceCode || (r.refInvoiceId ? String(r.refInvoiceId).slice(0, 8) + "…" : "");
 
                 return (
-                  <tr key={idx}>
-                    <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9" }}>
-                      {editable ? (
-                        <div style={styles.autoWrapper} onBlur={() => setTimeout(() => setOpenItemSuggestIndex(null), 120)}>
-                          <input
-                            value={l.itemName}
-                            onChange={(e) => updateLine(idx, { itemName: e.target.value, itemId: "" })}
-                            onFocus={() => setOpenItemSuggestIndex(idx)}
-                            style={inputStyle}
-                            placeholder="Tìm theo SKU / tên..."
-                          />
-
-                          {openItemSuggestIndex === idx && q.length > 0 ? (
-                            <div style={styles.suggestBox}>
-                              {suggestions.length > 0 ? (
-                                suggestions.map((it) => (
-                                  <div
-                                    key={it.id}
-                                    style={styles.suggestItem}
-                                    onMouseDown={(e) => {
-                                      e.preventDefault();
-                                      selectItemForLine(idx, it);
-                                    }}
-                                  >
-                                    <div style={{ fontWeight: 800 }}>{it.name}</div>
-                                    <div style={{ fontSize: 12, color: "#6b7280" }}>{it.sku ? `SKU: ${it.sku}` : `ID: ${it.id}`}</div>
-                                  </div>
-                                ))
-                              ) : (
-                                <div style={styles.suggestItemMuted}>Không tìm thấy sản phẩm</div>
-                              )}
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <div style={{ fontWeight: 700 }}>{l.itemName || l.itemId}</div>
-                      )}
+                  <tr key={r.id}>
+                    <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", fontWeight: 700 }}>{r.code}</td>
+                    <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9" }}>{formatDateDisplay(r.issueDate)}</td>
+                    <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9" }}>{r.partnerName || ""}</td>
+                    <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", color: refText ? "#111827" : "#94a3b8", fontWeight: 800 }}>
+                      {refText || "—"}
+                    </td>
+                    <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", textAlign: "right", fontWeight: 800 }}>{formatMoney(r.total)}</td>
+                    <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", textAlign: "center" }}>
+                      <span style={statusPillStyle(r.status)}>{statusLabel(r.status)}</span>
                     </td>
 
                     <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", textAlign: "right" }}>
-                      {editable ? (
-                        <input
-                          type="number"
-                          min={0}
-                          step={1}
-                          value={l.qty}
-                          onChange={(e) => updateLine(idx, { qty: Number(e.target.value || 0) })}
-                          style={{ ...inputStyle, textAlign: "right" }}
-                        />
-                      ) : (
-                        <div style={{ fontWeight: 800 }}>{formatMoney(l.qty)}</div>
-                      )}
+                      {renderActions(r, isLocked)}
                     </td>
-
-                    <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", textAlign: "right" }}>
-                      {editable ? (
-                        <input
-                          type="number"
-                          min={0}
-                          step={100}
-                          value={l.price}
-                          onChange={(e) => updateLine(idx, { price: Number(e.target.value || 0) })}
-                          style={{ ...inputStyle, textAlign: "right" }}
-                        />
-                      ) : (
-                        <div style={{ fontWeight: 800 }}>{formatMoney(l.price)}</div>
-                      )}
-                    </td>
-
-                    <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", textAlign: "right", fontWeight: 900 }}>
-                      {formatMoney(amount)}
-                    </td>
-
-                    {editable ? (
-                      <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", textAlign: "center" }}>
-                        <button style={{ ...ghostBtnStyle(), padding: "8px 10px" }} onClick={() => removeLine(idx)}>
-                          X
-                        </button>
-                      </td>
-                    ) : null}
                   </tr>
                 );
               })
@@ -1195,39 +1234,463 @@ export default function SalesReturnFormPage() {
           </tbody>
         </table>
       </div>
+      )}
 
-      {/* Footer */}
-      <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 16, lineHeight: 1.4 }}>
-          <div>
-            <b>Tạm tính:</b> {formatMoney(subtotal)}
-          </div>
-          <div>
-            <b>VAT ({clampPct(taxPercent)}%):</b> {formatMoney(taxAmount)}
-          </div>
-          <div>
-            <b>Tổng trả (Gross):</b> {formatMoney(grossTotal)}
-          </div>
+      {/* Pagination */}
+      <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ color: "#111827" }}>
+          Trang {page}/{totalPages} — Tổng: {total}
         </div>
-
-        {editable ? (
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button style={ghostBtnStyle()} onClick={save} disabled={loading}>
-              Lưu
-            </button>
-
-            {!isNew ? (
-              <button style={primaryBtnStyle()} onClick={submit} disabled={loading}>
-                Gửi duyệt
-              </button>
-            ) : null}
-          </div>
-        ) : (
-          <div style={{ color: "#6b7280", fontWeight: 700 }}>Chỉ xem</div>
-        )}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={ghostBtnStyle()} disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+            ← Trước
+          </button>
+          <button style={ghostBtnStyle()} disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>
+            Sau →
+          </button>
+        </div>
       </div>
 
-      {loading ? <div style={{ marginTop: 10, color: "#6b7280" }}>Đang xử lý…</div> : null}
+      {/* ===== Refund Modal ===== */}
+      {refundOpen && refundInv ? (
+        <div style={modalOverlayStyle()}>
+          <div style={modalCardStyle()}>
+            <div style={modalHeaderStyle()}>
+              <div style={{ fontWeight: 900 }}>
+                Tạo phiếu chi hoàn tiền — <span style={{ color: "#64748b" }}>{refundInv.code}</span>
+              </div>
+              <button style={ghostBtnStyle()} onClick={closeRefund}>
+                ✕
+              </button>
+            </div>
+
+            <div style={modalBodyStyle()}>
+              <div style={{ marginBottom: 10, fontSize: 13, color: "#64748b", fontWeight: 700 }}>
+                <b>Option A:</b> Hoàn tiền tạo phiếu <b>PAYMENT</b> và phân bổ âm vào <b>HĐ SALES gốc</b>.
+                <div style={{ marginTop: 6, color: "#0f172a", fontWeight: 900 }}>
+                  ✅ Hạn mức hoàn = <b>số khách đã trả thật</b> trên HĐ gốc (NORMAL net + HOLD net).
+                </div>
+                <div style={{ marginTop: 6, color: "#b45309", fontWeight: 900 }}>
+                  ⚠️ Nếu khách <b>chưa trả HOLD</b> thì HOLD net = 0 → <b>không hoàn HOLD</b>. Nếu khách đã trả HOLD trước đó → hoàn được cả HOLD.
+                </div>
+              </div>
+
+              <div
+                style={{
+                  padding: 12,
+                  borderRadius: 14,
+                  border: `1px solid ${inputBaseBorder}`,
+                  background: "#F9FAFB",
+                  marginBottom: 12,
+                }}
+              >
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>Tình trạng thu/hoàn của hoá đơn SALES gốc</div>
+
+                {salesInvDetailLoading ? (
+                  <div style={{ color: "#64748b", fontWeight: 800 }}>Đang tải thông tin hoá đơn gốc…</div>
+                ) : salesInvId && salesInvDetail ? (
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr", gap: 10 }}>
+                      <div>
+                        <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>HĐ gốc</div>
+                        <div style={{ fontWeight: 900 }}>
+                          {salesInvDetail.code}{" "}
+                          <span style={{ color: "#64748b", fontWeight: 800 }}>• {formatDateDisplay(salesInvDetail.issueDate)}</span>
+                        </div>
+                        <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>Tổng HĐ: {formatMoney(salesInvDetail.total)}</div>
+                        {salesInvDetail?.hasWarrantyHold ? (
+                          <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>
+                            HOLD: {formatMoney(effectiveHoldAmount)}
+                            {salesInvDetail.warrantyDueDate ? ` • Hạn: ${formatDateDisplay(salesInvDetail.warrantyDueDate)}` : ""}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 12, color: "#94a3b8", fontWeight: 800 }}>Không có HOLD</div>
+                        )}
+                      </div>
+
+                      <div>
+                        <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>Đã hoàn trước đó</div>
+                        <div style={{ fontWeight: 900 }}>{formatMoney(refundedNormalBefore + refundedHoldBefore)}</div>
+                        <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>
+                          (NORMAL: {formatMoney(refundedNormalBefore)} • HOLD: {formatMoney(refundedHoldBefore)})
+                        </div>
+                      </div>
+
+                      <div>
+                        <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>Còn có thể hoàn</div>
+                        <div style={{ fontWeight: 900, color: refundableTotalNow > 0 ? "#065F46" : "#991B1B" }}>
+                          {formatMoney(refundableTotalNow)}
+                        </div>
+                        <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>
+                          (NORMAL: {formatMoney(refundableNormalNow)} • HOLD: {formatMoney(refundableHoldNow)})
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: 10, fontSize: 12, color: "#334155", fontWeight: 800 }}>
+                      Gợi ý: muốn “hoàn hết” thì nhập đúng số tiền cần hoàn. Hệ thống sẽ tự tách: <b>hoàn NORMAL trước</b>, thiếu thì <b>hoàn HOLD</b>.
+                    </div>
+                  </>
+                ) : salesInvId ? (
+                  <div style={{ color: "#991B1B", fontWeight: 900 }}>Không tải được hoá đơn SALES gốc.</div>
+                ) : (
+                  <div style={{ color: "#64748b", fontWeight: 800 }}>Chưa chọn hoá đơn SALES gốc.</div>
+                )}
+
+                {salesInvDetail && (salesInvDetail.allocations || []).length > 0 ? (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 12, color: "#64748b", fontWeight: 900, marginBottom: 6 }}>Lịch sử thu/hoàn gần đây (NORMAL/HOLD)</div>
+
+                    <div
+                      style={{
+                        maxHeight: 160,
+                        overflowY: "auto",
+                        borderRadius: 12,
+                        border: `1px solid ${inputBaseBorder}`,
+                        background: "#fff",
+                      }}
+                    >
+                      {(salesInvDetail.allocations || [])
+                        .filter((a) => String(a.kind) === "NORMAL" || String(a.kind) === "WARRANTY_HOLD")
+                        .slice(0, 14)
+                        .map((a) => {
+                          const isHold = String(a.kind) === "WARRANTY_HOLD";
+                          const signLabel = a.amount >= 0 ? "THU" : "HOÀN";
+                          const signColor = a.amount >= 0 ? "#065F46" : "#991B1B";
+                          const kindBadge = isHold ? "HOLD" : "NORMAL";
+                          const kindBg = isHold ? "#EEF2FF" : "#ECFDF5";
+                          const kindBd = isHold ? "#C7D2FE" : "#6EE7B7";
+                          const kindTx = isHold ? "#3730A3" : "#065F46";
+                          const dt = a.payment?.date || a.createdAt || "";
+
+                          return (
+                            <div key={a.id} style={{ padding: "10px 12px", borderBottom: "1px solid #F1F5F9" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                  <span
+                                    style={{
+                                      fontSize: 11,
+                                      fontWeight: 900,
+                                      padding: "3px 8px",
+                                      borderRadius: 999,
+                                      background: kindBg,
+                                      border: `1px solid ${kindBd}`,
+                                      color: kindTx,
+                                    }}
+                                  >
+                                    {kindBadge}
+                                  </span>
+
+                                  <div style={{ fontWeight: 900, color: signColor }}>
+                                    {signLabel} • {formatMoney(Math.abs(a.amount))}
+                                  </div>
+                                </div>
+
+                                <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>{formatDateDisplay(dt)}</div>
+                              </div>
+
+                              <div style={{ fontSize: 12, color: "#64748b", fontWeight: 700, marginTop: 4 }}>
+                                {a.payment?.type ? `Phiếu: ${a.payment.type}` : ""}
+                                {a.payment?.account?.code ? ` • TK: ${a.payment.account.code}` : ""}
+                                {a.payment?.method ? ` • ${a.payment.method}` : ""}
+                                {a.payment?.refNo ? ` • Ref: ${a.payment.refNo}` : ""}
+                              </div>
+
+                              {a.payment?.note ? (
+                                <div style={{ fontSize: 12, color: "#334155", fontWeight: 700, marginTop: 4 }}>{a.payment.note}</div>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div style={rowStyle()}>
+                <div>
+                  <div style={labelStyle()}>Số tiền hoàn</div>
+
+                  <CurrencyInput
+                    value={refundAmount}
+                    onValueChange={(val) => {
+                      userEditedRefundAmountRef.current = true;
+                      setRefundAmount(val);
+                    }}
+                    min={0}
+                    allowNegative={false}
+                    className={undefined}
+                    inputClassName={undefined}
+                    placeholder="Nhập số tiền hoàn..."
+                  />
+
+                  <div style={{ marginTop: 6 }} />
+
+                  {overRefund ? (
+                    <div style={{ marginTop: 6, color: "#991B1B", fontWeight: 900, fontSize: 12 }}>
+                      Số tiền hoàn đang vượt mức cho phép. Tối đa bạn chỉ được hoàn: {formatMoney(refundableTotalNow)} (NORMAL:{" "}
+                      {formatMoney(refundableNormalNow)} • HOLD: {formatMoney(refundableHoldNow)}).
+                    </div>
+                  ) : null}
+                </div>
+
+                <div>
+                  <div style={labelStyle()}>Tài khoản chi <span style={{ color: "#dc2626" }}>*</span></div>
+                  <select
+                    style={inputStyle()}
+                    value={refundAccountId}
+                    onChange={(e) => setRefundAccountId(e.target.value)}
+                    onFocus={(e) => applyFocusStyle(e.currentTarget)}
+                    onBlur={(e) => applyBlurStyle(e.currentTarget)}
+                    onMouseEnter={(e) => applyHoverStyle(e.currentTarget)}
+                    onMouseLeave={(e) => applyLeaveStyle(e.currentTarget)}
+                  >
+                    <option value="">-- Chọn quỹ / tài khoản --</option>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.code} - {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Partner */}
+              <div style={{ marginTop: 10 }} ref={partnerBoxRef}>
+                <div style={labelStyle()}>Khách hàng (bắt buộc)</div>
+
+                {refundPartnerId ? (
+                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <input style={{ ...inputStyle(), background: "#F9FAFB" }} value={partnerQuery || refundInv.partnerName || ""} readOnly />
+                    <button
+                      style={ghostBtnStyle()}
+                      onClick={() => {
+                        setRefundPartnerId("");
+                        setPartnerDropdownOpen(true);
+                        setPartnerOptions([]);
+                        resetSalesInvoiceSelection();
+                      }}
+                    >
+                      Đổi
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ position: "relative" }}>
+                    <input
+                      style={inputStyle()}
+                      value={partnerQuery}
+                      onChange={(e) => {
+                        setPartnerQuery(e.target.value);
+                        setPartnerDropdownOpen(true);
+                      }}
+                      onFocus={(e) => {
+                        applyFocusStyle(e.currentTarget);
+                        setPartnerDropdownOpen(true);
+                        if ((partnerQuery || "").trim()) searchPartners(partnerQuery);
+                      }}
+                      onBlur={(e) => applyBlurStyle(e.currentTarget)}
+                      onMouseEnter={(e) => applyHoverStyle(e.currentTarget)}
+                      onMouseLeave={(e) => applyLeaveStyle(e.currentTarget)}
+                      placeholder="Gõ để tìm khách hàng..."
+                    />
+
+                    {partnerDropdownOpen ? (
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: "100%",
+                          left: 0,
+                          right: 0,
+                          marginTop: 6,
+                          background: "#fff",
+                          border: `1px solid ${inputBaseBorder}`,
+                          borderRadius: 12,
+                          boxShadow: "0 10px 18px rgba(0,0,0,0.10)",
+                          zIndex: 10000,
+                          maxHeight: 220,
+                          overflowY: "auto",
+                        }}
+                      >
+                        {partnerLoading ? (
+                          <div style={{ padding: 12, color: "#64748b", fontWeight: 700 }}>Đang tìm…</div>
+                        ) : partnerOptions.length === 0 ? (
+                          <div style={{ padding: 12, color: "#b45309", fontWeight: 800 }}>Không có kết quả. Hãy gõ rõ hơn (tên/sđt/mã nếu có).</div>
+                        ) : (
+                          partnerOptions.map((p) => (
+                            <div
+                              key={p.id}
+                              style={{ padding: "10px 12px", cursor: "pointer" }}
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                setRefundPartnerId(p.id);
+                                setPartnerQuery(p.code ? `${p.code} - ${p.name}` : p.name);
+                                setPartnerDropdownOpen(false);
+                                resetSalesInvoiceSelection();
+                              }}
+                            >
+                              <div style={{ fontWeight: 900 }}>{p.code ? `${p.code} - ${p.name}` : p.name}</div>
+                              <div style={{ fontSize: 12, color: "#64748b" }}>ID: {p.id}</div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+
+              {/* Sales invoice gốc */}
+              <div style={{ marginTop: 10 }} ref={salesInvBoxRef}>
+                <div style={labelStyle()}>Hóa đơn SALES gốc (bắt buộc)</div>
+
+                {salesInvId ? (
+                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <input style={{ ...inputStyle(), background: "#F9FAFB" }} value={salesInvLabel || salesInvId} readOnly />
+                    <button style={ghostBtnStyle()} onClick={() => resetSalesInvoiceSelection()}>
+                      Đổi
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ position: "relative" }}>
+                    <input
+                      style={inputStyle()}
+                      value={salesInvQuery}
+                      onChange={(e) => {
+                        setSalesInvQuery(e.target.value);
+                        setSalesInvDropdownOpen(true);
+                      }}
+                      onFocus={(e) => {
+                        applyFocusStyle(e.currentTarget);
+                        setSalesInvDropdownOpen(true);
+                        if (refundPartnerId) searchSalesInvoices(salesInvQuery);
+                      }}
+                      onBlur={(e) => applyBlurStyle(e.currentTarget)}
+                      onMouseEnter={(e) => applyHoverStyle(e.currentTarget)}
+                      onMouseLeave={(e) => applyLeaveStyle(e.currentTarget)}
+                      placeholder={refundPartnerId ? "Gõ mã hóa đơn SALES để tìm..." : "Chọn khách hàng trước để lọc hóa đơn SALES..."}
+                      disabled={!refundPartnerId}
+                    />
+
+                    {salesInvDropdownOpen ? (
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: "100%",
+                          left: 0,
+                          right: 0,
+                          marginTop: 6,
+                          background: "#fff",
+                          border: `1px solid ${inputBaseBorder}`,
+                          borderRadius: 12,
+                          boxShadow: "0 10px 18px rgba(0,0,0,0.10)",
+                          zIndex: 10000,
+                          maxHeight: 240,
+                          overflowY: "auto",
+                        }}
+                      >
+                        {!refundPartnerId ? (
+                          <div style={{ padding: 12, color: "#b45309", fontWeight: 800 }}>Chọn khách hàng trước.</div>
+                        ) : salesInvLoading ? (
+                          <div style={{ padding: 12, color: "#64748b", fontWeight: 700 }}>Đang tìm…</div>
+                        ) : salesInvOptions.length === 0 ? (
+                          <div style={{ padding: 12, color: "#b45309", fontWeight: 800 }}>Không có hoá đơn SALES phù hợp. Thử gõ mã hoặc bỏ trống để xem gần đây.</div>
+                        ) : (
+                          salesInvOptions.map((x) => {
+                            const label = `${x.code} • ${formatDateDisplay(x.issueDate)} • ${formatMoney(x.total)}`;
+                            return (
+                              <div
+                                key={x.id}
+                                style={{ padding: "10px 12px", cursor: "pointer" }}
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  setSalesInvId(x.id);
+                                  setSalesInvLabel(label);
+                                  setSalesInvDropdownOpen(false);
+                                }}
+                              >
+                                <div style={{ fontWeight: 900 }}>{x.code}</div>
+                                <div style={{ fontSize: 12, color: "#64748b" }}>
+                                  {formatDateDisplay(x.issueDate)} • Tổng: {formatMoney(x.total)} • ID: {x.id}
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+
+                <div style={{ marginTop: 6, fontSize: 12, color: "#64748b", fontWeight: 800 }}>
+                  Gợi ý: chọn đúng HĐ gốc để hệ thống tự kiểm tra “khách đã trả NORMAL/HOLD bao nhiêu” và “còn được hoàn bao nhiêu”.
+                </div>
+              </div>
+
+              <div style={rowStyle()}>
+                <div style={{ marginTop: 10 }}>
+                  <div style={labelStyle()}>Phương thức (tuỳ chọn)</div>
+                  <input
+                    style={inputStyle()}
+                    value={refundMethod}
+                    onChange={(e) => setRefundMethod(e.target.value)}
+                    placeholder="Tiền mặt / CK..."
+                    onFocus={(e) => applyFocusStyle(e.currentTarget)}
+                    onBlur={(e) => applyBlurStyle(e.currentTarget)}
+                    onMouseEnter={(e) => applyHoverStyle(e.currentTarget)}
+                    onMouseLeave={(e) => applyLeaveStyle(e.currentTarget)}
+                  />
+                </div>
+
+                <div style={{ marginTop: 10 }}>
+                  <div style={labelStyle()}>Mã tham chiếu (tuỳ chọn)</div>
+                  <input
+                    style={inputStyle()}
+                    value={refundRefNo}
+                    onChange={(e) => setRefundRefNo(e.target.value)}
+                    placeholder="VD: UNC..., CK..."
+                    onFocus={(e) => applyFocusStyle(e.currentTarget)}
+                    onBlur={(e) => applyBlurStyle(e.currentTarget)}
+                    onMouseEnter={(e) => applyHoverStyle(e.currentTarget)}
+                    onMouseLeave={(e) => applyLeaveStyle(e.currentTarget)}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginTop: 10 }}>
+                <div style={labelStyle()}>Ghi chú</div>
+                <textarea
+                  style={{ ...inputStyle(), minHeight: 90, resize: "vertical" }}
+                  value={refundNote}
+                  onChange={(e) => setRefundNote(e.target.value)}
+                  onFocus={(e) => applyFocusStyle(e.currentTarget)}
+                  onBlur={(e) => applyBlurStyle(e.currentTarget)}
+                  onMouseEnter={(e) => applyHoverStyle(e.currentTarget)}
+                  onMouseLeave={(e) => applyLeaveStyle(e.currentTarget)}
+                />
+              </div>
+            </div>
+
+            <div style={modalFooterStyle()}>
+              <button style={ghostBtnStyle()} onClick={closeRefund}>
+                Huỷ
+              </button>
+
+              <button
+                style={{
+                  ...primaryBtnStyle(),
+                  opacity: confirmDisabled ? 0.55 : 1,
+                  cursor: confirmDisabled ? "not-allowed" : "pointer",
+                }}
+                onClick={confirmRefund}
+                disabled={confirmDisabled}
+                title={confirmDisabled ? "Kiểm tra lại số tiền hoàn / hoá đơn gốc / khách hàng" : "Xác nhận hoàn"}
+              >
+                Xác nhận hoàn
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

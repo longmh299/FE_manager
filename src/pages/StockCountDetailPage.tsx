@@ -2,6 +2,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../api/client";
+import { useAuth } from "../context/AuthContext";
+import { PinActionDialog } from "../components/SecondPassword"; // ✅ ghi sổ kiểm kê: chỉ quản trị + mật khẩu cấp 2
 
 type Location = {
   id: string;
@@ -72,6 +74,9 @@ const StockCountDetailPage: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [savingLineId, setSavingLineId] = useState<string | null>(null);
   const [posting, setPosting] = useState<boolean>(false);
+  const [pinOpen, setPinOpen] = useState(false);
+  const { user: authUser } = useAuth();
+  const isAdmin = String(authUser?.role || "") === "admin";
   const [deleting, setDeleting] = useState<boolean>(false);
 
   // ✅ lock state (BE period lock)
@@ -221,6 +226,10 @@ const StockCountDetailPage: React.FC = () => {
   };
 
   const handlePost = async () => {
+    if (!isAdmin) {
+      alert("Chỉ quản trị được ghi sổ kiểm kê. Kế toán nhập xong số đếm thì báo quản trị chốt.");
+      return;
+    }
     if (!id || !data) return;
     if (isPosted) {
       alert("Phiếu kiểm kê đã được post.");
@@ -231,24 +240,24 @@ const StockCountDetailPage: React.FC = () => {
       return;
     }
 
-    const ok = await confirmDialog({
-      title: "Xác nhận Post kiểm kê",
-      message: "Post kiểm kê sẽ điều chỉnh tồn kho theo số thực đếm.\nBạn chắc chắn muốn thực hiện?",
-      confirmText: "Post kiểm kê",
-      cancelText: "Hủy",
-      tone: "danger",
-    });
-    if (!ok) return;
+    setPinOpen(true); // -> hộp nhập mật khẩu cấp 2
+  };
 
+  // gọi từ hộp mật khẩu cấp 2; lỗi PIN ném ra để hộp tự xử lý, lỗi khác báo như cũ
+  const doPostWithPin = async (pin: string) => {
     try {
       setPosting(true);
-      await api.post(`/stock-counts/${id}/post`, {});
+      await api.post(`/stock-counts/${id}/post`, { pin });
+      setPinOpen(false);
       await loadDetail();
-      alert("Đã post kiểm kê và điều chỉnh tồn kho.");
+      alert("Đã ghi sổ kiểm kê và điều chỉnh tồn kho.");
     } catch (err: any) {
+      const code = err?.response?.data?.code;
+      if (code && String(code).startsWith("PIN_")) throw err;
       console.error("Failed to post stock count", err);
-      const msg = getApiErrorMessage(err, "Post kiểm kê thất bại");
+      const msg = getApiErrorMessage(err, "Ghi sổ kiểm kê thất bại");
       applyPeriodLockIfNeeded(msg);
+      setPinOpen(false);
       alert(msg);
     } finally {
       setPosting(false);
@@ -487,13 +496,13 @@ const StockCountDetailPage: React.FC = () => {
 
                   <button
                     type="button"
-                    disabled={isReadOnly || posting}
+                    disabled={isReadOnly || posting || !isAdmin}
                     onClick={handlePost}
                     style={{
                       padding: "6px 12px",
                       borderRadius: 4,
                       border: "1px solid #2f855a",
-                      backgroundColor: isReadOnly || posting ? "#9ae6b4" : "#38a169",
+                      backgroundColor: isReadOnly || posting || !isAdmin ? "#9ae6b4" : "#38a169",
                       color: "#fff",
                       cursor: isReadOnly || posting ? "default" : "pointer",
                       fontSize: 13,
@@ -506,7 +515,7 @@ const StockCountDetailPage: React.FC = () => {
                         : ""
                     }
                   >
-                    {posting ? "Đang post..." : "Post kiểm kê"}
+                    {posting ? "Đang ghi sổ..." : isAdmin ? "Ghi sổ kiểm kê" : "Chờ quản trị ghi sổ"}
                   </button>
 
                   <button
@@ -764,6 +773,17 @@ const StockCountDetailPage: React.FC = () => {
         </div>
       )}
       {/* ========================= END CONFIRM MODAL ========================= */}
+
+      <PinActionDialog
+        open={pinOpen}
+        tone="danger"
+        title="Ghi sổ kiểm kê"
+        subtitle="Tồn kho được điều chỉnh theo số thực đếm và phiếu không sửa được nữa."
+        confirmLabel="Ghi sổ"
+        busyLabel="Đang ghi sổ…"
+        onClose={() => setPinOpen(false)}
+        onSubmit={doPostWithPin}
+      />
     </div>
   );
 };

@@ -919,6 +919,11 @@ export default function SalesReturnsPage() {
       return;
     }
 
+    if (!refundAccountId) {
+      showCenterAlert("warning", "Thiếu tài khoản", "Chọn quỹ / tài khoản chi tiền hoàn cho khách (tiền mặt hay ngân hàng).");
+      return;
+    }
+
     const built = buildRefundAllocations(amt);
     if (!built.ok) {
       showCenterAlert("warning", "Không thể hoàn", built.message);
@@ -938,7 +943,7 @@ export default function SalesReturnsPage() {
         partnerId: pid,
         type: "PAYMENT",
         amount: amt,
-        accountId: refundAccountId || undefined,
+        accountId: refundAccountId,
         method: refundMethod || undefined,
         refNo: refundRefNo || undefined,
         note: refundNote || `Hoàn tiền phiếu trả hàng ${inv.code} (cấn vào HĐ SALES gốc, Option A)${splitText}.`,
@@ -1391,7 +1396,7 @@ export default function SalesReturnsPage() {
                 </div>
 
                 <div>
-                  <div style={labelStyle()}>Tài khoản chi (tuỳ chọn)</div>
+                  <div style={labelStyle()}>Tài khoản chi <span style={{ color: "#dc2626" }}>*</span></div>
                   <select
                     style={inputStyle()}
                     value={refundAccountId}
@@ -1401,7 +1406,7 @@ export default function SalesReturnsPage() {
                     onMouseEnter={(e) => applyHoverStyle(e.currentTarget)}
                     onMouseLeave={(e) => applyLeaveStyle(e.currentTarget)}
                   >
-                    <option value="">(Không chọn)</option>
+                    <option value="">-- Chọn quỹ / tài khoản --</option>
                     {accounts.map((a) => (
                       <option key={a.id} value={a.id}>
                         {a.code} - {a.name}

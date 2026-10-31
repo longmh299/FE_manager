@@ -9,8 +9,11 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import api from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { Navigate } from "react-router-dom";
+import { PinTicketDialog } from "../components/SecondPassword";
+import { useIsMobile } from "../hooks/uselsMobile"; // ✅ điện thoại: dòng hàng dạng thẻ // ✅ tạo phiếu phải nhập mật khẩu cấp 2
 
 /* ========================= Helpers ========================= */
+type PinPurpose = "MOVEMENT_CREATE" | "MOVEMENT_POST";
 function unwrap<T = any>(res: any): T {
   const body = res?.data;
   if (body && typeof body === "object" && "data" in body) return body.data as T;
@@ -398,6 +401,7 @@ const ItemPicker: React.FC<{
 
 /* ========================= Main ========================= */
 const MovementsPage: React.FC = () => {
+  const isMobile = useIsMobile();
   const { user } = useAuth();
   const role = String(user?.role || "").toLowerCase();
   const canSee = role === "admin" || role === "accountant";
@@ -424,6 +428,25 @@ const MovementsPage: React.FC = () => {
   const [removedLineIds, setRemovedLineIds] = useState<string[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  // ✅ mật khẩu cấp 2:
+  //   - bấm "Tạo phiếu" -> nhập PIN -> vé MOVEMENT_CREATE, gửi kèm khi lưu phiếu lần đầu
+  //   - bấm "Ghi sổ"    -> nhập PIN -> vé MOVEMENT_POST, gửi kèm lệnh ghi sổ
+  const pinTicketRef = useRef<string | null>(null); // vé tạo phiếu
+  const postTicketRef = useRef<string | null>(null); // vé ghi sổ
+  const pinThenRef = useRef<null | (() => void)>(null);
+  const [pinOpen, setPinOpen] = useState(false);
+  const [pinPurpose, setPinPurpose] = useState<PinPurpose>("MOVEMENT_CREATE");
+  const [pinNotice, setPinNotice] = useState<string | null>(null);
+  function askPin(purpose: PinPurpose, notice: string | null, then: () => void) {
+    pinThenRef.current = then;
+    setPinPurpose(purpose);
+    setPinNotice(notice);
+    setPinOpen(true);
+  }
+  const isPinTicketErr = (e: any) => e?.response?.data?.code === "PIN_TICKET";
+  const pinErrPurpose = (e: any): PinPurpose =>
+    e?.response?.data?.purpose === "MOVEMENT_POST" ? "MOVEMENT_POST" : "MOVEMENT_CREATE";
   const [msgState, setMsgState] = useState<{ type: "ok" | "err"; text: string; n: number } | null>(null);
   const msgSeq = useRef(0);
   const setMsg = (m: { type: "ok" | "err"; text: string } | null) =>
@@ -609,8 +632,13 @@ const MovementsPage: React.FC = () => {
     loadDetail(id);
   }
 
-  async function startNew() {
+  // nút "Tạo phiếu": hỏi bỏ thay đổi (nếu có) -> nhập mật khẩu cấp 2 -> mở phiếu trắng
+  async function requestNew() {
     if (!(await confirmLeave())) return;
+    askPin("MOVEMENT_CREATE", null, () => startNew());
+  }
+
+  function startNew() {
     detailReqId.current++;
     setMsg(null);
     setSelectedId(null);
@@ -753,8 +781,11 @@ const MovementsPage: React.FC = () => {
       note: movement.note ?? "",
       occurredAt: movement.date || localToday(),
       warehouseId: effectiveWh,
+      pinTicket: pinTicketRef.current, // ✅ vé xác nhận mật khẩu cấp 2
     };
-    const res = await apiTry([() => api.post("/movements", payload), () => api.post("/movement", payload)]);
+    // gọi thẳng /movements (không thử đường dự phòng) để giữ nguyên lỗi PIN_TICKET từ server
+    const res = await api.post("/movements", payload);
+    pinTicketRef.current = null; // vé chỉ dùng cho phiếu này
     const x = unwrap<any>(res) || {};
     const newId = safeId(x?.id ?? x?.data?.id);
     if (!newId) throw new Error("Tạo phiếu thành công nhưng không nhận được id.");
@@ -825,6 +856,10 @@ const MovementsPage: React.FC = () => {
       await loadList();
       setMsg({ type: "ok", text: "Đã lưu nháp." });
     } catch (e: any) {
+      if (isPinTicketErr(e)) {
+        askPin("MOVEMENT_CREATE", errMsg(e, "Phiên xác nhận đã hết hạn."), () => handleSaveDraft());
+        return;
+      }
       setMsg({ type: "err", text: errMsg(e, "Lưu thất bại.") });
     } finally {
       setBusy(false);
@@ -838,7 +873,9 @@ const MovementsPage: React.FC = () => {
     try {
       const id = await ensureServerMovement();
       await saveLines(id);
-      await apiTry([() => api.post(`/movements/${id}/post`), () => api.post(`/movement/${id}/post`)]);
+      // gọi thẳng (không thử đường dự phòng) để giữ nguyên lỗi PIN_TICKET từ server
+      await api.post(`/movements/${id}/post`, { pinTicket: postTicketRef.current });
+      postTicketRef.current = null;
       setConfirmPost(false);
       await loadDetail(id);
       await loadList();
@@ -846,6 +883,12 @@ const MovementsPage: React.FC = () => {
       setMsg({ type: "ok", text: "Đã ghi sổ. Tồn kho / giá vốn đã được cập nhật." });
     } catch (e: any) {
       setConfirmPost(false);
+      if (isPinTicketErr(e)) {
+        const pur = pinErrPurpose(e);
+        if (pur === "MOVEMENT_POST") postTicketRef.current = null;
+        askPin(pur, pur === "MOVEMENT_POST" ? null : errMsg(e, "Phiên xác nhận đã hết hạn."), () => handlePost());
+        return;
+      }
       setMsg({ type: "err", text: errMsg(e, "Ghi sổ thất bại.") });
       if (movement.id || selectedId) {
         const id = safeId(movement.id) || selectedId;
@@ -899,14 +942,14 @@ const MovementsPage: React.FC = () => {
         </div>
         <button
           type="button"
-          onClick={startNew}
+          onClick={requestNew}
           className="shrink-0 rounded-lg bg-sky-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-700"
         >
           + Tạo phiếu
         </button>
       </div>
 
-      <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[360px_minmax(0,1fr)]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[360px_minmax(0,1fr)]">
         {/* ================= LIST ================= */}
         <section
           className={`flex min-h-0 flex-col rounded-xl border border-slate-200 bg-white ${
@@ -1009,7 +1052,7 @@ const MovementsPage: React.FC = () => {
                   <div>Chọn một phiếu bên trái để xem, hoặc tạo phiếu mới.</div>
                   <button
                     type="button"
-                    onClick={startNew}
+                    onClick={requestNew}
                     className="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 font-semibold text-sky-700"
                   >
                     + Tạo phiếu
@@ -1211,6 +1254,164 @@ const MovementsPage: React.FC = () => {
                     {movement.lines.length === 0 ? (
                       <div className="p-6 text-center text-sm text-slate-400">
                         {locked ? "Phiếu không có dòng nào." : "Chưa có sản phẩm. Gõ mã/tên ở ô phía trên để thêm."}
+                      </div>
+                    ) : isMobile ? (
+                      /* ✅ ĐIỆN THOẠI: mỗi dòng hàng 1 thẻ, ô nhập to, không phải vuốt ngang */
+                      <div className="divide-y divide-slate-100">
+                        {movement.lines.map((l, idx) => {
+                          const st = stockOf(l.itemId);
+                          const stObj = st && typeof st === "object" ? st : null;
+                          const err = showErrors || l.id ? lineErrors[l.k] : undefined;
+                          const softErr = lineErrors[l.k];
+                          const sign = l.qty < 0 ? -1 : 1;
+                          const absQty = Math.abs(l.qty);
+                          const diff = stObj && l.unitCost ? (l.unitCost - stObj.avgCost) * stObj.qty : null;
+                          return (
+                            <div key={l.k} className={`p-3 ${flashKey === l.k ? "bg-amber-50" : err ? "bg-rose-50/50" : ""}`}>
+                              <div className="flex items-start gap-2">
+                                <span className="mt-0.5 text-xs text-slate-400">{idx + 1}</span>
+                                <div className="min-w-0 flex-1">
+                                  <div className="font-medium text-slate-900">{l.itemName || "—"}</div>
+                                  <div className="text-xs text-slate-500">
+                                    {l.sku ? <span className="font-mono">{l.sku}</span> : null}
+                                    {l.unit ? <span> · {l.unit}</span> : null}
+                                  </div>
+                                  {softErr && <div className={`mt-0.5 text-xs font-medium ${err ? "text-rose-600" : "text-amber-600"}`}>{softErr}</div>}
+                                </div>
+                                {!locked && (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeLine(l)}
+                                    aria-label="Xoá dòng"
+                                    className="!min-h-0 rounded-md p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                                  >
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                      <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" />
+                                    </svg>
+                                  </button>
+                                )}
+                              </div>
+
+                              {locked ? (
+                                <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
+                                  {!isRevalue && (
+                                    <div>
+                                      <div className="text-xs text-slate-500">SL điều chỉnh</div>
+                                      <div className={`font-semibold tabular-nums ${l.qty < 0 ? "text-rose-600" : "text-emerald-600"}`}>{fmtSigned(l.qty)}</div>
+                                    </div>
+                                  )}
+                                  <div>
+                                    <div className="text-xs text-slate-500">{isRevalue ? "Giá vốn mới" : "Đơn giá vốn"}</div>
+                                    <div className="tabular-nums">{l.unitCost ? fmtMoney(l.unitCost) : <span className="text-slate-400">BQ</span>}</div>
+                                  </div>
+                                  {!isRevalue && (
+                                    <div>
+                                      <div className="text-xs text-slate-500">Giá trị</div>
+                                      <div className="tabular-nums text-slate-600">{l.costTotal != null ? fmtMoney(l.costTotal) : "—"}</div>
+                                    </div>
+                                  )}
+                                </div>
+                              ) : isRevalue ? (
+                                <div className="mt-2 space-y-2">
+                                  <div className="flex justify-between text-sm">
+                                    <span className="text-slate-500">
+                                      Tồn <b className="tabular-nums text-slate-800">{st === "loading" ? "…" : stObj ? fmtQty(stObj.qty) : "—"}</b>
+                                    </span>
+                                    <span className="text-slate-500">
+                                      Giá vốn hiện tại <b className="tabular-nums text-slate-800">{stObj ? fmtMoney(stObj.avgCost) : st === "loading" ? "…" : "—"}</b>
+                                    </span>
+                                  </div>
+                                  <label className="block">
+                                    <span className="mb-1 block text-xs font-medium text-slate-600">Giá vốn mới</span>
+                                    <MoneyInput id={`cost-${l.k}`} value={l.unitCost} invalid={!!err} placeholder="Giá mới" onChange={(v) => patchLine(l.k, { unitCost: v })} />
+                                  </label>
+                                  {diff != null && (
+                                    <div className="text-sm text-slate-500">
+                                      Chênh lệch giá trị tồn:{" "}
+                                      <b className={`tabular-nums ${diff < 0 ? "text-rose-600" : "text-emerald-600"}`}>
+                                        {diff > 0 ? "+" : ""}
+                                        {fmtMoney(diff)}
+                                      </b>
+                                    </div>
+                                  )}
+                                </div>
+                              ) : (
+                                <div className="mt-2 space-y-2">
+                                  <div className="flex items-center gap-2">
+                                    <div className="inline-flex overflow-hidden rounded-lg border border-slate-300">
+                                      <button
+                                        type="button"
+                                        onClick={() => patchLine(l.k, { qty: absQty || 1 })}
+                                        className={`px-3 text-sm font-bold ${sign > 0 ? "bg-emerald-600 text-white" : "bg-white text-slate-500"}`}
+                                      >
+                                        Tăng
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => patchLine(l.k, { qty: -(absQty || 1) })}
+                                        className={`px-3 text-sm font-bold ${sign < 0 ? "bg-rose-600 text-white" : "bg-white text-slate-500"}`}
+                                      >
+                                        Giảm
+                                      </button>
+                                    </div>
+                                    <input
+                                      id={`qty-${l.k}`}
+                                      inputMode="decimal"
+                                      aria-label="Số lượng điều chỉnh"
+                                      value={absQty ? String(absQty) : ""}
+                                      onChange={(e) => {
+                                        const raw = e.target.value.replace(",", ".");
+                                        const neg = raw.trim().startsWith("-");
+                                        const n = Math.abs(toNum(raw.replace(/[^\d.]/g, "")));
+                                        const sg = neg ? -1 : sign;
+                                        patchLine(l.k, { qty: sg * n });
+                                      }}
+                                      className={`w-20 rounded-lg border px-2 py-1.5 text-right tabular-nums outline-none focus:ring-2 ${
+                                        err && !l.qty ? "border-rose-300 focus:ring-rose-200" : "border-slate-300 focus:ring-sky-100"
+                                      }`}
+                                    />
+                                    <div className="ml-auto text-right text-xs text-slate-500">
+                                      <div>
+                                        Tồn {st === "loading" ? "…" : stObj ? fmtQty(stObj.qty) : "—"} →{" "}
+                                        {stObj ? (
+                                          <b className={`text-sm tabular-nums ${stObj.qty + l.qty < 0 ? "text-rose-600" : "text-slate-900"}`}>{fmtQty(stObj.qty + l.qty)}</b>
+                                        ) : (
+                                          "—"
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  {l.qty > 0 ? (
+                                    <label className="block">
+                                      <span className="mb-1 block text-xs font-medium text-slate-600">Giá vốn nhập (bỏ trống = theo giá BQ)</span>
+                                      <MoneyInput
+                                        value={l.unitCost}
+                                        placeholder={stObj?.avgCost ? `BQ ${fmtMoney(stObj.avgCost)}` : "Tuỳ chọn"}
+                                        onChange={(v) => patchLine(l.k, { unitCost: v })}
+                                      />
+                                    </label>
+                                  ) : (
+                                    <div className="text-xs text-slate-400">Giảm tồn xuất theo giá BQ{stObj?.avgCost ? ` (${fmtMoney(stObj.avgCost)})` : ""}</div>
+                                  )}
+                                </div>
+                              )}
+
+                              <div className="mt-2">
+                                {locked ? (
+                                  l.note ? <div className="text-sm text-slate-600">{l.note}</div> : null
+                                ) : (
+                                  <input
+                                    value={l.note}
+                                    onChange={(e) => patchLine(l.k, { note: e.target.value })}
+                                    placeholder="Ghi chú dòng…"
+                                    aria-label="Ghi chú dòng"
+                                    className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+                                  />
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : (
                       <table className="w-full min-w-[760px] text-sm">
@@ -1493,13 +1694,41 @@ const MovementsPage: React.FC = () => {
         .mv-slide { animation: mvSlide .2s ease-out }
       `}</style>
 
+      <PinTicketDialog
+        open={pinOpen}
+        purpose={pinPurpose}
+        title={pinPurpose === "MOVEMENT_POST" ? "Xác nhận ghi sổ" : "Xác nhận tạo phiếu điều chỉnh"}
+        subtitle={
+          pinPurpose === "MOVEMENT_POST"
+            ? "Ghi sổ xong tồn kho / giá vốn đổi ngay và phiếu không sửa được nữa. Nhập mật khẩu cấp 2 để ghi sổ."
+            : "Phiếu điều chỉnh làm thay đổi tồn kho / giá vốn. Nhập mật khẩu cấp 2 để tiếp tục."
+        }
+        confirmLabel={pinPurpose === "MOVEMENT_POST" ? "Ghi sổ" : "Tạo phiếu"}
+        notice={pinNotice}
+        onClose={() => {
+          setPinOpen(false);
+          pinThenRef.current = null;
+        }}
+        onConfirmed={(ticket) => {
+          if (pinPurpose === "MOVEMENT_POST") postTicketRef.current = ticket;
+          else pinTicketRef.current = ticket;
+          setPinOpen(false);
+          const then = pinThenRef.current;
+          pinThenRef.current = null;
+          then?.();
+        }}
+      />
+
       <ConfirmDialog
         open={confirmPost}
         title="Ghi sổ phiếu điều chỉnh?"
-        confirmText="Ghi sổ"
         busy={busy}
         onCancel={() => setConfirmPost(false)}
-        onConfirm={handlePost}
+        confirmText="Tiếp tục, nhập mật khẩu"
+        onConfirm={() => {
+          setConfirmPost(false);
+          askPin("MOVEMENT_POST", null, () => handlePost());
+        }}
       >
         <ul className="space-y-1">
           <li>

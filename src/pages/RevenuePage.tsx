@@ -628,13 +628,13 @@ export default function RevenuePage() {
                   type="date"
                   value={from}
                   onChange={(e) => setFrom(e.target.value)}
-                  className="w-full rounded border border-slate-300 px-3 py-2"
+                  className="w-full min-w-0 rounded border border-slate-300 px-3 py-2"
                 />
                 <input
                   type="date"
                   value={to}
                   onChange={(e) => setTo(e.target.value)}
-                  className="w-full rounded border border-slate-300 px-3 py-2"
+                  className="w-full min-w-0 rounded border border-slate-300 px-3 py-2"
                 />
               </div>
             </div>

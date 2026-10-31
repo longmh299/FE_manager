@@ -1,5 +1,6 @@
 // src/pages/ReceivablesReportPage.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useIsMobile } from "../hooks/uselsMobile"; // ✅ giao diện điện thoại
 import api from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
 import ExcelJS from "exceljs";
@@ -381,6 +382,7 @@ async function buildReceivablesExcel(params: {
 /* ======================= Page ======================= */
 
 const ReceivablesReportPage: React.FC = () => {
+  const isMobile = useIsMobile();
   const { toasts, push, remove } = useToast();
 
   const [asOf, setAsOf] = useState(todayYmd());
@@ -784,7 +786,7 @@ function ensureAccountSelected() {
   }
 
   return (
-    <div style={page}>
+    <div style={isMobile ? { padding: 0 } : page}>
       <ToastHost toasts={toasts} onClose={remove} />
 
       {/* Header */}
@@ -830,11 +832,11 @@ function ensureAccountSelected() {
       ) : null}
 
       {/* KPI */}
-      <div style={kpiGrid}>
-        <KpiCard label="Tiền hàng" value={summary?.normalOutstanding ?? 0} hint="Phải thu ngay" />
-        <KpiCard label="Bảo hành treo" value={summary?.warrantyHoldNotDue ?? 0} hint="Chưa đến hạn" tone="hold" />
-        <KpiCard label="Bảo hành đến hạn" value={summary?.warrantyHoldDue ?? 0} hint="Đã đến hạn" tone="due" />
-        <KpiCard label="Tổng phải thu" value={summary?.totalOutstanding ?? 0} hint="Tổng công nợ" strong />
+      <div style={isMobile ? { ...kpiGrid, gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 } : kpiGrid}>
+        <KpiCard compact={isMobile} label="Tiền hàng" value={summary?.normalOutstanding ?? 0} hint="Phải thu ngay" />
+        <KpiCard compact={isMobile} label="Bảo hành treo" value={summary?.warrantyHoldNotDue ?? 0} hint="Chưa đến hạn" tone="hold" />
+        <KpiCard compact={isMobile} label="Bảo hành đến hạn" value={summary?.warrantyHoldDue ?? 0} hint="Đã đến hạn" tone="due" />
+        <KpiCard compact={isMobile} label="Tổng phải thu" value={summary?.totalOutstanding ?? 0} hint="Tổng công nợ" strong />
       </div>
 
       {/* Main */}
@@ -849,7 +851,7 @@ function ensureAccountSelected() {
               </div>
             </div>
 
-            <div style={filtersRow}>
+            <div style={isMobile ? { ...filtersRow, width: "100%" } : filtersRow}>
               <div style={tabs}>
                 <button type="button" style={tabBtn(tab === "ALL")} onClick={() => setTab("ALL")}>
                   Tất cả
@@ -862,7 +864,7 @@ function ensureAccountSelected() {
                 </button>
               </div>
 
-              <select value={saleKey} onChange={(e) => setSaleKey(e.target.value)} style={{ ...input, width: 220, cursor: "pointer" }}>
+              <select value={saleKey} onChange={(e) => setSaleKey(e.target.value)} style={{ ...input, width: isMobile ? "100%" : 220, cursor: "pointer" }}>
                 <option value="__ALL__">Tất cả NV sale</option>
                 {saleOptions.map((o) => (
                   <option key={o.key} value={o.key}>
@@ -871,33 +873,33 @@ function ensureAccountSelected() {
                 ))}
               </select>
 
-              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Tìm mã HĐ / khách / sale..." style={{ ...input, width: 280 }} />
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Tìm mã HĐ / khách / sale..." style={{ ...input, width: isMobile ? "100%" : 280 }} />
             </div>
           </div>
 
           {/* totals strip */}
-          <div style={strip}>
-            <div style={stripItem}>
+          <div style={isMobile ? { ...strip, display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 } : strip}>
+            <div style={isMobile ? { ...stripItem, minWidth: 0 } : stripItem}>
               <div style={stripLabel}>Trong danh sách</div>
               <div style={stripValue}>{totalsInView.count} HĐ</div>
             </div>
-            <div style={stripItem}>
+            <div style={isMobile ? { ...stripItem, minWidth: 0 } : stripItem}>
               <div style={stripLabel}>Tổng hóa đơn</div>
               <div style={stripValue}>{fmtMoney(totalsInView.invoiceNet)}</div>
             </div>
-            <div style={stripItem}>
+            <div style={isMobile ? { ...stripItem, minWidth: 0 } : stripItem}>
               <div style={stripLabel}>Tiền hàng</div>
               <div style={stripValue}>{fmtMoney(totalsInView.normal)}</div>
             </div>
-            <div style={stripItem}>
+            <div style={isMobile ? { ...stripItem, minWidth: 0 } : stripItem}>
               <div style={stripLabel}>BH treo</div>
               <div style={stripValue}>{fmtMoney(totalsInView.hold)}</div>
             </div>
-            <div style={stripItem}>
+            <div style={isMobile ? { ...stripItem, minWidth: 0 } : stripItem}>
               <div style={stripLabel}>BH đến hạn</div>
               <div style={{ ...stripValue, ...(totalsInView.due > 0 ? dueText : null) }}>{fmtMoney(totalsInView.due)}</div>
             </div>
-            <div style={{ ...stripItem, marginLeft: "auto", textAlign: "right" }}>
+            <div style={isMobile ? { ...stripItem, minWidth: 0 } : { ...stripItem, marginLeft: "auto", textAlign: "right" }}>
               <div style={stripLabel}>Tổng phải thu</div>
               <div style={{ ...stripValue, fontWeight: 900 }}>{fmtMoney(totalsInView.total)}</div>
             </div>
@@ -905,6 +907,64 @@ function ensureAccountSelected() {
 
           {!includeRows ? (
             <div style={{ padding: 14, opacity: 0.8 }}>Bạn đang tắt “Chi tiết hóa đơn”. Bật lại để xem bảng chi tiết.</div>
+          ) : isMobile ? (
+            /* ✅ ĐIỆN THOẠI: mỗi hoá đơn 1 thẻ */
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+              {filteredRows.length === 0 ? (
+                <div style={{ padding: 14, opacity: 0.75 }}>Không có hóa đơn phù hợp bộ lọc.</div>
+              ) : (
+                filteredRows.map((r) => {
+                  const warnDue = (r.warrantyHoldDue || 0) > 0;
+                  const canCollectWarranty = (r.warrantyOutstanding || 0) > 0;
+                  return (
+                    <div key={r.invoiceId} style={{ border: "1px solid rgba(148,163,184,0.3)", borderRadius: 12, padding: 12, background: "#fff" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 800 }}>
+                            {r.code} <span style={{ fontWeight: 400, fontSize: 12, opacity: 0.65 }}>{r.issueDate}</span>
+                          </div>
+                          <div style={{ fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.partnerName}</div>
+                          <div style={{ fontSize: 12, opacity: 0.65 }}>Sale: {r.saleName || "-"}</div>
+                        </div>
+                        <div style={{ textAlign: "right", flexShrink: 0 }}>
+                          <div style={{ fontSize: 11, opacity: 0.65 }}>Tổng nợ</div>
+                          <div style={{ fontWeight: 900, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(r.totalOutstanding || 0)}</div>
+                        </div>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 6, marginTop: 8, fontSize: 12 }}>
+                        <div>
+                          <div style={{ opacity: 0.6 }}>Tiền hàng</div>
+                          <div style={{ fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(r.normalOutstanding || 0)}</div>
+                        </div>
+                        <div>
+                          <div style={{ opacity: 0.6 }}>BH treo</div>
+                          <div style={{ fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(r.warrantyHoldNotDue || 0)}</div>
+                        </div>
+                        <div>
+                          <div style={{ opacity: 0.6 }}>BH đến hạn</div>
+                          <div style={{ fontWeight: 700, fontVariantNumeric: "tabular-nums", ...(warnDue ? dueText : null) }}>{fmtMoney(r.warrantyHoldDue || 0)}</div>
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 8 }}>
+                        <div style={{ fontSize: 12, opacity: 0.65 }}>Tổng HĐ {fmtMoney(getInvoiceNetTotal(r))}</div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          {tab !== "WARRANTY" && r.normalOutstanding > 0 ? (
+                            <button type="button" style={miniBtn(false)} onClick={() => openCollectNormal(r)}>
+                              Thu tiền
+                            </button>
+                          ) : null}
+                          {tab !== "NORMAL" && canCollectWarranty ? (
+                            <button type="button" style={miniBtn(false)} onClick={() => openCollectWarranty(r)}>
+                              Thu BH
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           ) : (
             <div style={tableWrap}>
               <table style={table}>
@@ -1309,7 +1369,8 @@ const KpiCard: React.FC<{
   hint?: string;
   strong?: boolean;
   tone?: "hold" | "due";
-}> = ({ label, value, hint, strong, tone }) => {
+  compact?: boolean; // điện thoại: chữ nhỏ hơn cho vừa 2 cột
+}> = ({ label, value, hint, strong, tone, compact }) => {
   const border =
     tone === "due"
       ? "1px solid rgba(239, 68, 68, 0.25)"
@@ -1324,9 +1385,9 @@ const KpiCard: React.FC<{
       : "rgba(2, 6, 23, 0.02)";
 
   return (
-    <div style={{ ...card, border, background: bg }}>
+    <div style={{ ...card, border, background: bg, ...(compact ? { padding: 10, minWidth: 0 } : null) }}>
       <div style={cardLabel}>{label}</div>
-      <div style={{ ...cardValue, fontWeight: strong ? 900 : 850 }}>{fmtMoney(value)}</div>
+      <div style={{ ...cardValue, fontWeight: strong ? 900 : 850, ...(compact ? { fontSize: 16, marginTop: 4, wordBreak: "break-word" as const } : null) }}>{fmtMoney(value)}</div>
       <div style={cardHint}>{hint || "\u00A0"}</div>
     </div>
   );

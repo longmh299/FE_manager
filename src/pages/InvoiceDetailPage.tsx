@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import api from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
+import { VoidPaymentDialog, PinActionDialog, type VoidTarget } from "../components/SecondPassword";
 
 type InvoiceType = "SALES" | "PURCHASE";
 type PaymentStatus = "UNPAID" | "PARTIAL" | "PAID";
@@ -136,6 +137,7 @@ type PaymentAllocation = {
 
 type PaymentRow = {
   id: string;
+  code?: string | null; // ✅ số phiếu PT/PC
   date?: string;
   createdAt?: string;
   type?: string;
@@ -145,6 +147,11 @@ type PaymentRow = {
   note?: string | null;
   account?: { id: string; code?: string; name?: string } | null;
   allocations?: PaymentAllocation[];
+  // ✅ phiếu đã huỷ (giữ lại để tra cứu)
+  voided?: boolean;
+  voidReason?: string | null;
+  voidedAt?: string | null;
+  voidedByName?: string | null;
 };
 
 function validatePurchasePrice(inv: Invoice) {
@@ -960,9 +967,10 @@ const PromptModal: React.FC<{
   confirmText?: string;
   cancelText?: string;
   busy?: boolean;
+  required?: boolean;
   onConfirm: (value: string) => void | Promise<void>;
   onClose: () => void;
-}> = ({ open, title, message, placeholder = "", defaultValue = "", confirmText = "Xác nhận", cancelText = "Hủy", busy, onConfirm, onClose }) => {
+}> = ({ open, title, message, placeholder = "", defaultValue = "", confirmText = "Xác nhận", cancelText = "Hủy", busy, required, onConfirm, onClose }) => {
   const [val, setVal] = useState(defaultValue);
 
   useEffect(() => {
@@ -1006,7 +1014,7 @@ const PromptModal: React.FC<{
             autoFocus
           />
           <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
-            (Có thể để trống. Nhấn <b>Enter</b> để xác nhận, <b>ESC</b> để đóng.)
+            ({required ? "Bắt buộc nhập." : "Có thể để trống."} Nhấn <b>Enter</b> để xác nhận, <b>ESC</b> để đóng.)
           </div>
         </div>
 
@@ -1411,6 +1419,7 @@ const InvoiceDetailPage: React.FC = () => {
 
   const [saving, setSaving] = useState(false);
   const [reopenBusy, setReopenBusy] = useState(false);
+  const [reopenPinOpen, setReopenPinOpen] = useState(false);
 
   /** ========================= Early stock check (FE warning only) ========================= **/
   const [, setStockCheckLoading] = useState(false);
@@ -1532,6 +1541,7 @@ const InvoiceDetailPage: React.FC = () => {
     defaultValue?: string;
     confirmText?: string;
     cancelText?: string;
+    required?: boolean;
     onConfirm: (value: string) => Promise<void> | void;
   } | null>(null);
 
@@ -1560,6 +1570,7 @@ const InvoiceDetailPage: React.FC = () => {
     defaultValue?: string;
     confirmText?: string;
     cancelText?: string;
+    required?: boolean;
     onConfirm: (value: string) => Promise<void> | void;
   }) {
     setPromptCfg(cfg);
@@ -2036,6 +2047,7 @@ const InvoiceDetailPage: React.FC = () => {
         note: x.note ?? "",
 
         status,
+        ...({ rejectInfo: x.rejectInfo ?? null } as any), // ✅ nháp bị trả về (lý do từ chối)
 
         hasWarrantyHold: x.hasWarrantyHold ?? false,
         warrantyHoldAmount: x.warrantyHoldAmount != null ? Number(x.warrantyHoldAmount) : 0,
@@ -2081,9 +2093,19 @@ const InvoiceDetailPage: React.FC = () => {
           }))
           : [];
 
-        const allocatedAmount = allocations
-          .filter((a) => String(a.invoiceId) === invoiceIdStr)
-          .reduce((s, a) => s + Number(a.amount || 0), 0);
+        // ✅ phiếu đã huỷ không còn allocations -> lấy phần đã phân bổ từ voidSnapshot
+        const voided = !!p.voided;
+        const sourceAllocs: Array<{ invoiceId: any; amount: any }> = voided
+          ? (Array.isArray(p.voidSnapshot) ? p.voidSnapshot : [])
+          : allocations;
+
+        // ✅ quy về chiều "tiền của hoá đơn": bán (+thu / -hoàn), nhập lưu âm (-chi / +hoàn) -> đảo dấu
+        const signFix = invoice.type === "PURCHASE" ? -1 : 1;
+        const allocatedAmount =
+          signFix *
+          sourceAllocs
+            .filter((a) => String(a.invoiceId) === invoiceIdStr)
+            .reduce((s, a) => s + Number(a.amount || 0), 0);
 
         const row: PaymentRow & { allocatedAmount: number } = {
           id: String(p.id),
@@ -2092,17 +2114,22 @@ const InvoiceDetailPage: React.FC = () => {
           type: p.type,
           amount: p.amount != null ? Number(p.amount) : undefined,
           refNo: p.refNo ?? null,
+          code: p.code ?? null,
           method: p.method ?? null,
           note: p.note ?? null,
           account: p.account ? { id: String(p.account.id), code: p.account.code, name: p.account.name } : null,
           allocations,
           allocatedAmount,
+          voided,
+          voidReason: p.voidReason ?? null,
+          voidedAt: p.voidedAt ?? null,
+          voidedByName: p.voidedBy?.username ?? null,
         };
         return row;
       });
 
       const filtered = mapped
-        .filter((r) => r.allocatedAmount > 0)
+        .filter((r) => Math.abs(r.allocatedAmount) > 0.0001)
         .sort((a, b) => {
           const ta = a.createdAt ? new Date(a.createdAt).getTime() : a.date ? new Date(a.date).getTime() : 0;
           const tb = b.createdAt ? new Date(b.createdAt).getTime() : b.date ? new Date(b.date).getTime() : 0;
@@ -2369,6 +2396,17 @@ const InvoiceDetailPage: React.FC = () => {
     }
     const allowAdjustApprovedEdit = isAdmin && isAdjustMode && status === "APPROVED" && !isCreate && !!invoice.id;
 
+    // ✅ đã thu / đã trả mà chưa chọn tài khoản -> BE sẽ chặn, báo sớm ở đây cho rõ
+    if (!allowAdjustApprovedEdit && (invoice.paymentStatus ?? "UNPAID") !== "UNPAID" && !safeId(invoice.receiveAccountId)) {
+      toastError(
+        invoice.type === "PURCHASE"
+          ? "Phiếu nhập đã trả tiền thì phải chọn tài khoản chi tiền (quỹ tiền mặt / ngân hàng)."
+          : "Hoá đơn đã thu tiền thì phải chọn tài khoản nhận tiền (quỹ tiền mặt / ngân hàng).",
+        "Thiếu tài khoản"
+      );
+      return;
+    }
+
     // ✅ luật: bình thường chỉ DRAFT mới save; riêng admin adjust-mode cho phép save khi APPROVED
     if (!allowAdjustApprovedEdit && status !== "DRAFT") {
       toastError(
@@ -2468,35 +2506,21 @@ const InvoiceDetailPage: React.FC = () => {
       return;
     }
 
-    openConfirm({
-      title: "Mở lại để sửa hóa đơn",
-      message: "Hệ thống sẽ rollback tồn kho từ hóa đơn đã duyệt và đưa hóa đơn về NHÁP để sửa. Bạn chắc chắn chứ?",
-      confirmText: "Mở lại",
-      cancelText: "Hủy",
-      tone: "danger",
-      onConfirm: async () => {
-        try {
-          setConfirmBusy(true);
-          setReopenBusy(true);
+    setReopenPinOpen(true); // ✅ mật khẩu cấp 2 (hộp bên dưới)
+  }
 
-          await api.post(`/invoices/${invoice.id}/reopen`);
-
-          toastSuccess("Đã mở lại hóa đơn về NHÁP để sửa.");
-          setMessage({ type: "success", text: "Đã mở lại hóa đơn về NHÁP để sửa." });
-
-          await loadInvoiceIfNeeded();
-        } catch (err: any) {
-          console.error("reopen error", err);
-          const msg = err?.response?.data?.message || err?.message || "Mở lại thất bại.";
-          toastError(msg);
-          setMessage({ type: "error", text: msg });
-        } finally {
-          setReopenBusy(false);
-          setConfirmBusy(false);
-          closeConfirm();
-        }
-      },
-    });
+  async function doReopenWithPin(pin: string) {
+    if (!invoice?.id) return;
+    setReopenBusy(true);
+    try {
+      await api.post(`/invoices/${invoice.id}/reopen`, { pin });
+      setReopenPinOpen(false);
+      toastSuccess("Đã mở lại hóa đơn về NHÁP để sửa.");
+      setMessage({ type: "success", text: "Đã mở lại hóa đơn về NHÁP để sửa." });
+      await loadInvoiceIfNeeded();
+    } finally {
+      setReopenBusy(false);
+    }
   }
 
   async function handleSubmit() {
@@ -2623,6 +2647,27 @@ const InvoiceDetailPage: React.FC = () => {
     });
   }
 
+  const canVoidPayment = String(me.role || "").trim().toLowerCase() === "admin"; // ✅ huỷ phiếu cần mật khẩu cấp 2 — chỉ quản trị
+
+  // ✅ huỷ phiếu: lý do + mật khẩu cấp 2 (VoidPaymentDialog, server kiểm tra PIN)
+  const [voidTarget, setVoidTarget] = useState<VoidTarget | null>(null);
+  function handleVoidPayment(row: PaymentRow & { allocatedAmount: number }) {
+    if (!invoice) return;
+    if (dirtySinceLastSave) {
+      toastError("Hoá đơn đang có thay đổi chưa lưu. Lưu hoặc tải lại hoá đơn trước khi huỷ phiếu.", "Chưa lưu");
+      return;
+    }
+    setVoidTarget({
+      id: row.id,
+      code: row.code ?? null,
+      type: row.type || "RECEIPT",
+      amount: Number(row.amount || 0),
+      date: row.date ? String(row.date).slice(0, 10) : null,
+      accountLabel: row.account ? `${row.account.name || row.account.code || ""}` : "chưa gán tài khoản",
+      invoiceCodes: invoice.code ? [String(invoice.code)] : [],
+    });
+  }
+
   if (loading || !invoice) {
     return (
       <div style={styles.page} className="inv-ui">
@@ -2668,6 +2713,8 @@ const InvoiceDetailPage: React.FC = () => {
   })();
 
   const showPaidInput = (invoice.paymentStatus ?? "UNPAID") === "PARTIAL";
+  // ✅ đã thu / đã trả thì tiền phải vào 1 quỹ / tài khoản cụ thể
+  const needAccount = (invoice.paymentStatus ?? "UNPAID") !== "UNPAID";
 
   const statusText =
     status === "APPROVED"
@@ -2678,7 +2725,9 @@ const InvoiceDetailPage: React.FC = () => {
           ? "Bị từ chối"
           : "Nháp";
 
-  const paidByPayments = paymentHistoryRows.reduce((s, r) => s + (r.allocatedAmount || 0), 0);
+  const paidByPayments = paymentHistoryRows
+    .filter((r) => !r.voided)
+    .reduce((s, r) => s + (r.allocatedAmount || 0), 0);
 
   const paidNormal = Math.max(0, toNum(invoice.paidAmount));
   const paidTotal = Math.max(0, paidByPayments);
@@ -2788,6 +2837,36 @@ const InvoiceDetailPage: React.FC = () => {
               <div style={{ marginTop: 6, fontSize: 12.5, color: "#0e7490" }}>
                 (Link: <code>?adjust=1</code>)
               </div>
+            </div>
+          )}
+
+          {/* ✅ nháp bị trả về: cho nhân viên biết lý do để sửa rồi gửi duyệt lại */}
+          {status === "DRAFT" && (invoice as any)?.rejectInfo && (
+            <div
+              style={{
+                marginBottom: 16,
+                padding: "10px 14px",
+                borderRadius: 10,
+                background: "#fef2f2",
+                border: "1px solid #fecaca",
+                color: "#991b1b",
+                fontSize: 14,
+                lineHeight: 1.5,
+              }}
+            >
+              <b>Hoá đơn bị trả về</b>
+              {(invoice as any).rejectInfo.by ? ` bởi ${(invoice as any).rejectInfo.by}` : ""}
+              {(invoice as any).rejectInfo.at
+                ? `, lúc ${new Date((invoice as any).rejectInfo.at).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}`
+                : ""}
+              .
+              {(invoice as any).rejectInfo.reason ? (
+                <>
+                  {" "}
+                  Lý do: <b>{(invoice as any).rejectInfo.reason}</b>.
+                </>
+              ) : null}{" "}
+              Sửa xong bấm Gửi duyệt lại.
             </div>
           )}
 
@@ -3078,7 +3157,7 @@ const InvoiceDetailPage: React.FC = () => {
                 <span>Dòng sản phẩm</span>
                 <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                   {/* ✅ MỚI: nhập từ file */}
-                  {!locked && (invoice.type === "PURCHASE" || invoice.type === "SALES") && (
+                  {!locked && canCreateItem && (invoice.type === "PURCHASE" || invoice.type === "SALES") && ( /* ✅ nhập file: chỉ KT + AD */
                     <>
                       <button
                         type="button"
@@ -3746,66 +3825,77 @@ const InvoiceDetailPage: React.FC = () => {
                   </select>
                 </div>
 
-                {!isPurchase && (
-                  <>
-                    <div className="inv-sum-row" style={styles.summaryRow}>
-                      <span className="inv-sum-label" style={styles.summaryLabel}>Số tiền đã thu</span>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <PaidAmountInput
-                          value={invoice.paidAmount ?? 0}
-                          disabled={!showPaidInput || locked}
-                          onChange={(raw) => {
-                            markDirty();
-                            applyPaymentStatus("PARTIAL", raw);
-                          }}
-                          styleInput={{ textAlign: "right", opacity: showPaidInput ? 1 : 0.7 }}
-                        />
-                      </div>
-                    </div>
+                <div className="inv-sum-row" style={styles.summaryRow}>
+                  <span className="inv-sum-label" style={styles.summaryLabel}>
+                    {isPurchase ? "Số tiền đã trả" : "Số tiền đã thu"}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <PaidAmountInput
+                      value={invoice.paidAmount ?? 0}
+                      disabled={!showPaidInput || locked}
+                      onChange={(raw) => {
+                        markDirty();
+                        applyPaymentStatus("PARTIAL", raw);
+                      }}
+                      styleInput={{ textAlign: "right", opacity: showPaidInput ? 1 : 0.7 }}
+                    />
+                  </div>
+                </div>
 
-                    <div className="inv-sum-row" style={styles.summaryRow}>
-                      <span className="inv-sum-label" style={styles.summaryLabel}>Tài khoản nhận tiền</span>
-                      <select
-                        style={styles.select}
-                        value={invoice.receiveAccountId || ""}
-                        disabled={locked}
-                        onChange={(e) => {
-                          markDirty();
-                          updateInvoice({ receiveAccountId: safeId(e.target.value) });
-                        }}
-                      >
-                        <option value="">-- Chưa chọn --</option>
-                        {accounts.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.code} - {a.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {accountLoadError && <div style={{ ...styles.notice, ...styles.noticeError, marginTop: 6 }}>{accountLoadError}</div>}
-
-                    <div style={{ borderTop: `1px dashed ${C.border}`, marginTop: 8, paddingTop: 4 }}>
-                      <div className="inv-sum-row" style={styles.summaryRow}>
-                        <span className="inv-sum-label" style={styles.summaryLabel}>Đã thu</span>
-                        <span style={{ ...styles.summaryValue, color: C.green }}>{formatMoney(paidNormal)} đ</span>
-                      </div>
-
-                      <div className="inv-sum-row" style={styles.summaryRow}>
-                        <span className="inv-sum-label" style={{ ...styles.summaryLabel, fontWeight: 700, color: C.text }}>Còn phải thu</span>
-                        <span
-                          style={{
-                            ...styles.summaryValue,
-                            fontSize: 16,
-                            color: isReturnedFull(invoice) ? "#6b7280" : debtNow > 0 ? C.red : C.text,
-                          }}
-                        >
-                          {formatMoney(debtNow)} đ
-                        </span>
-                      </div>
-                    </div>
-                  </>
+                <div className="inv-sum-row" style={styles.summaryRow}>
+                  <span className="inv-sum-label" style={styles.summaryLabel}>
+                    {isPurchase ? "Tài khoản chi tiền" : "Tài khoản nhận tiền"}
+                    {needAccount && <span style={{ color: C.red }}> *</span>}
+                  </span>
+                  <select
+                    style={{
+                      ...styles.select,
+                      ...(needAccount && !invoice.receiveAccountId ? { borderColor: C.red, background: "#fef2f2" } : {}),
+                    }}
+                    value={invoice.receiveAccountId || ""}
+                    disabled={locked}
+                    onChange={(e) => {
+                      markDirty();
+                      updateInvoice({ receiveAccountId: safeId(e.target.value) });
+                    }}
+                  >
+                    <option value="">-- Chưa chọn --</option>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.code} - {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {needAccount && !invoice.receiveAccountId && !locked && (
+                  <div style={{ fontSize: 12, color: C.red, marginTop: -2, marginBottom: 4, textAlign: "right" }}>
+                    {isPurchase ? "Đã trả tiền thì phải chọn quỹ / tài khoản chi." : "Đã thu tiền thì phải chọn quỹ / tài khoản nhận."}
+                  </div>
                 )}
+
+                {accountLoadError && <div style={{ ...styles.notice, ...styles.noticeError, marginTop: 6 }}>{accountLoadError}</div>}
+
+                <div style={{ borderTop: `1px dashed ${C.border}`, marginTop: 8, paddingTop: 4 }}>
+                  <div className="inv-sum-row" style={styles.summaryRow}>
+                    <span className="inv-sum-label" style={styles.summaryLabel}>{isPurchase ? "Đã trả" : "Đã thu"}</span>
+                    <span style={{ ...styles.summaryValue, color: C.green }}>{formatMoney(paidNormal)} đ</span>
+                  </div>
+
+                  <div className="inv-sum-row" style={styles.summaryRow}>
+                    <span className="inv-sum-label" style={{ ...styles.summaryLabel, fontWeight: 700, color: C.text }}>
+                      {isPurchase ? "Còn phải trả" : "Còn phải thu"}
+                    </span>
+                    <span
+                      style={{
+                        ...styles.summaryValue,
+                        fontSize: 16,
+                        color: isReturnedFull(invoice) ? "#6b7280" : debtNow > 0 ? C.red : C.text,
+                      }}
+                    >
+                      {formatMoney(debtNow)} đ
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -3850,12 +3940,13 @@ const InvoiceDetailPage: React.FC = () => {
                         <th style={{ textAlign: "right" }}>Số tiền áp vào HĐ</th>
                         <th style={{ textAlign: "right" }}>Tổng phiếu</th>
                         <th style={{ textAlign: "left" }}>Ghi chú</th>
+                        <th style={{ textAlign: "right" }}></th>
                       </tr>
                     </thead>
                     <tbody>
                       {paymentHistoryLoading && (
                         <tr>
-                          <td colSpan={5} style={{ color: C.muted }}>
+                          <td colSpan={6} style={{ color: C.muted }}>
                             Đang tải lịch sử...
                           </td>
                         </tr>
@@ -3863,7 +3954,7 @@ const InvoiceDetailPage: React.FC = () => {
 
                       {!paymentHistoryLoading && paymentHistoryRows.length === 0 && (
                         <tr>
-                          <td colSpan={5} style={{ color: C.muted, textAlign: "center", padding: 18 }}>
+                          <td colSpan={6} style={{ color: C.muted, textAlign: "center", padding: 18 }}>
                             Chưa có phiếu thanh toán nào được phân bổ cho hóa đơn này.
                           </td>
                         </tr>
@@ -3877,15 +3968,60 @@ const InvoiceDetailPage: React.FC = () => {
                           const note = p.note || "";
                           const timeStr = formatDateTimeDisplay(p.createdAt || p.date);
 
+                          const alloc = Number((p as any).allocatedAmount || 0);
+                          const isRefund = alloc < 0;
+                          const vStyle: React.CSSProperties = p.voided ? { color: C.muted, textDecoration: "line-through" } : {};
+
                           return (
-                            <tr key={p.id}>
-                              <td style={{ whiteSpace: "nowrap" }}>{timeStr}</td>
-                              <td>{accText || "-"}</td>
-                              <td style={{ textAlign: "right", fontWeight: 600 }}>
-                                {formatMoney((p as any).allocatedAmount || 0)} đ
+                            <tr key={p.id} style={p.voided ? { background: "#f8fafc" } : undefined}>
+                              <td style={{ whiteSpace: "nowrap", ...vStyle }}>{timeStr}</td>
+                              <td style={{ ...vStyle, ...(!p.account && !p.voided ? { color: C.red, fontWeight: 600 } : {}) }}>
+                                {p.account ? accText : "Chưa gán TK"}
                               </td>
-                              <td style={{ textAlign: "right" }}>{formatMoney(Number(p.amount || 0))} đ</td>
-                              <td>{note}</td>
+                              <td style={{ textAlign: "right", fontWeight: 600, ...vStyle }}>
+                                {isRefund ? "Hoàn " : ""}
+                                {formatMoney(Math.abs(alloc))} đ
+                              </td>
+                              <td style={{ textAlign: "right", ...vStyle }}>{formatMoney(Number(p.amount || 0))} đ</td>
+                              <td>
+                                {p.voided ? (
+                                  <span title={p.voidReason || ""}>
+                                    <span
+                                      style={{
+                                        display: "inline-block",
+                                        padding: "1px 8px",
+                                        borderRadius: 999,
+                                        background: "#fee2e2",
+                                        color: "#b91c1c",
+                                        fontSize: 11.5,
+                                        fontWeight: 700,
+                                        marginRight: 6,
+                                      }}
+                                    >
+                                      Đã huỷ
+                                    </span>
+                                    <span style={{ color: C.muted, fontSize: 12.5 }}>
+                                      {p.voidReason}
+                                      {p.voidedByName ? ` — ${p.voidedByName}` : ""}
+                                      {p.voidedAt ? `, ${formatDateTimeDisplay(p.voidedAt)}` : ""}
+                                    </span>
+                                  </span>
+                                ) : (
+                                  note
+                                )}
+                              </td>
+                              <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                                {!p.voided && canVoidPayment && (
+                                  <button
+                                    type="button"
+                                    className="inv-btn"
+                                    style={{ ...styles.secondarySmallBtn, height: 28, color: C.red, borderColor: "#fecaca" }}
+                                    onClick={() => handleVoidPayment(p as any)}
+                                  >
+                                    Huỷ phiếu
+                                  </button>
+                                )}
+                              </td>
                             </tr>
                           );
                         })}
@@ -4009,6 +4145,28 @@ const InvoiceDetailPage: React.FC = () => {
         }}
       />
 
+      <PinActionDialog
+        open={reopenPinOpen}
+        tone="danger"
+        title="Mở lại hoá đơn để sửa"
+        subtitle="Tồn kho của hoá đơn đã duyệt được hoàn lại, hoá đơn về Nháp để sửa. Duyệt lại thì tồn tính lại."
+        confirmLabel="Mở lại"
+        busyLabel="Đang mở lại…"
+        onClose={() => setReopenPinOpen(false)}
+        onSubmit={doReopenWithPin}
+      />
+
+      <VoidPaymentDialog
+        target={voidTarget}
+        onClose={() => setVoidTarget(null)}
+        onVoided={async () => {
+          setVoidTarget(null);
+          toastSuccess("Đã huỷ phiếu.");
+          await loadInvoiceIfNeeded();
+          await loadPaymentHistoryForInvoice();
+        }}
+      />
+
       <PromptModal
         open={promptOpen && !!promptCfg}
         title={promptCfg?.title || ""}
@@ -4017,6 +4175,7 @@ const InvoiceDetailPage: React.FC = () => {
         defaultValue={promptCfg?.defaultValue}
         confirmText={promptCfg?.confirmText}
         cancelText={promptCfg?.cancelText}
+        required={promptCfg?.required}
         busy={promptBusy}
         onClose={closePrompt}
         onConfirm={(v) => promptCfg?.onConfirm?.(v)}

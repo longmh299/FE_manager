@@ -770,7 +770,40 @@ const AuditLogsPage: React.FC = () => {
 
       {/* TABLE */}
       <div className={cardCls}>
-        <div className="overflow-auto">
+        {/* ✅ ĐIỆN THOẠI: mỗi dòng nhật ký 1 thẻ, bấm để xem chi tiết */}
+        <div className="divide-y divide-slate-100 md:hidden">
+          {loading ? (
+            <div className="px-4 py-6 text-slate-600">Đang tải...</div>
+          ) : rows.length === 0 ? (
+            <div className="px-4 py-6 text-slate-600">Không có dữ liệu.</div>
+          ) : (
+            rows.map((r: any) => {
+              const timeIso = String(r.createdAt || r.at || "");
+              const roleLabel = renderRoleLabel(r);
+              return (
+                <button key={r.id} type="button" onClick={() => openDetail(r.id)} className="block w-full px-3 py-3 text-left">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={chipColor(actionChipKind(r.action) as any)}>{actionVi(r.action)}</span>
+                    <span className="shrink-0 text-xs tabular-nums text-slate-500">
+                      {toTimeOnly(timeIso)} {toDateOnly(timeIso)}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-sm text-slate-700">
+                    {renderUserLabel(r)}
+                    {roleLabel ? <span className="text-slate-400"> ({roleVi(roleLabel)})</span> : null}
+                    <span className="text-slate-400">, </span>
+                    {entityVi(r.entity)}
+                  </div>
+                  {(r as any)?.meta?.reason ? (
+                    <div className="mt-0.5 truncate text-xs text-slate-600">Lý do: {String((r as any).meta.reason)}</div>
+                  ) : null}
+                </button>
+              );
+            })
+          )}
+        </div>
+
+        <div className="hidden overflow-auto md:block">
           <table className="min-w-[980px] w-full text-sm">
             <thead>
               <tr className="bg-slate-50 text-slate-700">

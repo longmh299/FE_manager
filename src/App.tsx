@@ -24,6 +24,8 @@ import CustomerDetailPage from "./pages/CustomerDetailPage";
 import InvoicePrintPage from "./pages/InvoicePrintPage";
 import InvoiceDetailPage from "./pages/InvoiceDetailPage";
 import ReceivablesReport from "./pages/ReceivablesReportPage";
+import PaymentsMissingAccountPage from "./pages/PaymentsMissingAccountPage";
+import CashbookPage from "./pages/CashbookPage";
 import SalesReturnsPage from "./pages/SalesReturnsPage";
 import SalesReturnFormPage from "./pages/SalesReturnFormPage";
 import LedgerPage from "./pages/LedgerPage";
@@ -142,6 +144,22 @@ const App: React.FC = () => {
           <Route path="reports/ledger" element={<LedgerPage />} />
           <Route path="reports/sales-ledger" element={<SalesLedgerReportPage />} />
           <Route path="payment-accounts" element={<PaymentAccountsPage />} />
+          <Route
+            path="cashbook"
+            element={
+              <RequireRole roles={["admin", "accountant"]}>
+                <CashbookPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="payments/missing-account"
+            element={
+              <RequireRole roles={["admin", "accountant"]}>
+                <PaymentsMissingAccountPage />
+              </RequireRole>
+            }
+          />
           <Route path="/me/sales" element={<MySalesDashboardPage />} />
           <Route path="audit-logs" element={<AuditLogsPage />} />
           <Route path="reports/stock-inout" element={<StockInOutReportPage />} />

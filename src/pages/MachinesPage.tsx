@@ -415,9 +415,9 @@ const MachinesPage: React.FC = () => {
   const pageMachines = machines.slice(startIndex, startIndex + PAGE_SIZE);
 
   return (
-    <div className="p-6 h-full flex gap-4">
-      {/* Cột trái: danh sách dòng máy */}
-      <div className="w-1/3 border rounded bg-white flex flex-col">
+    <div className="md:p-6 h-full flex flex-col gap-4 md:flex-row">
+      {/* Cột trái: danh sách dòng máy (điện thoại: xếp trên, chi tiết xếp dưới) */}
+      <div className="w-full md:w-1/3 border rounded bg-white flex flex-col">
         <div className="p-3 border-b flex items-center gap-2">
           <input
             className="flex-1 border rounded px-2 py-1 text-sm"

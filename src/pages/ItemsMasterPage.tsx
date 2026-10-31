@@ -182,9 +182,9 @@ const ItemsMasterPage: React.FC = () => {
           + Thêm hàng
         </button>
 
-        <div className="flex flex-col gap-1 text-xs">
+        <div className="flex w-full min-w-0 flex-col gap-1 text-xs md:w-auto">
           <div className="font-semibold mb-1">Import danh mục hàng (Excel)</div>
-          <div className="flex gap-2 items-center">
+          <div className="flex flex-wrap gap-2 items-center">
             <button
               type="button"
               onClick={handleDownloadTemplate}

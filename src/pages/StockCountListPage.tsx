@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api, { extractList } from "../api/client";
+import { useIsMobile } from "../hooks/uselsMobile";
 
 type Location = {
   id: string;
@@ -36,6 +37,7 @@ function isPeriodLockMessage(msg: string) {
 }
 
 const StockCountListPage: React.FC = () => {
+  const isMobile = useIsMobile(); // ✅ điện thoại: danh sách dạng thẻ
   const navigate = useNavigate();
 
   const [locations, setLocations] = useState<Location[]>([]);
@@ -367,6 +369,30 @@ const StockCountListPage: React.FC = () => {
           overflow: "hidden",
         }}
       >
+        {isMobile ? (
+          <div>
+            {loading && <div style={{ padding: 12, textAlign: "center" }}>Đang tải...</div>}
+            {!loading && rows.length === 0 && <div style={{ padding: 12, textAlign: "center" }}>Không có phiếu kiểm kê nào.</div>}
+            {!loading &&
+              rows.map((row) => (
+                <button
+                  key={row.id}
+                  type="button"
+                  onClick={() => navigate(`/stock-counts/${row.id}`)}
+                  style={{ display: "block", width: "100%", textAlign: "left", padding: 12, borderTop: "1px solid #edf2f7", background: "#fff", cursor: "pointer" }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                    <span style={{ fontWeight: 700, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.refNo || row.id}</span>
+                    {renderStatusBadge(row.status)}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+                    {row.location ? `${row.location.code} - ${row.location.name}` : row.locationId} · {new Date(row.createdAt).toLocaleString("vi-VN")}
+                  </div>
+                  {row.note ? <div style={{ fontSize: 13, marginTop: 4 }}>{row.note}</div> : null}
+                </button>
+              ))}
+          </div>
+        ) : (
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead style={{ backgroundColor: "#f7fafc" }}>
             <tr>
@@ -427,6 +453,7 @@ const StockCountListPage: React.FC = () => {
               ))}
           </tbody>
         </table>
+        )}
       </div>
 
       {/* Pagination */}

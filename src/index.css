@@ -50,6 +50,17 @@ body {
   }
 }
 
+/* ✅ Bảng rộng hơn màn hình thì chỉ KHUNG CHỨA BẢNG cuộn ngang, không kéo cả trang
+   (trước đây cả trang vuốt ngang, đầu trang và bộ lọc trôi theo). Khung nào bọc trực
+   tiếp 1 bảng sẽ tự thành vùng cuộn ngang riêng. */
+@media (max-width: 767px) {
+  div:has(> table),
+  section:has(> table) {
+    overflow-x: auto !important;
+    max-width: 100%;
+  }
+}
+
 /* ============================================================
    ✅ Nút bấm/ô nhập to hơn trên màn hình cảm ứng — chuẩn khuyến nghị
    của Apple/Google là tối thiểu 44x44px để bấm bằng ngón tay không

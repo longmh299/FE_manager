@@ -1,6 +1,7 @@
 // src/pages/UserManagementPage.tsx
 import React, { useEffect, useState } from "react";
 import { api } from "../api/client";
+import { useAuth } from "../context/AuthContext";
 
 type UserRole = "staff" | "accountant" | "admin";
 
@@ -9,6 +10,7 @@ interface User {
   username: string;
   role: UserRole;
   createdAt: string;
+  hasPin?: boolean; // ✅ đã đặt mật khẩu cấp 2 chưa
 }
 
 const roleLabels: Record<UserRole, string> = {
@@ -28,6 +30,7 @@ const UserManagementPage: React.FC = () => {
   const [openCreate, setOpenCreate] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
   const [newUsername, setNewUsername] = useState("");
+  const { user: me } = useAuth(); // ✅ không cho tự xoá mật khẩu cấp 2 của chính mình
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState<UserRole>("staff");
 
@@ -60,6 +63,21 @@ const UserManagementPage: React.FC = () => {
     } catch (err: any) {
       setMessageKind("error");
       setMessage(err?.response?.data?.message || "Không cập nhật được quyền user.");
+    }
+  };
+
+  // ✅ admin xoá mật khẩu cấp 2 khi người dùng quên; người đó tự đặt lại lần huỷ phiếu kế tiếp
+  const handleResetPin = async (u: User) => {
+    if (!window.confirm(`Xoá mật khẩu cấp 2 của ${u.username}? Người này phải đặt lại trước khi làm các thao tác cần mật khẩu cấp 2.`)) return;
+    try {
+      setMessage(null);
+      await api.delete(`/auth/users/${u.id}/pin`);
+      setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, hasPin: false } : x)));
+      setMessageKind("success");
+      setMessage(`Đã xoá mật khẩu cấp 2 của ${u.username}.`);
+    } catch (err: any) {
+      setMessageKind("error");
+      setMessage(err?.response?.data?.message || "Không xoá được mật khẩu cấp 2.");
     }
   };
 
@@ -140,13 +158,50 @@ const UserManagementPage: React.FC = () => {
       {loading ? (
         <div className="text-sm text-slate-600">Đang tải...</div>
       ) : (
-        <div className="overflow-x-auto">
+        <>
+        {/* ✅ ĐIỆN THOẠI: mỗi người 1 thẻ */}
+        <div className="space-y-2 md:hidden">
+          {users.length === 0 && <div className="py-4 text-center text-xs text-slate-500">Chưa có user nào.</div>}
+          {users.map((u) => (
+            <div key={u.id} className="rounded-xl border border-slate-200 bg-white p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate font-semibold text-slate-900">{u.username}</div>
+                  <div className="text-xs text-slate-500">Tạo {new Date(u.createdAt).toLocaleDateString("vi-VN")}</div>
+                </div>
+                <select
+                  value={u.role}
+                  onChange={(e) => handleChangeRole(u.id, e.target.value as UserRole)}
+                  className="rounded-lg border px-2 text-sm"
+                  aria-label={`Quyền của ${u.username}`}
+                >
+                  <option value="staff">Nhân viên</option>
+                  <option value="accountant">Kế toán</option>
+                  <option value="admin">Quản trị</option>
+                </select>
+              </div>
+              <div className="mt-2 flex items-center justify-between text-xs">
+                <span className="text-slate-500">
+                  Mật khẩu cấp 2: {u.hasPin ? <span className="text-teal-700">Đã đặt</span> : <span className="text-slate-400">Chưa đặt</span>}
+                </span>
+                {u.hasPin && String(u.id) !== String((me as any)?.id) && (
+                  <button type="button" onClick={() => handleResetPin(u)} className="rounded-lg border border-slate-200 px-3 text-slate-600">
+                    Xoá mật khẩu cấp 2
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="hidden overflow-x-auto md:block">
           <table className="min-w-full text-sm border border-slate-200 bg-white rounded">
             <thead className="bg-slate-100">
               <tr>
                 <th className="px-3 py-2 text-left border-b border-slate-200">Username</th>
                 <th className="px-3 py-2 text-left border-b border-slate-200">Role</th>
                 <th className="px-3 py-2 text-left border-b border-slate-200">Ngày tạo</th>
+                <th className="px-3 py-2 text-left border-b border-slate-200">Mật khẩu cấp 2</th>
                 <th className="px-3 py-2 text-left border-b border-slate-200">Hành động</th>
               </tr>
             </thead>
@@ -161,6 +216,24 @@ const UserManagementPage: React.FC = () => {
                   </td>
                   <td className="px-3 py-2 border-b border-slate-100 text-xs text-slate-500">
                     {new Date(u.createdAt).toLocaleString()}
+                  </td>
+                  <td className="px-3 py-2 border-b border-slate-100 text-xs">
+                    {u.hasPin ? (
+                      <span className="inline-flex items-center gap-2">
+                        <span className="text-teal-700">Đã đặt</span>
+                        {String(u.id) !== String((me as any)?.id) && (
+                        <button
+                          type="button"
+                          onClick={() => handleResetPin(u)}
+                          className="rounded border border-slate-200 px-2 py-0.5 text-slate-600 hover:bg-slate-50"
+                        >
+                          Xoá
+                        </button>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="text-slate-400">Chưa đặt</span>
+                    )}
                   </td>
                   <td className="px-3 py-2 border-b border-slate-100">
                     <select
@@ -178,7 +251,7 @@ const UserManagementPage: React.FC = () => {
 
               {users.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-3 py-4 text-center text-xs text-slate-500">
+                  <td colSpan={5} className="px-3 py-4 text-center text-xs text-slate-500">
                     Chưa có user nào.
                   </td>
                 </tr>
@@ -186,6 +259,7 @@ const UserManagementPage: React.FC = () => {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {/* ===== Create User Modal ===== */}
