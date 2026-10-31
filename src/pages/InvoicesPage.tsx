@@ -225,14 +225,6 @@ function resolvePaymentStatus(inv: InvoiceListItem): PaymentStatus {
   return derivePaymentStatus(inv);
 }
 
-function hasAnyReturnData(inv: InvoiceListItem) {
-  if (inv.type !== "SALES") return false;
-  if (inv.returnMeta != null) return true;
-  if (inv.netTotal != null) return true;
-  if (inv.returnedTotal != null && clamp0(inv.returnedTotal) > 0) return true;
-  return false;
-}
-
 /** ✅ Sort key for invoice code: numeric trailing digits if possible */
 function invoiceCodeToSortParts(code: string) {
   const s = String(code ?? "").trim();
