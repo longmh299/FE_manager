@@ -1,354 +1,252 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
+
+type EditField = "phone" | "email" | "address" | "taxCode";
+
+const FIELD_LABEL: Record<EditField, string> = {
+  phone: "Số điện thoại",
+  email: "Email",
+  address: "Địa chỉ",
+  taxCode: "Mã số thuế",
+};
+
+const fmtMoney = (n: number) => `${Number(n || 0).toLocaleString("vi-VN")} đ`;
+const fmtDate = (d?: string | null) => (d ? new Date(d).toLocaleDateString("vi-VN") : "");
 
 const CustomerDetailPage: React.FC = () => {
   const { id } = useParams();
-  const navigate = useNavigate();
 
   const [data, setData] = useState<any>(null);
-  const [activityModal, setActivityModal] = useState<any>(null);
-  const [editModal, setEditModal] = useState<any>(null);
-  const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null); // 🔥 NEW
-  const [invoiceTab, setInvoiceTab] = useState<"approved" | "pending">("approved"); // 🔥 NEW
+  const [loadError, setLoadError] = useState("");
+  const [editModal, setEditModal] = useState<{ field: EditField; value: string } | null>(null);
+  const [saveError, setSaveError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null);
+  const [invoiceTab, setInvoiceTab] = useState<"approved" | "pending">("approved");
 
   const fetchData = async () => {
+    setLoadError("");
     try {
       const res = await api.get(`/customers/${id}`);
       setData(res.data.data);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setLoadError(err?.response?.data?.message || "Không tải được thông tin khách hàng.");
     }
   };
 
   useEffect(() => {
     fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const submitActivity = async () => {
-    try {
-      await api.post(`/customers/${id}/activity`, activityModal);
-      setActivityModal(null);
-      fetchData();
-    } catch (err) {
-      console.error(err);
-    }
+  const openEdit = (field: EditField, value?: string) => {
+    setSaveError("");
+    setEditModal({ field, value: value || "" });
   };
 
-  const openEdit = (field: string, value: string) => {
-    setEditModal({
-      field,
-      value: value || "",
-    });
-  };
-
-  const handleUpdateField = async () => {
+  const handleUpdateField = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editModal) return;
+    setSaving(true);
+    setSaveError("");
     try {
-      await api.put(`/customers/${id}`, {
-        [editModal.field]: editModal.value,
-      });
-
+      await api.put(`/customers/${id}`, { [editModal.field]: editModal.value });
       setEditModal(null);
       fetchData();
     } catch (err) {
-      alert("Update thất bại");
+      setSaveError(`Chưa lưu được ${FIELD_LABEL[editModal.field].toLowerCase()}. Kiểm tra lại rồi bấm Lưu lần nữa.`);
+    } finally {
+      setSaving(false);
     }
   };
 
-  if (!data) return <div className="p-6">Loading...</div>;
+  const backLink = (
+    <Link to="/partners" className="text-sm font-medium text-slate-500 hover:text-blue-700">
+      Về danh sách khách hàng
+    </Link>
+  );
+
+  if (loadError) {
+    return (
+      <div className="p-4 space-y-3 text-sm">
+        {backLink}
+        <p className="text-slate-700">{loadError}</p>
+      </div>
+    );
+  }
+  if (!data) return <div className="p-4 text-sm text-slate-500">Đang tải thông tin khách hàng...</div>;
+
+  const invoices: any[] = data.invoices || [];
+  // Chỉ 2 nhóm: đã duyệt (mua thật) và chờ duyệt (nháp/chờ duyệt). Hoá đơn huỷ/từ chối không tính.
+  const approved = invoices.filter((inv) => inv.status === "APPROVED");
+  const pending = invoices.filter((inv) => inv.status === "SUBMITTED" || inv.status === "DRAFT");
+  const shown = invoiceTab === "approved" ? approved : pending;
+  const machineLines = approved.flatMap((inv) => inv.lines || []);
+  const approvedTotal = approved.reduce((s, inv) => s + Number(inv.total || 0), 0);
+
+  const contactRows: Array<{ field: EditField; label: string; value?: string }> = [
+    { field: "phone", label: "Số điện thoại", value: data.phone },
+    { field: "email", label: "Email", value: data.email },
+    { field: "taxCode", label: "Mã số thuế", value: data.taxCode },
+    { field: "address", label: "Địa chỉ", value: data.address },
+  ];
+
+  const tabClass = (active: boolean) =>
+    `flex-1 md:flex-none rounded-md px-3 py-1.5 text-sm font-medium ${
+      active ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"
+    }`;
 
   return (
-    <div className="p-6 space-y-6 text-sm">
-      {/* HEADER */}
-      <div className="flex justify-between items-center">
-        <h2 className="text-xl font-semibold">{data.name}</h2>
-        <button
-          onClick={() => navigate("/partners")}
-          className="text-xs bg-black text-white px-3 py-1 rounded"
-        >
-          ← Quay lại
-        </button>
-      </div>
-
-      {/* INFO */}
-      <div className="bg-white p-4 rounded-xl shadow space-y-3">
-        <div className="flex justify-between items-center">
-          <div>
-            📞{" "}
-            <span className={!data.phone ? "text-red-500" : ""}>
-              {data.phone || "Chưa có SĐT"}
-            </span>
-          </div>
-          <button
-            className="text-xs text-blue-600"
-            onClick={() => openEdit("phone", data.phone)}
-          >
-            {data.phone ? "Sửa" : "Bổ sung"}
-          </button>
-        </div>
-
-        <div className="flex justify-between items-center">
-          <div>
-            ✉️{" "}
-            <span className={!data.email ? "text-red-500" : ""}>
-              {data.email || "Chưa có email"}
-            </span>
-          </div>
-          <button
-            className="text-xs text-blue-600"
-            onClick={() => openEdit("email", data.email)}
-          >
-            {data.email ? "Sửa" : "Bổ sung"}
-          </button>
-        </div>
-
-        <div className="flex justify-between items-center">
-          <div>🏢 {data.address || "-"}</div>
-          <button
-            className="text-xs text-blue-600"
-            onClick={() => openEdit("address", data.address)}
-          >
-            Sửa
-          </button>
-        </div>
-
-        <div className="flex justify-between items-center">
-          <div>
-            🧾 MST:{" "}
-            <span className={!data.taxCode ? "text-red-500" : ""}>
-              {data.taxCode || "Chưa có"}
-            </span>
-          </div>
-          <button
-            className="text-xs text-blue-600"
-            onClick={() => openEdit("taxCode", data.taxCode)}
-          >
-            {data.taxCode ? "Sửa" : "Bổ sung"}
-          </button>
-        </div>
-      </div>
-
-      {/* MÁY */}
-      <div className="bg-white p-4 rounded-xl shadow">
-        <h3 className="font-semibold mb-2">Máy đang sử dụng</h3>
-
-        {!data.invoices?.some((inv: any) => inv.status === "APPROVED" && inv.lines?.length) && (
-          <div className="text-gray-400">Chưa có dữ liệu</div>
-        )}
-
-        {data.invoices
-          ?.filter((inv: any) => inv.status === "APPROVED")
-          .flatMap((inv: any) =>
-            inv.lines?.map((line: any) => (
-              <div key={line.id} className="border-b py-2">
-                <div className="font-medium">
-                  {line.item?.name || "Không rõ máy"}
-                </div>
-              </div>
-            ))
+    <div className="p-4 space-y-4 text-sm">
+      <div>
+        {backLink}
+        <div className="mt-2 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <h1 className="text-xl font-semibold text-slate-900">{data.name}</h1>
+          {data.phone && (
+            <div className="flex gap-2">
+              <a href={`tel:${String(data.phone).replace(/\s/g, "")}`} className="flex-1 rounded-md bg-blue-600 px-5 py-2 text-center font-semibold text-white hover:bg-blue-700 md:flex-none">
+                Gọi
+              </a>
+              <a
+                href={`https://zalo.me/${String(data.phone).replace(/\s/g, "")}`}
+                target="_blank"
+                rel="noreferrer"
+                className="flex-1 rounded-md border border-slate-300 bg-white px-5 py-2 text-center font-semibold text-slate-700 hover:border-blue-500 hover:text-blue-700 md:flex-none"
+              >
+                Zalo
+              </a>
+            </div>
           )}
-      </div>
-
-      <div className="bg-white p-4 rounded-xl shadow">
-        <h3 className="font-semibold mb-3">Liên hệ nhanh</h3>
-
-        {!data.phone ? (
-          <div className="text-red-500 text-sm">
-            ⚠️ Khách chưa có số điện thoại
-          </div>
-        ) : (
-          <div className="flex gap-3">
-            {/* CALL */}
-            <a
-              href={`tel:${data.phone}`}
-              className="flex-1 text-center bg-green-500 hover:bg-green-600 text-white py-2 rounded-lg text-sm font-medium"
-            >
-              📞 Gọi
-            </a>
-
-            {/* ZALO */}
-            <a
-              href={`https://zalo.me/${data.phone}`}
-              target="_blank"
-              rel="noreferrer"
-              className="flex-1 text-center bg-blue-500 hover:bg-blue-600 text-white py-2 rounded-lg text-sm font-medium"
-            >
-              💬 Zalo
-            </a>
-          </div>
-        )}
-      </div>
-      {/* 🔥 LỊCH SỬ MUA (UPGRADE) */}
-      <div className="bg-white p-4 rounded-xl shadow">
-        <h3 className="font-semibold mb-2">Lịch sử mua</h3>
-
-        {/* Tab Đã duyệt / Chờ duyệt */}
-        <div className="flex gap-2 mb-3">
-          <button
-            onClick={() => setInvoiceTab("approved")}
-            className={`px-3 py-1 rounded-lg text-xs font-medium ${
-              invoiceTab === "approved"
-                ? "bg-black text-white"
-                : "bg-gray-100 text-gray-600"
-            }`}
-          >
-            Đã duyệt
-          </button>
-          <button
-            onClick={() => setInvoiceTab("pending")}
-            className={`px-3 py-1 rounded-lg text-xs font-medium ${
-              invoiceTab === "pending"
-                ? "bg-black text-white"
-                : "bg-gray-100 text-gray-600"
-            }`}
-          >
-            Chờ duyệt
-            {data.invoices?.filter((inv: any) => inv.status === "SUBMITTED" || inv.status === "DRAFT").length > 0 && (
-              <span className="ml-1 bg-orange-500 text-white rounded-full px-1.5">
-                {data.invoices.filter((inv: any) => inv.status === "SUBMITTED" || inv.status === "DRAFT").length}
-              </span>
-            )}
-          </button>
         </div>
+      </div>
 
-        {(() => {
-          // Chỉ 2 nhóm: đã duyệt (mua thật) và chờ duyệt (nháp/chờ duyệt).
-          // Hóa đơn đã hủy/từ chối không tính vào "lịch sử mua" ở cả 2 tab.
-          const filtered = (data.invoices || []).filter((inv: any) =>
-            invoiceTab === "approved"
-              ? inv.status === "APPROVED"
-              : inv.status === "SUBMITTED" || inv.status === "DRAFT"
-          );
-
-          if (filtered.length === 0) {
-            return (
-              <div className="text-gray-400">
-                {invoiceTab === "approved" ? "Chưa có hóa đơn đã duyệt" : "Không có đơn nào đang chờ duyệt"}
-              </div>
-            );
-          }
-
-          return filtered.map((inv: any) => {
-            const isOpen = openInvoiceId === inv.id;
-
-            return (
-              <div key={inv.id} className="border-b py-2">
-                {/* HEADER */}
-                <div
-                  className="flex justify-between cursor-pointer"
-                  onClick={() => setOpenInvoiceId(isOpen ? null : inv.id)}
-                >
-                  <div>
-                    <div className="font-medium flex items-center gap-2">
-                      {inv.code || "Hóa đơn"}
-                      {invoiceTab === "pending" && (
-                        <span className="text-[10px] bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded">
-                          {inv.status === "DRAFT" ? "Nháp" : "Chờ duyệt"}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      {new Date(inv.issueDate).toLocaleDateString()}
-                    </div>
+      <div className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)] lg:items-start">
+        <div className="space-y-4">
+          <section className="rounded-md bg-white p-4 shadow-sm">
+            <h2 className="mb-1 font-semibold text-slate-900">Thông tin liên hệ</h2>
+            <dl>
+              {contactRows.map((r) => (
+                <div key={r.field} className="flex items-start justify-between gap-3 border-b border-slate-100 py-2.5 last:border-b-0">
+                  <div className="min-w-0">
+                    <dt className="text-xs text-slate-500">{r.label}</dt>
+                    <dd className={`mt-0.5 break-words ${r.value ? "text-slate-900" : "text-amber-700"}`}>{r.value || "Chưa có"}</dd>
                   </div>
-
-                  <div className="font-semibold">
-                    {Number(inv.total).toLocaleString("vi-VN")} đ
-                  </div>
+                  <button type="button" className="shrink-0 font-medium text-blue-700 hover:underline" onClick={() => openEdit(r.field, r.value)}>
+                    {r.value ? "Sửa" : "Bổ sung"}
+                  </button>
                 </div>
+              ))}
+            </dl>
+          </section>
 
-                {/* 🔥 EXPAND */}
-                {isOpen && (
-                  <div className="mt-2 pl-3 border-l space-y-1 text-sm">
-                    {inv.lines?.map((line: any) => (
-                      <div key={line.id} className="flex justify-between">
-                        <div>{line.item?.name || "Không rõ máy"}</div>
-                        <div className="text-gray-500">x{line.qty || 1}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          });
-        })()}
-      </div>
-
-      {/* MODALS giữ nguyên */}
-      {activityModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center">
-          <div className="bg-white p-4 rounded w-[320px]">
-            <select
-              value={activityModal.type}
-              onChange={(e) =>
-                setActivityModal({
-                  ...activityModal,
-                  type: e.target.value,
-                })
-              }
-              className="w-full border mb-2"
-            >
-              <option value="CALL">Gọi</option>
-              <option value="MESSAGE">Nhắn</option>
-              <option value="VISIT">Gặp</option>
-              <option value="NOTE">Ghi chú</option>
-            </select>
-
-            <textarea
-              value={activityModal.content}
-              onChange={(e) =>
-                setActivityModal({
-                  ...activityModal,
-                  content: e.target.value,
-                })
-              }
-              className="w-full border mb-2"
-            />
-
-            <button
-              onClick={submitActivity}
-              className="w-full bg-black text-white py-1"
-            >
-              Lưu
-            </button>
-          </div>
+          <section className="rounded-md bg-white p-4 shadow-sm">
+            <h2 className="mb-1 font-semibold text-slate-900">Máy đang sử dụng</h2>
+            {machineLines.length === 0 ? (
+              <p className="py-2 text-slate-500">Chưa có máy nào. Máy sẽ hiện ở đây khi có hoá đơn được duyệt.</p>
+            ) : (
+              <ul className="max-h-72 overflow-auto">
+                {machineLines.map((line: any) => (
+                  <li key={line.id} className="border-b border-slate-100 py-2 text-slate-900 last:border-b-0">
+                    {line.item?.name || "Không rõ máy"}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         </div>
-      )}
 
-      {editModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white p-5 rounded-xl w-[320px] space-y-3">
-            <h3 className="font-semibold capitalize">
-              Sửa {editModal.field}
-            </h3>
-
-            <input
-              value={editModal.value}
-              onChange={(e) =>
-                setEditModal({
-                  ...editModal,
-                  value: e.target.value,
-                })
-              }
-              className="w-full border rounded px-3 py-2 text-sm"
-            />
-
-            <div className="flex justify-end gap-2">
-              <button
-                className="px-3 py-1 text-sm bg-gray-100 rounded"
-                onClick={() => setEditModal(null)}
-              >
-                Huỷ
+        <section className="rounded-md bg-white shadow-sm">
+          <div className="flex flex-col gap-3 border-b border-slate-200 p-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="font-semibold text-slate-900">Lịch sử mua</h2>
+              <p className="mt-0.5 tabular-nums text-slate-500">
+                {approved.length} hoá đơn đã duyệt, tổng <b className="font-semibold text-slate-900">{fmtMoney(approvedTotal)}</b>
+              </p>
+            </div>
+            <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-0.5" role="group" aria-label="Trạng thái hoá đơn">
+              <button type="button" aria-pressed={invoiceTab === "approved"} onClick={() => setInvoiceTab("approved")} className={tabClass(invoiceTab === "approved")}>
+                Đã duyệt
               </button>
-
-              <button
-                className="px-3 py-1 text-sm bg-blue-600 text-white rounded"
-                onClick={handleUpdateField}
-              >
-                Lưu
+              <button type="button" aria-pressed={invoiceTab === "pending"} onClick={() => setInvoiceTab("pending")} className={tabClass(invoiceTab === "pending")}>
+                Chờ duyệt
+                {pending.length > 0 && (
+                  <span className="ml-1.5 rounded-full bg-orange-500 px-1.5 text-xs font-semibold tabular-nums text-white">{pending.length}</span>
+                )}
               </button>
             </div>
           </div>
+
+          {shown.length === 0 && (
+            <p className="px-4 py-8 text-center text-slate-500">
+              {invoiceTab === "approved" ? "Chưa có hoá đơn đã duyệt." : "Không có hoá đơn nào đang chờ duyệt."}
+            </p>
+          )}
+
+          {shown.map((inv: any) => {
+            const isOpen = openInvoiceId === inv.id;
+            return (
+              <div key={inv.id} className="border-b border-slate-100 last:border-b-0">
+                <button
+                  type="button"
+                  aria-expanded={isOpen}
+                  onClick={() => setOpenInvoiceId(isOpen ? null : inv.id)}
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-600"
+                >
+                  <span aria-hidden="true" className={`text-slate-400 transition-transform motion-reduce:transition-none ${isOpen ? "rotate-90" : ""}`}>
+                    ▸
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2 font-medium text-slate-900">
+                      {inv.code || "Hoá đơn"}
+                      {invoiceTab === "pending" && (
+                        <span className="rounded bg-orange-100 px-1.5 py-0.5 text-xs text-orange-700">{inv.status === "DRAFT" ? "Nháp" : "Chờ duyệt"}</span>
+                      )}
+                    </span>
+                    <span className="block text-xs tabular-nums text-slate-500">{fmtDate(inv.issueDate)}</span>
+                  </span>
+                  <span className="shrink-0 font-semibold tabular-nums text-slate-900">{fmtMoney(Number(inv.total))}</span>
+                </button>
+
+                {isOpen && (
+                  <ul className="space-y-1 bg-slate-50 px-4 py-2.5 pl-10">
+                    {inv.lines?.map((line: any) => (
+                      <li key={line.id} className="flex justify-between gap-4">
+                        <span className="min-w-0 text-slate-800">{line.item?.name || "Không rõ máy"}</span>
+                        <span className="shrink-0 tabular-nums text-slate-500">x{Number(line.qty || 1)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            );
+          })}
+        </section>
+      </div>
+
+      {editModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <form onSubmit={handleUpdateField} className="w-full max-w-sm space-y-3 rounded-xl bg-white p-5 shadow-xl" role="dialog" aria-modal="true">
+            <label className="block">
+              <span className="mb-1.5 block font-semibold text-slate-900">{FIELD_LABEL[editModal.field]}</span>
+              <input
+                autoFocus
+                value={editModal.value}
+                onChange={(e) => setEditModal({ ...editModal, value: e.target.value })}
+                className="w-full rounded-md border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </label>
+            {saveError && <p className="text-rose-700">{saveError}</p>}
+            <div className="flex justify-end gap-2">
+              <button type="button" className="rounded-md border border-slate-300 px-3 py-2 font-medium text-slate-700 hover:bg-slate-50" onClick={() => setEditModal(null)}>
+                Huỷ
+              </button>
+              <button type="submit" disabled={saving} className="rounded-md bg-blue-600 px-3 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-60">
+                {saving ? "Đang lưu..." : "Lưu"}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

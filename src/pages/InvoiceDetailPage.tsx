@@ -444,6 +444,71 @@ function highlightMatches(original: string, tokens: string[]): React.ReactNode {
   return nodes;
 }
 
+// ✅ Tô đậm phần khớp trong gợi ý khách hàng: không dấu, không phân biệt hoa/thường,
+// và SĐT / MST có dấu cách, dấu chấm vẫn khớp ("098642" tô được "0986 426 640").
+function highlightPartnerField(original: string, query: string): React.ReactNode {
+  const q = normalizeVN(query);
+  if (!original || !q) return original;
+
+  // Giữ nguyên độ dài để vị trí tìm được áp thẳng lên chuỗi gốc
+  const text = original.normalize("NFC");
+  const chars = Array.from(text, (c) => {
+    const lower = c.toLowerCase();
+    const plain = VN_DIACRITIC_MAP[lower] || lower;
+    return plain.length === 1 ? plain : c;
+  });
+  const plainText = chars.join("");
+
+  const ranges: Array<[number, number]> = [];
+  const addAll = (haystack: string, needle: string, toRange: (at: number) => [number, number]) => {
+    if (!needle) return;
+    for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + needle.length)) {
+      ranges.push(toRange(at));
+    }
+  };
+
+  for (const token of q.split(" ")) {
+    addAll(plainText, token, (at) => [at, at + token.length]);
+  }
+
+  // Cùng ngưỡng 4 ký tự với bộ lọc gợi ý ở trên
+  const compactQuery = compactKey(q);
+  if (compactQuery.length >= 4) {
+    const positions: number[] = [];
+    chars.forEach((c, i) => {
+      if (/[a-z0-9]/.test(c)) positions.push(i);
+    });
+    const compactText = positions.map((i) => chars[i]).join("");
+    addAll(compactText, compactQuery, (at) => [positions[at], positions[at + compactQuery.length - 1] + 1]);
+  }
+  if (ranges.length === 0) return text;
+
+  ranges.sort((a, b) => a[0] - b[0]);
+  const nodes: React.ReactNode[] = [];
+  let cursor = 0;
+  let open: [number, number] | null = null;
+  const flush = () => {
+    if (!open) return;
+    if (open[0] > cursor) nodes.push(text.slice(cursor, open[0]));
+    nodes.push(
+      <b key={open[0]} style={{ fontWeight: 700, color: "#1d4ed8" }}>
+        {text.slice(open[0], open[1])}
+      </b>
+    );
+    cursor = open[1];
+  };
+  for (const r of ranges) {
+    if (open && r[0] <= open[1]) open[1] = Math.max(open[1], r[1]);
+    else {
+      flush();
+      open = [r[0], r[1]];
+    }
+  }
+  flush();
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return nodes;
+}
+
 function normalizeDateForInput(raw?: string): string {
   if (!raw) return "";
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
@@ -2705,14 +2770,14 @@ const InvoiceDetailPage: React.FC = () => {
 
   const locked = !canEdit;
 
-  // ✅ FIX: tìm không dấu, theo tên + mã + MST + SĐT (trước: phải gõ đúng dấu, chỉ theo tên)
+  // ✅ FIX: tìm không dấu, theo tên + MST + SĐT (trước: phải gõ đúng dấu, chỉ theo tên)
   const partnerSuggestions = (() => {
     const q = normalizeVN(invoice.partnerName || "");
     if (!q) return [];
     const tokens = q.split(" ").filter(Boolean);
     const qc = compactKey(q);
     return partners
-      .map((p) => ({ p, hay: partnerHay(p) }))
+      .map((p) => ({ p, hay: partnerHay({ ...p, code: undefined }) })) // mã khách là số ngẫu nhiên, không tìm theo mã để khỏi ra dòng lạ
       .filter(({ p, hay }) => tokens.every((t) => hay.includes(t)) || (qc.length >= 4 && (compactKey(p.taxCode || "") + " " + compactKey(p.phone || "")).includes(qc)))
       .sort((a, b) => {
         const sc = (x: { p: Partner; hay: string }) =>
@@ -3067,9 +3132,20 @@ const InvoiceDetailPage: React.FC = () => {
                             selectPartner(p);
                           }}
                         >
-                          <div style={{ fontWeight: 600 }}>{p.name}</div>
+                          {/* tên để đậm vừa để phần khớp tô đậm nổi lên */}
+                          <div style={{ fontWeight: 500 }}>{highlightPartnerField(p.name, invoice.partnerName)}</div>
                           <div style={{ fontSize: 12, color: C.muted }}>
-                            {[p.code, p.taxCode ? `MST ${p.taxCode}` : "", p.phone].filter(Boolean).join(" · ")}
+                            {[
+                              p.taxCode ? <>MST {highlightPartnerField(p.taxCode, invoice.partnerName)}</> : null,
+                              p.phone ? highlightPartnerField(p.phone, invoice.partnerName) : null,
+                            ]
+                              .filter(Boolean)
+                              .map((part, i) => (
+                                <React.Fragment key={i}>
+                                  {i > 0 ? " · " : ""}
+                                  {part}
+                                </React.Fragment>
+                              ))}
                           </div>
                         </div>
                       ))}

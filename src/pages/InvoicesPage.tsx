@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import api from "../api/client";
+import { useAuth } from "../context/AuthContext";
 import { ToastHost, useToast } from "../components/Toast";
 import InvoicePayDialog, { type PayAccount } from "../components/InvoicePayDialog";
 import { PinActionDialog } from "../components/SecondPassword"; // ✅ mở lại HĐ đã duyệt cần mật khẩu cấp 2
@@ -358,6 +359,10 @@ const InvoicesPage: React.FC = () => {
     window.scrollTo({ top: 0, behavior: smooth ? "smooth" : "auto" });
   };
 
+  // ✅ staff: danh sách luôn là hoá đơn bán, bộ lọc chỉ còn ngày (kể cả khi mở link có ?type=PURCHASE)
+  const { user: authUser } = useAuth();
+  const staffSalesOnly = authUser?.role === "staff";
+
   const readQuery = () => {
     const q = sp.get("q") ?? "";
     const from = sp.get("from") ?? "";
@@ -365,8 +370,12 @@ const InvoicesPage: React.FC = () => {
     const type = (sp.get("type") ?? "SALES") as InvoiceTypeFilter;
     const src = (sp.get("src") ?? "INVOICE") as SourceFilter;
 
-    const safeType: InvoiceTypeFilter = type === "PURCHASE" || type === "SALES" || type === "" ? type : "SALES";
-    const safeSrc: SourceFilter = src === "ADJUST" ? "ADJUST" : "INVOICE";
+    const safeType: InvoiceTypeFilter = staffSalesOnly
+      ? "SALES"
+      : type === "PURCHASE" || type === "SALES" || type === ""
+        ? type
+        : "SALES";
+    const safeSrc: SourceFilter = !staffSalesOnly && src === "ADJUST" ? "ADJUST" : "INVOICE";
 
     const view: "all" | "debt" = sp.get("view") === "debt" ? "debt" : "all";
     return { q, from, to, type: safeType, src: safeSrc, view };
@@ -1174,6 +1183,7 @@ const InvoicesPage: React.FC = () => {
 
           {/* ✅ mobile: đổi nhanh loại + mở bộ lọc */}
           <div className="flex items-center gap-2 md:hidden">
+            {!staffSalesOnly && (
             <div className="inline-flex flex-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5" role="group" aria-label="Loại hoá đơn">
               {([["SALES", "Bán"], ["PURCHASE", "Nhập"], ["", "Tất cả"]] as Array<[InvoiceTypeFilter, string]>).map(([v, l]) => (
                 <button
@@ -1189,11 +1199,12 @@ const InvoicesPage: React.FC = () => {
                 </button>
               ))}
             </div>
+            )}
             <button
               type="button"
               onClick={() => setFiltersOpen((v) => !v)}
               aria-expanded={filtersOpen}
-              className={`!min-h-[40px] shrink-0 rounded-lg border px-3 text-sm font-medium ${
+              className={`!min-h-[40px] ${staffSalesOnly ? "flex-1" : "shrink-0"} rounded-lg border px-3 text-sm font-medium ${
                 filtersOpen || activeFilterCount ? "border-slate-800 text-slate-900" : "border-slate-300 text-slate-600"
               }`}
             >
@@ -1222,6 +1233,8 @@ const InvoicesPage: React.FC = () => {
               />
             </div>
 
+            {!staffSalesOnly && (
+              <>
             {/* ✅ NEW: nguồn dữ liệu */}
             <div>
               <label className="block text-xs font-semibold mb-1">Nguồn</label>
@@ -1251,6 +1264,8 @@ const InvoicesPage: React.FC = () => {
                 <option value="PURCHASE">Hóa đơn nhập</option>
               </select>
             </div>
+              </>
+            )}
 
             <div className="col-span-2 flex gap-2">
               <button

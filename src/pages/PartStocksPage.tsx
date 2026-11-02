@@ -84,7 +84,7 @@ const PartStocksPage: React.FC = () => {
   // ✅ bấm 1 dòng tồn -> xổ lịch sử nhập xuất của mặt hàng đó ngay bên dưới (đối soát)
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const toggleHistory = (e: React.MouseEvent, itemId?: string) => {
-    if (!itemId) return;
+    if (!itemId || !isPrivileged) return; // staff không xem lịch sử nhập xuất
     // bấm vào nút / ô nhập trong dòng (sửa ghi chú, sửa...) thì không xổ
     if ((e.target as HTMLElement).closest("button, input, textarea, select, a, label")) return;
     setExpandedId((cur) => (cur === itemId ? null : itemId));
@@ -227,7 +227,8 @@ const PartStocksPage: React.FC = () => {
         stockValue: r.stockValue != null ? Number(r.stockValue) : 0,
       }));
 
-      mapped.sort((a, b) => {
+      // Có từ khoá thì giữ thứ tự BE trả về (mã khớp trước, tên khớp sau)
+      if (!keyword.trim()) mapped.sort((a, b) => {
         const an = sortNameKey(a.name);
         const bn = sortNameKey(b.name);
         const c = an.localeCompare(bn, "vi", { sensitivity: "base" });
@@ -912,6 +913,7 @@ const PartStocksPage: React.FC = () => {
           </button>
         </form>
 
+        {isPrivileged && (
         <button
           type="button"
           onClick={handleExport}
@@ -930,6 +932,7 @@ const PartStocksPage: React.FC = () => {
         >
           Xuất Excel tồn linh kiện
         </button>
+        )}
       </div>
 
       {error && <div style={{ marginBottom: 8, color: "#b91c1c", fontSize: 14 }}>Lỗi: {error}</div>}
@@ -1092,8 +1095,8 @@ const PartStocksPage: React.FC = () => {
                     <tr
                       onClick={(e) => toggleHistory(e, row.itemId)}
                       aria-expanded={!!row.itemId && expandedId === row.itemId}
-                      title={row.itemId ? "Bấm để xem lịch sử nhập xuất" : undefined}
-                      className={row.itemId ? "cursor-pointer hover:bg-slate-50" : undefined}
+                      title={row.itemId && isPrivileged ? "Bấm để xem lịch sử nhập xuất" : undefined}
+                      className={row.itemId && isPrivileged ? "cursor-pointer hover:bg-slate-50" : undefined}
                       style={{ backgroundColor: row.itemId && expandedId === row.itemId ? "#f1f5f9" : undefined }}
                     >
                       <td
@@ -1104,18 +1107,22 @@ const PartStocksPage: React.FC = () => {
                           whiteSpace: "nowrap",
                         }}
                       >
-                        <span
-                          aria-hidden="true"
-                          style={{
-                            display: "inline-block",
-                            width: 14,
-                            color: "#64748b",
-                            transition: "transform .15s",
-                            transform: row.itemId && expandedId === row.itemId ? "rotate(90deg)" : "none",
-                          }}
-                        >
-                          ▸
-                        </span>{" "}
+                        {isPrivileged && (
+                          <>
+                            <span
+                              aria-hidden="true"
+                              style={{
+                                display: "inline-block",
+                                width: 14,
+                                color: "#64748b",
+                                transition: "transform .15s",
+                                transform: row.itemId && expandedId === row.itemId ? "rotate(90deg)" : "none",
+                              }}
+                            >
+                              ▸
+                            </span>{" "}
+                          </>
+                        )}
                         {row.sku}
                       </td>
 
@@ -1514,7 +1521,7 @@ const PartStocksPage: React.FC = () => {
                   </div>
                 )}
 
-                {row.itemId && (
+                {row.itemId && isPrivileged && (
                   <div className="mt-2 border-t pt-2">
                     <button
                       type="button"
