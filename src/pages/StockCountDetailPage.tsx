@@ -1,6 +1,7 @@
 // src/pages/StockCountDetailPage.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { appAlert } from "../components/AppDialog";
 import api from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { PinActionDialog } from "../components/SecondPassword"; // ✅ ghi sổ kiểm kê: chỉ quản trị + mật khẩu cấp 2
@@ -86,7 +87,7 @@ const StockCountDetailPage: React.FC = () => {
   // giá trị đang gõ trên input, key = lineId
   const [editingValues, setEditingValues] = useState<Record<string, string>>({});
 
-  // tab hiện tại: Linh kiện (PART) / Máy (MACHINE)
+  // tab hiện tại: Linh kiện (PART) / Máy móc
   const [activeTab, setActiveTab] = useState<TabKind>("PART");
 
   // ✅ custom confirm modal (replace window.confirm)
@@ -136,7 +137,7 @@ const StockCountDetailPage: React.FC = () => {
       setEditingValues(init);
     } catch (err) {
       console.error("Failed to load stock count detail", err);
-      alert("Không tải được phiếu kiểm kê.");
+      appAlert("Không tải được phiếu kiểm kê. Thử tải lại trang.", { tone: "danger" });
     } finally {
       setLoading(false);
     }
@@ -219,7 +220,7 @@ const StockCountDetailPage: React.FC = () => {
       console.error("Failed to update countedQty", err);
       const msg = getApiErrorMessage(err, "Cập nhật số thực đếm thất bại");
       applyPeriodLockIfNeeded(msg);
-      alert(msg);
+      appAlert(msg, { tone: "danger" });
     } finally {
       setSavingLineId(null);
     }
@@ -227,16 +228,16 @@ const StockCountDetailPage: React.FC = () => {
 
   const handlePost = async () => {
     if (!isAdmin) {
-      alert("Chỉ quản trị được ghi sổ kiểm kê. Kế toán nhập xong số đếm thì báo quản trị chốt.");
+      appAlert("Chỉ quản trị được ghi sổ kiểm kê. Kế toán nhập xong số đếm thì báo quản trị ghi sổ.", { tone: "warning" });
       return;
     }
     if (!id || !data) return;
     if (isPosted) {
-      alert("Phiếu kiểm kê đã được post.");
+      appAlert("Phiếu kiểm kê này đã ghi sổ rồi.", { tone: "info" });
       return;
     }
     if (locked) {
-      alert(lockedMsg || "Phiếu thuộc kỳ đã khoá, không thể post.");
+      appAlert(lockedMsg || "Phiếu thuộc kỳ đã khoá, không ghi sổ được.", { tone: "warning" });
       return;
     }
 
@@ -250,7 +251,7 @@ const StockCountDetailPage: React.FC = () => {
       await api.post(`/stock-counts/${id}/post`, { pin });
       setPinOpen(false);
       await loadDetail();
-      alert("Đã ghi sổ kiểm kê và điều chỉnh tồn kho.");
+      appAlert("Tồn kho đã được chỉnh theo số đếm thực tế.", { title: "Đã ghi sổ kiểm kê", tone: "success" });
     } catch (err: any) {
       const code = err?.response?.data?.code;
       if (code && String(code).startsWith("PIN_")) throw err;
@@ -258,7 +259,7 @@ const StockCountDetailPage: React.FC = () => {
       const msg = getApiErrorMessage(err, "Ghi sổ kiểm kê thất bại");
       applyPeriodLockIfNeeded(msg);
       setPinOpen(false);
-      alert(msg);
+      appAlert(msg, { tone: "danger" });
     } finally {
       setPosting(false);
     }
@@ -286,18 +287,18 @@ const StockCountDetailPage: React.FC = () => {
     } catch (err: any) {
       console.error("Failed to export stock count", err);
       const msg = getApiErrorMessage(err, "Xuất Excel thất bại");
-      alert(msg);
+      appAlert(msg, { tone: "danger" });
     }
   };
 
   const handleDelete = async () => {
     if (!id || !data) return;
     if (isPosted) {
-      alert("Không thể xoá phiếu kiểm kê đã post.");
+      appAlert("Phiếu đã ghi sổ thì không xoá được.", { tone: "warning" });
       return;
     }
     if (locked) {
-      alert(lockedMsg || "Phiếu thuộc kỳ đã khoá, không thể xoá.");
+      appAlert(lockedMsg || "Phiếu thuộc kỳ đã khoá, không xoá được.", { tone: "warning" });
       return;
     }
 
@@ -313,13 +314,13 @@ const StockCountDetailPage: React.FC = () => {
     try {
       setDeleting(true);
       await api.delete(`/stock-counts/${id}`);
-      alert("Đã xoá phiếu kiểm kê.");
+      appAlert("Đã xoá phiếu kiểm kê.", { tone: "success" });
       navigate("/stock-counts");
     } catch (err: any) {
       console.error("Failed to delete stock count", err);
       const msg = getApiErrorMessage(err, "Xoá phiếu kiểm kê thất bại");
       applyPeriodLockIfNeeded(msg);
-      alert(msg);
+      appAlert(msg, { tone: "danger" });
     } finally {
       setDeleting(false);
     }
@@ -386,7 +387,7 @@ const StockCountDetailPage: React.FC = () => {
               <div style={{ fontWeight: 700, marginBottom: 4 }}>
                 ⛔ Phiếu thuộc kỳ đã khoá
               </div>
-              <div>{lockedMsg || "Kỳ sổ đã khoá, không thể sửa / post / xoá."}</div>
+              <div>{lockedMsg || "Kỳ sổ đã khoá, không sửa / ghi sổ / xoá được."}</div>
             </div>
           )}
 
@@ -451,7 +452,7 @@ const StockCountDetailPage: React.FC = () => {
                         fontWeight: 500,
                       }}
                     >
-                      Posted
+                      Đã ghi sổ
                     </span>
                   ) : (
                     <span
@@ -466,7 +467,7 @@ const StockCountDetailPage: React.FC = () => {
                         fontWeight: 500,
                       }}
                     >
-                      Draft
+                      Đang đếm
                     </span>
                   )}
                 </div>
@@ -511,7 +512,7 @@ const StockCountDetailPage: React.FC = () => {
                       locked
                         ? lockedMsg || "Phiếu thuộc kỳ đã khoá"
                         : isPosted
-                        ? "Phiếu đã post"
+                        ? "Phiếu đã ghi sổ"
                         : ""
                     }
                   >
@@ -535,7 +536,7 @@ const StockCountDetailPage: React.FC = () => {
                       locked
                         ? lockedMsg || "Phiếu thuộc kỳ đã khoá"
                         : isPosted
-                        ? "Phiếu đã post"
+                        ? "Phiếu đã ghi sổ"
                         : ""
                     }
                   >
@@ -560,7 +561,7 @@ const StockCountDetailPage: React.FC = () => {
                 cursor: "pointer",
               }}
             >
-              Linh kiện (PART)
+              Linh kiện
             </button>
             <button
               type="button"
@@ -575,7 +576,7 @@ const StockCountDetailPage: React.FC = () => {
                 cursor: "pointer",
               }}
             >
-              Máy (MACHINE)
+              Máy móc
             </button>
           </div>
 
@@ -590,7 +591,7 @@ const StockCountDetailPage: React.FC = () => {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead style={{ backgroundColor: "#f7fafc" }}>
                 <tr>
-                  <th style={thStyle}>SKU</th>
+                  <th style={thStyle}>Mã hàng</th>
                   <th style={thStyle}>Tên hàng</th>
                   <th style={thStyle}>ĐVT</th>
                   <th style={thStyle}>Tồn sổ</th>
@@ -647,7 +648,7 @@ const StockCountDetailPage: React.FC = () => {
                             locked
                               ? lockedMsg || "Phiếu thuộc kỳ đã khoá"
                               : isPosted
-                              ? "Phiếu đã post"
+                              ? "Phiếu đã ghi sổ"
                               : ""
                           }
                         />

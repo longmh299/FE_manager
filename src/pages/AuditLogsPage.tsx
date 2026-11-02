@@ -87,63 +87,126 @@ function roleVi(role: string) {
   return role || "";
 }
 
+const ENTITY_VI: Record<string, string> = {
+  Invoice: "Hoá đơn",
+  Payment: "Phiếu thu / chi",
+  PaymentAllocation: "Tiền trừ vào hoá đơn",
+  PaymentRequest: "Phiếu thu nợ (NV báo)",
+  PaymentAccount: "Quỹ / tài khoản",
+  WarrantyHold: "Tiền giữ bảo hành",
+  Movement: "Phiếu điều chỉnh kho",
+  MovementLine: "Dòng phiếu kho",
+  Stock: "Tồn kho",
+  StockSnapshot: "Ảnh chụp tồn kho",
+  StockCount: "Phiếu kiểm kê",
+  StockCountLine: "Dòng kiểm kê",
+  PeriodLock: "Chốt sổ",
+  User: "Tài khoản người dùng",
+  Partner: "Khách hàng / NCC",
+  Item: "Mặt hàng",
+  Location: "Kho",
+  QuoteDocument: "Báo giá",
+  MachineVideo: "Video máy",
+  MachineVideoShare: "Link chia sẻ video",
+  MachineImage: "Ảnh máy",
+};
+
 function entityVi(entity: string) {
   const e = String(entity || "");
-  const map: Record<string, string> = {
-    Invoice: "Hóa đơn",
-    Payment: "Phiếu thu/chi",
-    PaymentAllocation: "Phân bổ thanh toán",
-    WarrantyHold: "Bảo hành treo",
-    Movement: "Phiếu kho",
-    MovementLine: "Dòng phiếu kho",
-    Stock: "Tồn kho",
-    StockSnapshot: "Snapshot tồn kho",
-    StockCount: "Kiểm kê",
-    User: "Người dùng",
-    Partner: "Khách hàng/Đối tác",
-    Item: "Sản phẩm",
-    Location: "Kho",
-    PaymentAccount: "Tài khoản thanh toán",
-  };
-  return map[e] || e;
+  return ENTITY_VI[e] || e;
 }
+
+const ACTION_VI: Record<string, string> = {
+  // hoá đơn
+  INVOICE_CREATE: "Tạo hoá đơn",
+  INVOICE_UPDATE: "Sửa hoá đơn",
+  INVOICE_NOTE_UPDATE: "Sửa ghi chú hoá đơn",
+  INVOICE_SUBMIT: "Gửi duyệt hoá đơn",
+  INVOICE_RECALL: "Rút lại hoá đơn",
+  INVOICE_APPROVE: "Duyệt hoá đơn",
+  INVOICE_REJECT: "Trả hoá đơn về nháp",
+  INVOICE_REOPEN: "Mở lại hoá đơn đã duyệt",
+  INVOICE_ADMIN_EDIT_APPROVED: "Quản trị điều chỉnh hoá đơn đã duyệt",
+  INVOICE_DELETE: "Xoá hoá đơn",
+  INVOICE_CANCEL: "Huỷ hoá đơn",
+  INVOICE_STATUS_CHANGE: "Đổi trạng thái hoá đơn (quản trị)",
+  INVOICE_ORIGIN_APPLY_RETURN: "Ghi hàng trả vào hoá đơn gốc",
+  INVOICE_ORIGIN_UNAPPLY_RETURN: "Bỏ hàng trả khỏi hoá đơn gốc",
+  SALES_RETURN_CREATE: "Tạo phiếu khách trả hàng",
+  SALES_RETURN_SUBMIT: "Gửi duyệt phiếu trả hàng",
+  SALES_RETURN_APPROVE: "Duyệt phiếu trả hàng",
+  // tiền
+  PAYMENT_CREATE: "Lập phiếu thu / chi",
+  PAYMENT_UPDATE: "Sửa phiếu thu / chi",
+  PAYMENT_APPLY_ALLOCATIONS: "Trừ tiền vào hoá đơn",
+  PAYMENT_VOID: "Huỷ phiếu thu / chi",
+  PAYMENT_SET_ACCOUNT: "Đổi quỹ / tài khoản của phiếu",
+  PAYMENT_ACCOUNT_FOLLOW_INVOICE: "Gán tài khoản theo hoá đơn",
+  PAYMENT_TRANSFER: "Chuyển quỹ",
+  PAYMENT_REQUEST_CREATE: "NV báo đã thu (phiếu thu nợ)",
+  PAYMENT_REQUEST_CANCEL: "NV huỷ phiếu thu nợ",
+  PAYMENT_REQUEST_APPROVE: "Duyệt phiếu thu nợ",
+  PAYMENT_REQUEST_REJECT: "Từ chối phiếu thu nợ",
+  CASH_COUNT_OK: "Kiểm quỹ: khớp",
+  CASH_COUNT_ADJUST: "Kiểm quỹ: ghi chênh lệch",
+  ACCOUNT_SET_OPENING: "Khai báo số dư đầu quỹ",
+  DEBT_NOTE_UPDATE: "Sửa ghi chú công nợ",
+  WARRANTY_HOLD_UPDATE_FROM_PAYMENT: "Cập nhật tiền giữ bảo hành",
+  WARRANTY_HOLD_PAID: "Thu tiền giữ bảo hành",
+  WARRANTY_HOLD_VOID: "Bỏ tiền giữ bảo hành",
+  // kho
+  MOVEMENT_CREATE: "Tạo phiếu điều chỉnh kho",
+  MOVEMENT_LINE_ADD: "Thêm dòng phiếu kho",
+  MOVEMENT_LINE_UPDATE: "Sửa dòng phiếu kho",
+  MOVEMENT_LINE_DELETE: "Xoá dòng phiếu kho",
+  MOVEMENT_POST: "Ghi sổ phiếu điều chỉnh kho",
+  STOCKCOUNT_CREATE: "Tạo phiếu kiểm kê",
+  STOCKCOUNT_UPDATE_LINE: "Nhập số đếm kiểm kê",
+  STOCKCOUNT_POST: "Ghi sổ kiểm kê",
+  STOCKCOUNT_DELETE: "Xoá phiếu kiểm kê",
+  ITEM_DELETE: "Xoá mặt hàng",
+  // hệ thống
+  PERIOD_CLOSE: "Chốt sổ kế toán",
+  PERIOD_REOPEN: "Mở / lùi mốc chốt sổ",
+  USER_PASSWORD_RESET: "Đặt lại mật khẩu đăng nhập",
+  PIN_SET: "Tạo mật khẩu cấp 2",
+  PIN_CHANGE: "Đổi mật khẩu cấp 2",
+  PIN_FAIL: "Nhập sai mật khẩu cấp 2",
+  PIN_LOCKED: "Khoá mật khẩu cấp 2 (sai nhiều lần)",
+  PIN_RECOVERY_FAIL: "Sai mã khôi phục mật khẩu cấp 2",
+  PIN_RESET_BY_RECOVERY: "Đặt lại mật khẩu cấp 2 bằng mã khôi phục",
+  PIN_RESET_BY_ADMIN: "Quản trị xoá mật khẩu cấp 2",
+  // tài liệu
+  UPLOAD: "Tải lên",
+  CREATE_SHARE: "Tạo link chia sẻ",
+  REVOKE_SHARE: "Thu hồi link chia sẻ",
+  CREATE: "Tạo mới",
+  UPDATE: "Sửa",
+  DELETE: "Xoá",
+};
 
 function actionVi(action: string) {
   const a = String(action || "").toUpperCase();
-
-  const map: Record<string, string> = {
-    INVOICE_CREATE: "Tạo hóa đơn",
-    INVOICE_UPDATE: "Cập nhật hóa đơn",
-    INVOICE_SUBMIT: "Gửi duyệt hóa đơn",
-    INVOICE_APPROVE: "Duyệt hóa đơn",
-    INVOICE_REJECT: "Từ chối hóa đơn",
-    INVOICE_CANCEL: "Hủy hóa đơn",
-    INVOICE_STATUS_CHANGE: "Đổi trạng thái hóa đơn (admin)",
-
-    PAYMENT_CREATE: "Tạo phiếu thu/chi",
-    PAYMENT_UPDATE: "Cập nhật phiếu thu/chi",
-    PAYMENT_APPLY_ALLOCATIONS: "Áp phân bổ thanh toán",
-
-    WARRANTY_HOLD_UPDATE_FROM_PAYMENT: "Cập nhật bảo hành treo từ thanh toán",
-
-    INVOICE_ORIGIN_APPLY_RETURN: "Gắn phiếu trả hàng vào hóa đơn gốc",
-    SALES_RETURN_CREATE: "Tạo phiếu trả hàng (bán)",
-    SALES_RETURN_SUBMIT: "Gửi duyệt phiếu trả hàng",
-    SALES_RETURN_APPROVE: "Duyệt phiếu trả hàng",
-  };
-
-  if (map[a]) return map[a];
-
-  // fallback theo keyword
+  if (ACTION_VI[a]) return ACTION_VI[a];
+  // fallback theo từ khoá
   if (a.includes("CREATE")) return "Tạo mới";
   if (a.includes("SUBMIT")) return "Gửi duyệt";
   if (a.includes("APPROVE")) return "Duyệt";
   if (a.includes("REJECT")) return "Từ chối";
-  if (a.includes("CANCEL")) return "Hủy";
-  if (a.includes("DELETE") || a.includes("REMOVE")) return "Xóa";
-  if (a.includes("UPDATE") || a.includes("PATCH")) return "Cập nhật";
-  if (a.includes("APPLY")) return "Áp dụng";
+  if (a.includes("CANCEL") || a.includes("VOID")) return "Huỷ";
+  if (a.includes("DELETE") || a.includes("REMOVE")) return "Xoá";
+  if (a.includes("UPDATE") || a.includes("PATCH")) return "Sửa";
+  if (a.includes("POST")) return "Ghi sổ";
   return action || "";
+}
+
+/** Số chứng từ dễ đọc (số hoá đơn, số phiếu, ngày chốt…) thay cho mã id dài */
+function refLabel(r: any): string {
+  const pick = (o: any) =>
+    o && typeof o === "object"
+      ? o.code || o.invoiceCode || o.paymentCode || o.refNo || o.sku || o.username || (o.closedUntil ? `đến ${String(o.closedUntil).slice(0, 10).split("-").reverse().join("/")}` : "")
+      : "";
+  return String(pick(r?.after) || pick(r?.before) || pick(r?.meta) || "");
 }
 
 /** ========================= Chips / UI ========================= **/
@@ -696,19 +759,33 @@ const AuditLogsPage: React.FC = () => {
 
             <div>
               <div className={labelCls}>Đối tượng</div>
-              <input className={inputCls} placeholder="Ví dụ: Invoice, Payment..." value={entity} onChange={(e) => setEntity(e.target.value)} />
-              <div className="mt-1 text-[11px] text-slate-500">Gợi ý: Invoice=Hóa đơn, Payment=Phiếu thu/chi…</div>
+              <select className={inputCls} value={entity} onChange={(e) => setEntity(e.target.value)}>
+                <option value="">Tất cả</option>
+                {Object.entries(ENTITY_VI).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div>
               <div className={labelCls}>Hành động</div>
-              <input className={inputCls} placeholder="Ví dụ: INVOICE_APPROVE..." value={action} onChange={(e) => setAction(e.target.value)} />
-              <div className="mt-1 text-[11px] text-slate-500">Có thể gõ mã hoặc từ khóa (approve/submit/create…)</div>
+              <select className={inputCls} value={action} onChange={(e) => setAction(e.target.value)}>
+                <option value="">Tất cả</option>
+                {Object.entries(ACTION_VI)
+                  .filter(([k]) => k.includes("_"))
+                  .map(([k, v]) => (
+                    <option key={k} value={k}>
+                      {v}
+                    </option>
+                  ))}
+              </select>
             </div>
 
             <div>
-              <div className={labelCls}>Người thao tác (id/username)</div>
-              <input className={inputCls} placeholder="Nhập userId hoặc username" value={userKey} onChange={(e) => setUserKey(e.target.value)} />
+              <div className={labelCls}>Người thao tác</div>
+              <input className={inputCls} placeholder="Tên đăng nhập" value={userKey} onChange={(e) => setUserKey(e.target.value)} />
             </div>
 
             <div>
@@ -812,7 +889,7 @@ const AuditLogsPage: React.FC = () => {
                 <th className="text-left font-semibold px-4 py-3 border-b border-slate-200">Vai trò</th>
                 <th className="text-left font-semibold px-4 py-3 border-b border-slate-200">Hành động</th>
                 <th className="text-left font-semibold px-4 py-3 border-b border-slate-200">Đối tượng</th>
-                <th className="text-left font-semibold px-4 py-3 border-b border-slate-200">Mã đối tượng</th>
+                <th className="text-left font-semibold px-4 py-3 border-b border-slate-200">Số chứng từ</th>
                 <th className="text-right font-semibold px-4 py-3 border-b border-slate-200">Thao tác</th>
               </tr>
             </thead>
@@ -860,7 +937,6 @@ const AuditLogsPage: React.FC = () => {
                           <span className={chipColor(actionKind as any)} title={String(r.action || "")}>
                             {actVi}
                           </span>
-                          <span className="text-[11px] text-slate-500 font-mono">{String(r.action || "")}</span>
                         </div>
                         {(r as any)?.meta?.reason ? (
                           <div className="text-[12px] text-slate-700 mt-1">
@@ -879,12 +955,19 @@ const AuditLogsPage: React.FC = () => {
                           <span className={chipColor("amber")} title={String(r.entity || "")}>
                             {entVi}
                           </span>
-                          <span className="text-[11px] text-slate-500 font-mono">{String(r.entity || "")}</span>
                         </div>
                       </td>
 
                       <td className="px-4 py-3 border-b border-slate-100">
-                        <span className="font-mono text-xs text-slate-700">{r.entityId || "—"}</span>
+                        {refLabel(r) ? (
+                          <span className="font-medium text-slate-800" title={String(r.entityId || "")}>
+                            {refLabel(r)}
+                          </span>
+                        ) : (
+                          <span className="font-mono text-xs text-slate-400" title={String(r.entityId || "")}>
+                            {r.entityId ? `${String(r.entityId).slice(0, 8)}…` : "—"}
+                          </span>
+                        )}
                       </td>
 
                       <td className="px-4 py-3 border-b border-slate-100 text-right">

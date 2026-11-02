@@ -43,6 +43,10 @@ type SalesLedgerRow = {
 
   saleUserName: string;
   techUserName: string;
+
+  // ✅ dòng phiếu khách trả hàng (số âm, tính vào ngày phiếu trả)
+  isReturn?: boolean;
+  refCode?: string | null;
 };
 
 type Totals = {
@@ -352,6 +356,9 @@ const SalesLedgerReportPage: React.FC = () => {
 
           saleUserName: String(r.saleUserName ?? ""),
           techUserName: String(r.techUserName ?? ""),
+
+          isReturn: r.isReturn === true,
+          refCode: r.refCode ?? null,
         };
       });
 
@@ -908,9 +915,9 @@ const SalesLedgerReportPage: React.FC = () => {
 
               {pagedRows.map((r, idx) => {
                 const loss = r.lineAmount - r.costTotal;
-                const isLoss = loss < -0.0001;
+                const isLoss = !r.isReturn && loss < -0.0001;
                 const isDebt = r.debt > 0.0001;
-                const rowBg = isLoss ? "bg-red-50" : isDebt ? "bg-amber-50" : "bg-white";
+                const rowBg = r.isReturn ? "bg-violet-50/60" : isLoss ? "bg-red-50" : isDebt ? "bg-amber-50" : "bg-white";
 
                 return (
                   <tr
@@ -932,6 +939,11 @@ const SalesLedgerReportPage: React.FC = () => {
                       >
                         {r.code}
                       </button>
+                      {r.isReturn && (
+                        <div className="mt-0.5 whitespace-nowrap text-[11px] font-medium text-violet-700" title="Phiếu khách trả hàng, trừ vào kỳ của ngày trả">
+                          Trả hàng{r.refCode ? ` · HĐ ${r.refCode}` : ""}
+                        </div>
+                      )}
                     </td>
 
                     <td className="px-4 py-3 border-b border-slate-100">{r.partnerName}</td>
@@ -942,7 +954,7 @@ const SalesLedgerReportPage: React.FC = () => {
 
                     <td className="px-4 py-3 border-b border-slate-100 text-center whitespace-nowrap">{fmtQty(r.qty)}</td>
                     <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">{fmtMoney(r.unitPrice)}</td>
-                    <td className="px-4 py-3 border-b border-slate-100 text-right font-semibold whitespace-nowrap">
+                    <td className={`px-4 py-3 border-b border-slate-100 text-right font-semibold whitespace-nowrap ${r.isReturn ? "text-violet-700" : ""}`}>
                       {fmtMoney(r.lineAmount)}
                     </td>
                     <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">{fmtMoney(r.unitCost)}</td>

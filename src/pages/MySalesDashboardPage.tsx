@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import api from "../api/client";
 
 /* =======================
@@ -728,7 +729,13 @@ const MySalesDashboardPage: React.FC = () => {
         <div className="bg-white rounded-xl shadow-sm border p-3 sm:p-4 flex flex-col min-h-0">
           <div className="flex items-center justify-between">
             <h2 className="font-medium">Công nợ nhanh</h2>
-            <div className="text-xs text-gray-500">{customerAgg.length} khách</div>
+            <Link
+              to="/me/debts"
+              className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700"
+              title="Xem mọi khoản nợ (cả tháng trước) và báo đã thu tiền"
+            >
+              Thu nợ / báo đã thu →
+            </Link>
           </div>
 
           <div className="mt-3 space-y-1">
@@ -755,7 +762,12 @@ const MySalesDashboardPage: React.FC = () => {
           <div className="mt-3 flex-1 min-h-0">
             {customerAgg.length === 0 ? (
               <div className="h-full flex items-center justify-center text-sm text-gray-400 border rounded-lg bg-gray-50">
-                Không có khách nợ trong tháng này
+                <div className="text-center">
+                  Không có khách nợ trong tháng này
+                  <Link to="/me/debts" className="mt-1 block text-xs font-medium text-sky-700 hover:underline">
+                    Xem nợ các tháng trước
+                  </Link>
+                </div>
               </div>
             ) : (
               <div className="h-full overflow-auto border rounded-lg p-2 space-y-2">

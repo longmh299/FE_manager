@@ -32,6 +32,8 @@ import LedgerPage from "./pages/LedgerPage";
 import SalesLedgerReportPage from "./pages/SalesLedgerReportPage";
 import PaymentAccountsPage from "./pages/PaymentAccountsPage";
 import MySalesDashboardPage from "./pages/MySalesDashboardPage";
+import MyDebtsPage from "./pages/MyDebtsPage";
+import PeriodClosePage from "./pages/PeriodClosePage"; // ✅ chốt sổ kế toán (quản trị) // ✅ công nợ của tôi + báo đã thu (nhân viên)
 import AuditLogsPage from "./pages/AuditLogsPage";
 import StockInOutReportPage from "./pages/StockInOutReportPage";
 import InvoiceStatusAdminPage from "./pages/InvoiceStatusAdminPage";
@@ -161,6 +163,15 @@ const App: React.FC = () => {
             }
           />
           <Route path="/me/sales" element={<MySalesDashboardPage />} />
+          <Route path="/me/debts" element={<MyDebtsPage />} />
+          <Route
+            path="period-close"
+            element={
+              <RequireRole roles={["admin"]}>
+                <PeriodClosePage />
+              </RequireRole>
+            }
+          />
           <Route path="audit-logs" element={<AuditLogsPage />} />
           <Route path="reports/stock-inout" element={<StockInOutReportPage />} />
           {/* ✅ NEW: truy xuất hóa đơn theo mã sản phẩm */}

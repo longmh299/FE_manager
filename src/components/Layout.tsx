@@ -1,13 +1,16 @@
 // src/components/Layout.tsx
 import React, { useEffect, useMemo, useState } from "react";
+import api from "../api/client";
 import { NavLink, Outlet, useLocation, Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { LowStockBell } from "./LowStockBell";
 import { ChatWidget } from "./ChatWidget";
+import DateLockedAlert from "./DateLockedAlert";
+import { AppDialogHost } from "./AppDialog";
 // ✅ Menu chia theo CÔNG VIỆC HẰNG NGÀY (không theo kỹ thuật):
 //    Bán hàng → Kho hàng → Tiền & công nợ → Báo cáo → Tài liệu & marketing → Hệ thống
 //    Quyền xem từng trang giữ nguyên như cũ, chỉ đổi chỗ + đổi tên cho dễ hiểu.
-type NavItem = { to: string; label: string; hint?: string };
+type NavItem = { to: string; label: string; hint?: string; badge?: number; badgeTone?: "amber" | "rose" };
 type NavGroup = { key: string; title: string; icon: IconName; links: NavItem[] };
 type IconName = "sales" | "stock" | "money" | "report" | "docs" | "system" | "user";
 
@@ -65,6 +68,18 @@ const NavIcon: React.FC<{ name: IconName; className?: string }> = ({ name, class
   </svg>
 );
 
+// ✅ số đếm nhỏ cạnh tên trang (VD: 3 phiếu thu nợ chờ duyệt)
+const NavBadge: React.FC<{ n?: number; tone?: "amber" | "rose" }> = ({ n, tone = "amber" }) =>
+  n && n > 0 ? (
+    <span
+      className={`min-w-[20px] shrink-0 rounded-full px-1.5 text-center text-[11px] font-semibold leading-5 tabular-nums ${
+        tone === "rose" ? "bg-rose-500 text-white" : "bg-amber-400 text-slate-900"
+      }`}
+    >
+      {n > 99 ? "99+" : n}
+    </span>
+  ) : null;
+
 const Layout: React.FC = () => {
   const { user, logout } = useAuth();
   const role = user?.role;
@@ -111,6 +126,24 @@ const Layout: React.FC = () => {
   const groupHasActive = (links: Array<{ to: string }>) =>
     links.some((l) => linkMatch(l.to));
 
+  // ✅ số đếm phiếu thu nợ: admin/kế toán = đang chờ duyệt; nhân viên = bị từ chối 7 ngày gần đây
+  const [prBadge, setPrBadge] = useState<{ pending: number; rejectedRecent: number }>({ pending: 0, rejectedRecent: 0 });
+  useEffect(() => {
+    if (!role) return;
+    let alive = true;
+    const pull = () =>
+      api
+        .get("/payment-requests/count")
+        .then((r) => alive && setPrBadge({ pending: Number(r.data?.pending) || 0, rejectedRecent: Number(r.data?.rejectedRecent) || 0 }))
+        .catch(() => {});
+    pull();
+    window.addEventListener("payreq:changed", pull); // duyệt / từ chối / gửi xong -> cập nhật số ngay
+    return () => {
+      alive = false;
+      window.removeEventListener("payreq:changed", pull);
+    };
+  }, [role, location.pathname]);
+
   // ===== MENU (admin / kế toán) — chia theo việc hằng ngày =====
   const groups: NavGroup[] = useMemo(() => {
     const AA = isAdmin || isAccountant;
@@ -145,7 +178,7 @@ const Layout: React.FC = () => {
         title: "Tiền & công nợ",
         icon: "money",
         links: [
-          ...(AA ? [{ to: "/cashbook", label: "Thu chi (sổ quỹ)" }] : []),
+          ...(AA ? [{ to: "/cashbook", label: "Thu chi (sổ quỹ)", badge: prBadge.pending, hint: prBadge.pending ? `${prBadge.pending} phiếu thu nợ chờ duyệt` : undefined }] : []),
           ...(AA ? [{ to: "/debts/by-sale", label: "Công nợ khách hàng" }] : []),
           ...(isAdmin ? [{ to: "/payment-accounts", label: "Tài khoản nhận tiền" }] : []), // ✅ thêm/sửa TK: chỉ quản trị
         ],
@@ -179,13 +212,14 @@ const Layout: React.FC = () => {
         icon: "system",
         links: [
           ...(isAdmin ? [{ to: "/users", label: "Nhân viên & phân quyền" }] : []),
+          ...(isAdmin ? [{ to: "/period-close", label: "Chốt sổ kế toán", hint: "Khoá kỳ đã đối soát, không ai sửa được nữa" }] : []),
           ...(canSeeAuditLogs ? [{ to: "/audit-logs", label: "Lịch sử thao tác" }] : []),
           { to: "/change-password", label: "Đổi mật khẩu" },
         ],
       },
     ];
     return g.filter((x) => x.links.length > 0);
-  }, [isAdmin, isAccountant, canSeeMovements, canSeeAuditLogs]);
+  }, [isAdmin, isAccountant, canSeeMovements, canSeeAuditLogs, prBadge.pending]);
 
   // ===== MENU nhân viên bán hàng: ít trang -> liệt kê thẳng, chia mục có tiêu đề nhỏ =====
   const staffSections: Array<{ title: string; icon: IconName; links: NavItem[] }> = useMemo(
@@ -197,6 +231,13 @@ const Layout: React.FC = () => {
           { to: "/invoices", label: "Hoá đơn" },
           { to: "/partners", label: "Khách hàng" },
           { to: "/me/sales", label: "Doanh số của tôi" },
+          {
+            to: "/me/debts",
+            label: "Công nợ của tôi",
+            badge: prBadge.rejectedRecent,
+            badgeTone: "rose",
+            hint: prBadge.rejectedRecent ? `${prBadge.rejectedRecent} phiếu thu nợ bị từ chối, xem lý do` : "Khách còn nợ, báo đã thu tiền",
+          },
         ],
       },
       {
@@ -219,7 +260,7 @@ const Layout: React.FC = () => {
       },
       { title: "Tài khoản", icon: "user", links: [{ to: "/change-password", label: "Đổi mật khẩu" }] },
     ],
-    []
+    [prBadge.rejectedRecent]
   );
 
   const [openGroup, setOpenGroup] = useState<string | null>(null);
@@ -341,6 +382,7 @@ const Layout: React.FC = () => {
           {!desktopCollapsed && (
             <>
               <span className="flex-1 truncate text-left">{g.title}</span>
+              {!opened && <NavBadge n={g.links.reduce((t, l) => t + (l.badge || 0), 0)} />}
               <svg
                 viewBox="0 0 24 24"
                 className={`h-3.5 w-3.5 text-slate-500 transition-transform duration-150 ${opened ? "rotate-90" : ""}`}
@@ -359,7 +401,10 @@ const Layout: React.FC = () => {
           <div className="ml-[21px] mt-0.5 mb-2 pl-2 border-l border-slate-700 space-y-0.5">
             {g.links.map((l) => (
               <NavLink key={l.to} to={l.to} className={subNavCls} title={l.hint}>
-                {l.label}
+                <span className="flex items-center justify-between gap-2">
+                  <span className="truncate">{l.label}</span>
+                  <NavBadge n={l.badge} tone={l.badgeTone} />
+                </span>
               </NavLink>
             ))}
           </div>
@@ -396,7 +441,10 @@ const Layout: React.FC = () => {
                           <NavIcon name={sec.icon} className="h-4 w-4" />
                         </span>
                       ) : (
-                        l.label
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="truncate">{l.label}</span>
+                          <NavBadge n={l.badge} tone={l.badgeTone} />
+                        </span>
                       )}
                     </NavLink>
                   ))}
@@ -498,6 +546,9 @@ const Layout: React.FC = () => {
             từng bảng) hoạt động đúng như mong đợi. */}
         <div className="flex-1 min-w-0 w-full p-4 pb-20 md:pb-4 overflow-auto">
           <Outlet />
+          {/* ✅ ngày chứng từ đã chốt sổ / quá hạn: báo giữa màn hình ở mọi trang */}
+          <DateLockedAlert isAdmin={isAdmin} />
+          <AppDialogHost />
         </div>
       </main>
     </div>

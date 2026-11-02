@@ -1382,6 +1382,7 @@ const InvoiceDetailPage: React.FC = () => {
   // ✅ AUTH: lấy role từ BE (/me), fallback localStorage
   const [me, setMe] = useState<{ id?: string; role?: string }>({});
   const isAdmin = String(me.role || "").trim().toLowerCase() === "admin";
+  const isStaffRole = String(me.role || "").trim().toLowerCase() === "staff";
   // ✅ MỚI: quyền tạo nhanh mã hàng trong hoá đơn (khớp BE: POST /items chỉ accountant|admin)
   const canCreateItem = ["admin", "accountant"].includes(String(me.role || "").trim().toLowerCase());
   const [quickCreate, setQuickCreate] = useState<{
@@ -1915,6 +1916,16 @@ const InvoiceDetailPage: React.FC = () => {
     const s = (location.state as any)?.returnSearch || "";
     navigate(`/invoices${s}`);
   };
+
+  // ✅ hoá đơn mới: NV Sale tự lấy theo người đang tạo (nhân viên thì khoá luôn, BE cũng ép như vậy)
+  const saleAutoFilled = useRef(false);
+  useEffect(() => {
+    if (!isCreate || saleAutoFilled.current || !me.id || !invoice) return;
+    if (invoice.type === "PURCHASE") return;
+    saleAutoFilled.current = true;
+    if (!invoice.saleUserId) setInvoice((prev) => (prev ? { ...prev, saleUserId: me.id } : prev));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCreate, me.id, invoice?.type, !!invoice]);
 
   async function loadStaffs() {
     try {
@@ -2764,6 +2775,7 @@ const InvoiceDetailPage: React.FC = () => {
     if (saving) return "Đang lưu...";
     if (canEditApprovedAdjust) return "Điều chỉnh & Post lại";
     if (isAdmin && status === "DRAFT" && !isAdjustMode) return "Lưu & Gửi duyệt";
+    if (isCreate) return "Tạo hóa đơn"; // ✅ nhân viên / kế toán lập hoá đơn mới
     return "Lưu hóa đơn";
   })();
 
@@ -2804,27 +2816,21 @@ const InvoiceDetailPage: React.FC = () => {
       <div style={styles.body}>
         <div style={styles.content}>
           {/* APPROVED notice */}
-          {status === "APPROVED" && !canEditApprovedAdjust && (
+          {/* ✅ chỉ quản trị mới thấy (người khác không mở lại được nên không cần dòng này) */}
+          {status === "APPROVED" && !canEditApprovedAdjust && isAdmin && (
             <div style={{ ...styles.notice, marginBottom: 16, background: "#eef2ff", border: "1px solid #c7d2fe", color: "#3730a3" }}>
-              Hóa đơn đã <b>DUYỆT</b>. Không thể sửa trực tiếp hóa đơn gốc.
-              <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                <span style={{ fontSize: 12.5, color: "#4f46e5" }}>
-                  Nếu cần sửa: bấm <b>Mở lại để sửa</b> (rollback tồn kho và đưa về NHÁP) hoặc mở bằng chế độ điều chỉnh{" "}
-                  <b>?adjust=1</b>.
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+                <span>
+                  Hóa đơn đã <b>duyệt</b> nên đang khoá. Cần sửa thì bấm <b>Mở lại để sửa</b>: hàng trả lại kho, hoá đơn về nháp.
                 </span>
-
-                {isAdmin ? (
-                  <button
-                    type="button"
-                    style={primarySmallBtn(reopenBusy || saving)}
-                    disabled={reopenBusy || saving}
-                    onClick={handleReopenApproved}
-                  >
-                    {reopenBusy ? "Đang mở lại..." : "Mở lại để sửa"}
-                  </button>
-                ) : (
-                  <span style={{ fontSize: 12.5, color: "#b91c1c" }}>(Bạn không phải ADMIN nên không có quyền mở lại.)</span>
-                )}
+                <button
+                  type="button"
+                  style={primarySmallBtn(reopenBusy || saving)}
+                  disabled={reopenBusy || saving}
+                  onClick={handleReopenApproved}
+                >
+                  {reopenBusy ? "Đang mở lại..." : "Mở lại để sửa"}
+                </button>
               </div>
             </div>
           )}
@@ -2928,14 +2934,15 @@ const InvoiceDetailPage: React.FC = () => {
                       <select
                         style={styles.select}
                         value={invoice.type}
-                        disabled={locked || status !== "DRAFT"}
+                        disabled={locked || status !== "DRAFT" || isStaffRole}
                         onChange={(e) => {
                           markDirty();
                           updateInvoice({ type: e.target.value as InvoiceType });
                         }}
                       >
                         <option value="SALES">Bán hàng</option>
-                        <option value="PURCHASE">Nhập hàng</option>
+                        {/* ✅ nhân viên chỉ lập hoá đơn bán (BE cũng chặn) */}
+                        {(!isStaffRole || invoice.type === "PURCHASE") && <option value="PURCHASE">Nhập hàng</option>}
                       </select>
                       {status !== "DRAFT" && (
                         <div style={{ fontSize: 12, color: C.muted }}>* Hóa đơn đã phát sinh nghiệp vụ nên không đổi loại.</div>
@@ -2968,7 +2975,8 @@ const InvoiceDetailPage: React.FC = () => {
                         <select
                           style={styles.select}
                           value={invoice.saleUserId || ""}
-                          disabled={locked}
+                          disabled={locked || isStaffRole}
+                          title={isStaffRole ? "Hoá đơn bạn tạo tự ghi tên bạn là NV sale" : undefined}
                           onChange={(e) => {
                             markDirty();
                             updateInvoice({ saleUserId: safeId(e.target.value) });

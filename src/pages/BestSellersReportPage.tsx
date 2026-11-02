@@ -100,6 +100,7 @@ const BestSellersReportPage: React.FC = () => {
 
   const [loading, setLoading] = useState(false);
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
+  const [returns, setReturns] = useState<InvoiceRow[]>([]);
   const [loadedLabel, setLoadedLabel] = useState<string | null>(null);
 
 const dateRangeInvalid = !!(mode === "range" && fromYmd && toYmd && fromYmd > toYmd);
@@ -114,19 +115,13 @@ const dateRangeInvalid = !!(mode === "range" && fromYmd && toYmd && fromYmd > to
       const { from, to } =
         mode === "month" ? monthToIsoRange(ym) : ymdToIsoRange(fromYmd, toYmd);
 
-      const res = await api.get("/invoices", {
-        params: {
-          type: "SALES",
-          status: "APPROVED",
-          from,
-          to,
-          page: 1,
-          pageSize: 5000,
-        },
-      });
+      const q = (type: string) =>
+        api.get("/invoices", { params: { type, status: "APPROVED", from, to, page: 1, pageSize: 5000 } });
+      // hàng khách trả lại trừ vào kỳ của phiếu trả (không làm đổi số kỳ trước)
+      const [res, resRet] = await Promise.all([q("SALES"), q("SALES_RETURN")]);
 
-      const list = extractList<InvoiceRow>(res.data);
-      setInvoices(list);
+      setInvoices(extractList<InvoiceRow>(res.data));
+      setReturns(extractList<InvoiceRow>(resRet.data));
 
       if (mode === "month") {
         const [y, m] = ym.split("-");
@@ -152,7 +147,11 @@ const dateRangeInvalid = !!(mode === "range" && fromYmd && toYmd && fromYmd > to
     const partMap = new Map<string, RankedItem>();
     const machineMap = new Map<string, RankedItem>();
 
-    for (const inv of invoices) {
+    const docs: Array<[InvoiceRow, number]> = [
+      ...invoices.map((x) => [x, 1] as [InvoiceRow, number]),
+      ...returns.map((x) => [x, -1] as [InvoiceRow, number]),
+    ];
+    for (const [inv, sign] of docs) {
       for (const line of inv.lines || []) {
         const item = line.item;
         if (!item) continue;
@@ -162,7 +161,7 @@ const dateRangeInvalid = !!(mode === "range" && fromYmd && toYmd && fromYmd > to
 
         const key = item.sku || item.id || line.itemId;
         const existing = map.get(key);
-        const qty = num(line.qty);
+        const qty = sign * Math.abs(num(line.qty));
 
         if (existing) {
           existing.qty += qty;
@@ -178,13 +177,14 @@ const dateRangeInvalid = !!(mode === "range" && fromYmd && toYmd && fromYmd > to
     }
 
     const sortFn = (a: RankedItem, b: RankedItem) => b.qty - a.qty;
+    const keep = (r: RankedItem) => r.qty > 0;
 
     return {
-      partRanked: Array.from(partMap.values()).sort(sortFn),
-      machineRanked: Array.from(machineMap.values()).sort(sortFn),
+      partRanked: Array.from(partMap.values()).filter(keep).sort(sortFn),
+      machineRanked: Array.from(machineMap.values()).filter(keep).sort(sortFn),
       orderCount: invoices.length,
     };
-  }, [invoices]);
+  }, [invoices, returns]);
 
   const activeRanked = tab === "PART" ? partRanked : machineRanked;
   const activeTotalQty = activeRanked.reduce((s, r) => s + r.qty, 0);
@@ -198,7 +198,7 @@ const dateRangeInvalid = !!(mode === "range" && fromYmd && toYmd && fromYmd > to
         <div>
           <div style={{ fontWeight: 900, fontSize: 18 }}>Hàng bán chạy</div>
           <div style={{ fontSize: 12.5, opacity: 0.7, marginTop: 2 }}>
-            Cộng dồn số lượng bán theo khoảng thời gian, tách riêng Máy và Linh kiện — chỉ tính hóa đơn BÁN đã duyệt.
+            Cộng dồn số lượng bán theo khoảng thời gian, tách riêng Máy và Linh kiện — hóa đơn bán đã duyệt trừ hàng khách trả lại.
           </div>
         </div>
       </div>
@@ -350,8 +350,8 @@ const dateRangeInvalid = !!(mode === "range" && fromYmd && toYmd && fromYmd > to
       </div>
 
       <div style={{ fontSize: 12, opacity: 0.65, marginTop: 10, lineHeight: 1.5 }}>
-        Ghi chú: đang tính theo hóa đơn loại <b>BÁN (SALES)</b>, trạng thái <b>ĐÃ DUYỆT (APPROVED)</b>, chưa trừ hàng bán trả lại
-        (SALES_RETURN). Nếu cần tính số lượng bán ròng (net), báo lại để chỉnh thêm.
+        Ghi chú: số lượng = hàng bán trên hoá đơn đã duyệt trong kỳ <b>trừ</b> hàng khách trả lại có ngày phiếu trả trong kỳ.
+        Hàng trả của hoá đơn kỳ trước được trừ vào kỳ có phiếu trả, nên số kỳ đã chốt không bị thay đổi.
       </div>
     </div>
   );

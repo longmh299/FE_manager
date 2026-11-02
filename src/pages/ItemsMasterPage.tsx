@@ -5,6 +5,7 @@ import type { Item } from "../types";
 import { extractList } from "../utils/apiHelpers";
 import { useAuth } from "../context/AuthContext";
 import DeleteItemDialog, { type DeleteItemTarget } from "../components/DeleteItemDialog";
+import { appAlert } from "../components/AppDialog";
 
 const PAGE_SIZE = 50;
 
@@ -21,6 +22,7 @@ const ItemsMasterPage: React.FC = () => {
 
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importing, setImporting] = useState(false);
+  const [excelOpen, setExcelOpen] = useState(false);
 
   if (!isAdmin) {
     return (
@@ -73,7 +75,7 @@ const ItemsMasterPage: React.FC = () => {
       fetchItems();
     } catch (err: any) {
       console.error("Save item error", err);
-      alert(err?.response?.data?.message || "Không lưu được mặt hàng");
+      appAlert(err?.response?.data?.message || "Không lưu được mặt hàng.", { title: "Chưa lưu được", tone: "danger" });
     }
   };
 
@@ -83,7 +85,7 @@ const ItemsMasterPage: React.FC = () => {
 
   const handleImport = async () => {
     if (!importFile) {
-      alert("Vui lòng chọn file Excel trước");
+      appAlert("Chọn file Excel trước đã.", { tone: "warning" });
       return;
     }
     setImporting(true);
@@ -96,11 +98,12 @@ const ItemsMasterPage: React.FC = () => {
       });
 
       setImportFile(null);
+      setExcelOpen(false);
       fetchItems();
-      alert("Import danh mục hàng hóa thành công");
+      appAlert("Danh mục mặt hàng đã cập nhật theo file Excel.", { title: "Nhập xong", tone: "success" });
     } catch (err: any) {
       console.error("Import items error", err);
-      alert(err?.response?.data?.message || "Import thất bại");
+      appAlert(err?.response?.data?.message || "Không nhập được file. Kiểm tra lại file theo mẫu.", { title: "Nhập file lỗi", tone: "danger" });
     } finally {
       setImporting(false);
     }
@@ -120,7 +123,7 @@ const ItemsMasterPage: React.FC = () => {
       window.URL.revokeObjectURL(url);
     } catch (err: any) {
       console.error("Download error", err);
-      alert(err?.response?.status === 403 ? "Bạn không có quyền tải file này." : "Không tải được file. Thử lại sau.");
+      appAlert(err?.response?.status === 403 ? "Bạn không có quyền tải file này." : "Không tải được file. Thử lại sau.", { tone: "danger" });
     }
   };
 
@@ -138,71 +141,93 @@ const ItemsMasterPage: React.FC = () => {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold mb-4">
-        Danh mục mặt hàng (Admin)
-      </h2>
-
-      {/* Thanh filter + thêm mới + import */}
-      <div className="flex flex-wrap gap-3 items-end mb-4 text-sm">
-        <form onSubmit={handleSearch} className="flex items-center gap-2">
-          <input
-            placeholder="Tìm theo mã / tên..."
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            className="border rounded px-3 py-2 outline-none focus:ring focus:ring-blue-100 focus:border-blue-500"
-          />
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Danh mục mặt hàng</h1>
+          <p className="mt-0.5 text-sm text-slate-500">Mã hàng, tên, loại và giá bán dùng khi lập hoá đơn.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
           <button
-            type="submit"
-            className="px-4 py-2 rounded bg-slate-900 text-white hover:bg-slate-800"
+            type="button"
+            onClick={() => setExcelOpen((v) => !v)}
+            aria-expanded={excelOpen}
+            className={`inline-flex items-center gap-2 rounded-lg border px-3.5 py-2 text-sm font-medium ${
+              excelOpen ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+            }`}
           >
-            Tìm
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+              <path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z" strokeLinejoin="round" />
+              <path d="M14 3v5h5M9 13l2 2 4-4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Nhập / xuất Excel
           </button>
-        </form>
-
-        <button
-          onClick={() =>
-            setEditing({
-              id: "",
-              sku: "",
-              name: "",
-              kind: "part",
-              unit: "pcs",
-              price: 0,
-              note: "",
-            })
-          }
-          className="px-4 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-500 ml-auto"
-        >
-          + Thêm hàng
-        </button>
-
-        <div className="flex w-full min-w-0 flex-col gap-1 text-xs md:w-auto">
-          <div className="font-semibold mb-1">Import danh mục hàng (Excel)</div>
-          <div className="flex flex-wrap gap-2 items-center">
-            <button
-              type="button"
-              onClick={handleDownloadTemplate}
-              className="px-3 py-1.5 rounded border"
-            >
-              Tải file mẫu / export hiện tại
-            </button>
-            <input
-              type="file"
-              accept=".xlsx,.xls"
-              onChange={(e) => setImportFile(e.target.files?.[0] || null)}
-              className="text-xs"
-            />
-            <button
-              type="button"
-              disabled={importing}
-              onClick={handleImport}
-              className="px-3 py-1.5 rounded bg-slate-900 text-white disabled:opacity-60"
-            >
-              {importing ? "Đang import..." : "Import Excel"}
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() =>
+              setEditing({
+                id: "",
+                sku: "",
+                name: "",
+                kind: "part",
+                unit: "pcs",
+                price: 0,
+                note: "",
+              })
+            }
+            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+          >
+            + Thêm mặt hàng
+          </button>
         </div>
       </div>
+
+      {excelOpen && (
+        <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div>
+              <div className="text-sm font-medium text-slate-900">1. Tải file mẫu</div>
+              <p className="mt-0.5 text-xs text-slate-500">File chứa toàn bộ mặt hàng hiện có, sửa / thêm dòng ngay trong đó.</p>
+              <button type="button" onClick={handleDownloadTemplate} className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                Tải file Excel
+              </button>
+            </div>
+            <div>
+              <div className="text-sm font-medium text-slate-900">2. Chọn file đã sửa</div>
+              <label className="mt-2 flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-slate-300 px-3 py-2.5 text-sm text-slate-600 hover:border-slate-400 hover:bg-slate-50">
+                <input type="file" accept=".xlsx,.xls" className="sr-only" onChange={(e) => setImportFile(e.target.files?.[0] || null)} />
+                <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+                  <path d="M12 16V4M7 9l5-5 5 5M5 20h14" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                <span className="truncate">{importFile ? importFile.name : "Bấm để chọn file .xlsx"}</span>
+              </label>
+            </div>
+            <div>
+              <div className="text-sm font-medium text-slate-900">3. Nhập vào hệ thống</div>
+              <p className="mt-0.5 text-xs text-slate-500">Mã trùng thì cập nhật, mã mới thì thêm.</p>
+              <button
+                type="button"
+                disabled={importing || !importFile}
+                onClick={handleImport}
+                className="mt-2 rounded-lg bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+              >
+                {importing ? "Đang nhập…" : "Nhập file"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <form onSubmit={handleSearch} className="mb-3 flex gap-2 text-sm">
+        <input
+          placeholder="Tìm theo mã hoặc tên hàng…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          className="w-full max-w-md rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20"
+        />
+        <button type="submit" className="rounded-lg bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-800">
+          Tìm
+        </button>
+      </form>
 
       {/* Bảng items */}
       <div className="bg-white border border-slate-200 rounded-lg shadow-sm text-sm overflow-auto">
@@ -242,9 +267,9 @@ const ItemsMasterPage: React.FC = () => {
                   <td className="px-3 py-2 border-b">{it.sku}</td>
                   <td className="px-3 py-2 border-b">{it.name}</td>
                   <td className="px-3 py-2 border-b">
-                    {it.kind === "machine"
+                    {String(it.kind || "").toLowerCase() === "machine"
                       ? "Máy"
-                      : it.kind === "part"
+                      : String(it.kind || "").toLowerCase() === "part"
                       ? "Linh kiện"
                       : it.kind || "-"}
                   </td>
@@ -255,16 +280,16 @@ const ItemsMasterPage: React.FC = () => {
                   </td>
                   <td className="px-3 py-2 border-b text-right space-x-2">
                     <button
-                      className="px-2 py-1 rounded border text-xs"
+                      className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
                       onClick={() => setEditing(it)}
                     >
                       Sửa
                     </button>
                     <button
-                      className="px-2 py-1 rounded bg-red-600 text-white text-xs"
+                      className="rounded-lg border border-rose-200 bg-white px-2.5 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50"
                       onClick={() => handleDelete(it)}
                     >
-                      Xóa
+                      Xoá
                     </button>
                   </td>
                 </tr>

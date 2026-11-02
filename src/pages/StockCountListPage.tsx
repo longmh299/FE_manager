@@ -1,6 +1,7 @@
 // src/pages/StockCountListPage.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { appAlert } from "../components/AppDialog";
 import api, { extractList } from "../api/client";
 import { useIsMobile } from "../hooks/uselsMobile";
 
@@ -119,11 +120,11 @@ const StockCountListPage: React.FC = () => {
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!locationId) {
-      alert("Vui lòng chọn kho để tạo phiếu kiểm kê.");
+      appAlert("Chọn kho cần kiểm kê trước.", { title: "Thiếu kho", tone: "warning" });
       return;
     }
     if (createLocked) {
-      alert(createLockedMsg || "Kỳ sổ đã khoá, không thể tạo phiếu kiểm kê.");
+      appAlert(createLockedMsg || "Kỳ sổ đã khoá, không tạo được phiếu kiểm kê.", { title: "Không tạo được", tone: "warning" });
       return;
     }
 
@@ -138,7 +139,7 @@ const StockCountListPage: React.FC = () => {
       if (sc?.id) {
         navigate(`/stock-counts/${sc.id}`);
       } else {
-        alert("Tạo phiếu kiểm kê thành công nhưng không nhận được ID.");
+        appAlert("Đã tạo phiếu nhưng không mở được. Tải lại trang để thấy phiếu mới.", { tone: "warning" });
       }
     } catch (err: any) {
       console.error("Failed to create stock count", err);
@@ -147,7 +148,7 @@ const StockCountListPage: React.FC = () => {
         setCreateLocked(true);
         setCreateLockedMsg(msg);
       }
-      alert(msg);
+      appAlert(msg, { title: "Không tạo được phiếu", tone: "danger" });
     } finally {
       setCreating(false);
     }
@@ -171,7 +172,7 @@ const StockCountListPage: React.FC = () => {
             border: "1px solid #9ae6b4",
           }}
         >
-          Posted
+          Đã ghi sổ
         </span>
       );
     }
@@ -184,14 +185,14 @@ const StockCountListPage: React.FC = () => {
           border: "1px solid #fbd38d",
         }}
       >
-        Draft
+        Đang đếm
       </span>
     );
   };
 
   return (
     <div style={{ padding: 16, maxWidth: 1200, margin: "0 auto" }}>
-      <h2 style={{ marginBottom: 12 }}>Kiểm tồn kho (Stock Count)</h2>
+      <h2 style={{ marginBottom: 12 }}>Kiểm kê kho</h2>
 
       {/* ✅ Period lock banner (create) */}
       {createLocked && (
@@ -258,8 +259,8 @@ const StockCountListPage: React.FC = () => {
             style={{ minWidth: 140, padding: 6 }}
           >
             <option value="">Tất cả</option>
-            <option value="draft">Draft</option>
-            <option value="posted">Posted</option>
+            <option value="draft">Đang đếm</option>
+            <option value="posted">Đã ghi sổ</option>
           </select>
         </div>
 
@@ -271,7 +272,7 @@ const StockCountListPage: React.FC = () => {
             type="text"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Nhập refNo hoặc note..."
+            placeholder="Mã phiếu hoặc ghi chú..."
             style={{ width: "100%", padding: 6 }}
           />
         </div>
@@ -401,7 +402,7 @@ const StockCountListPage: React.FC = () => {
               <th style={thStyle}>Trạng thái</th>
               <th style={thStyle}>Ghi chú</th>
               <th style={thStyle}>Tạo lúc</th>
-              <th style={thStyle}>#</th>
+              <th style={thStyle}>Thao tác</th>
             </tr>
           </thead>
           <tbody>
@@ -446,7 +447,7 @@ const StockCountListPage: React.FC = () => {
                         cursor: "pointer",
                       }}
                     >
-                      Xem / Sửa
+                      {row.status === "posted" ? "Xem" : "Đếm tiếp"}
                     </button>
                   </td>
                 </tr>

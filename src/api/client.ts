@@ -26,6 +26,29 @@ api.interceptors.request.use((config) => {
 });
 
 /**
+ * ✅ Ngày chứng từ bị khoá (đã chốt sổ / quá hạn 7–90 ngày): báo bằng hộp thông báo giữa màn hình
+ *    (DateLockedAlert trong Layout nghe sự kiện "date-locked"), ở MỌI trang, không cần sửa từng nơi.
+ *    Câu lỗi gốc rút gọn lại để toast / dòng đỏ của từng trang không lặp nguyên đoạn dài.
+ */
+const LOCK_RE = /đã chốt sổ|quá hạn chỉnh sửa/i;
+api.interceptors.response.use(
+  (res) => res,
+  (error) => {
+    const data = error?.response?.data;
+    const msg = typeof data?.message === "string" ? data.message : "";
+    if (msg && LOCK_RE.test(msg)) {
+      const kind = /đã chốt sổ/i.test(msg) ? "closed" : "rolling";
+      try {
+        window.dispatchEvent(new CustomEvent("date-locked", { detail: { message: msg, kind } }));
+      } catch {}
+      data.message = kind === "closed" ? "Ngày chứng từ nằm trong kỳ đã chốt sổ." : "Chứng từ đã quá hạn chỉnh sửa.";
+      data.lockedMessage = msg;
+    }
+    return Promise.reject(error);
+  }
+);
+
+/**
  * Lấy base URL gốc (để mở link export Excel, v.v…)
  * Ví dụ: http://localhost:3000/api -> http://localhost:3000
  */

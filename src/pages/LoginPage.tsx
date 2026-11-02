@@ -1,18 +1,16 @@
 import React, { useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useLocation, useNavigate } from "react-router-dom";
-import { api } from "../api/client";
 
 const LoginPage: React.FC = () => {
     
   const { login } = useAuth();
-  const [username, setUsername] = useState("username");
-  const [password, setPassword] = useState("password");
+  // ✅ ô trống khi mở trang (trước đây điền sẵn chữ "username" / "password")
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [forgotUsername, setForgotUsername] = useState("");
-  const [forgotMessage, setForgotMessage] = useState<string | null>(null);
   const [showForgot, setShowForgot] = useState(false);
 
   const navigate = useNavigate();
@@ -31,20 +29,6 @@ const LoginPage: React.FC = () => {
       setError(err?.response?.data?.message || "Đăng nhập thất bại");
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleForgot = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setForgotMessage(null);
-    try {
-      // TODO: cần implement POST /auth/forgot-password ở backend nếu muốn dùng thật
-      await api.post("/auth/forgot-password", { username: forgotUsername });
-      setForgotMessage(
-        "Nếu tài khoản tồn tại, hệ thống sẽ gửi hướng dẫn đặt lại mật khẩu."
-      );
-    } catch {
-      setForgotMessage("Không gửi được yêu cầu. Vui lòng thử lại.");
     }
   };
 
@@ -114,44 +98,19 @@ const LoginPage: React.FC = () => {
           </button>
         </form>
 
+        {/* ✅ Quên mật khẩu: hệ thống chưa gửi mail đặt lại, nên hướng dẫn nhờ quản trị (trước đây form gửi tới API không tồn tại, luôn báo lỗi) */}
         {showForgot && (
-          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-sm">
-              <h2 className="font-semibold mb-3 text-slate-800">
-                Quên mật khẩu
-              </h2>
-              <form onSubmit={handleForgot} className="space-y-3 text-sm">
-                <div>
-                  <label className="block mb-1 text-slate-700">
-                    Tên đăng nhập
-                  </label>
-                  <input
-                    className="w-full border rounded px-3 py-2 outline-none focus:ring focus:ring-blue-100 focus:border-blue-500"
-                    value={forgotUsername}
-                    onChange={(e) => setForgotUsername(e.target.value)}
-                  />
-                </div>
-                {forgotMessage && (
-                  <div className="text-xs text-slate-700 bg-slate-50 border rounded px-2 py-1">
-                    {forgotMessage}
-                  </div>
-                )}
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowForgot(false)}
-                    className="px-3 py-1 rounded border text-xs"
-                  >
-                    Đóng
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-3 py-1 rounded bg-slate-900 text-white text-xs"
-                  >
-                    Gửi yêu cầu
-                  </button>
-                </div>
-              </form>
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowForgot(false)}>
+            <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-sm mx-4" onClick={(e) => e.stopPropagation()}>
+              <h2 className="font-semibold mb-3 text-slate-800">Quên mật khẩu</h2>
+              <p className="text-sm text-slate-600">
+                Liên hệ quản trị hệ thống để được hỗ trợ lấy lại mật khẩu. Đăng nhập được rồi thì vào <b>Hệ thống → Đổi mật khẩu</b> để đổi sang mật khẩu của riêng bạn.
+              </p>
+              <div className="mt-4 flex justify-end">
+                <button type="button" onClick={() => setShowForgot(false)} className="px-3 py-1.5 rounded bg-slate-900 text-white text-sm">
+                  Đã hiểu
+                </button>
+              </div>
             </div>
           </div>
         )}

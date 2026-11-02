@@ -1,5 +1,6 @@
 // src/pages/SalesReturnsPage.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useIsMobile } from "../hooks/uselsMobile";
 import { useNavigate } from "react-router-dom";
 import api from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
@@ -332,6 +333,7 @@ function computeEffectiveHoldAmount(inv?: SalesInvoiceDetail | null) {
 }
 
 export default function SalesReturnsPage() {
+  const isMobile = useIsMobile(); // ✅ điện thoại: danh sách dạng thẻ
   const nav = useNavigate();
   const toast = useToast();
 
@@ -546,7 +548,7 @@ export default function SalesReturnsPage() {
     setRefundAmount(Number(inv.total || 0));
     setRefundMethod("");
     setRefundRefNo("");
-    setRefundNote(`Hoàn tiền phiếu trả hàng ${inv.code} (cấn vào HĐ SALES gốc).`);
+    setRefundNote(`Hoàn tiền phiếu trả hàng ${inv.code} (trừ vào hoá đơn bán gốc).`);
 
     setRefundPartnerId(inv.partnerId ? String(inv.partnerId) : "");
     setPartnerQuery(inv.partnerName ? String(inv.partnerName) : "");
@@ -741,7 +743,7 @@ export default function SalesReturnsPage() {
         setSalesInvDetail(null);
         showCenterAlert(
           "error",
-          "Không tải được hoá đơn SALES gốc",
+          "Không tải được hoá đơn bán gốc",
           e?.response?.data?.message || e?.message || "Vui lòng thử lại."
         );
       } finally {
@@ -856,7 +858,7 @@ export default function SalesReturnsPage() {
         ok: false as const,
         message: `Số tiền hoàn vượt quá số khách đã thanh toán thực tế. Hiện chỉ còn có thể hoàn tối đa ${formatMoney(
           totalAvail
-        )} (NORMAL: ${formatMoney(normalAvail)}, HOLD: ${formatMoney(holdAvail)}).`,
+        )} (tiền hàng ${formatMoney(normalAvail)}, tiền giữ bảo hành ${formatMoney(holdAvail)}).`,
         allocations: [] as any[],
       };
     }
@@ -899,12 +901,12 @@ export default function SalesReturnsPage() {
     }
 
     if (!salesInvId) {
-      showCenterAlert("warning", "Thiếu dữ liệu", "Bạn cần chọn HÓA ĐƠN SALES GỐC để cấn hoàn tiền (Option A).");
+      showCenterAlert("warning", "Thiếu dữ liệu", "Chọn hoá đơn bán gốc để trừ tiền hoàn vào đó.");
       return;
     }
 
     if (!salesInvDetail) {
-      showCenterAlert("warning", "Thiếu dữ liệu", "Chưa tải được thông tin hoá đơn SALES gốc. Vui lòng thử lại.");
+      showCenterAlert("warning", "Thiếu dữ liệu", "Chưa tải được hoá đơn bán gốc. Thử lại.");
       return;
     }
 
@@ -912,9 +914,9 @@ export default function SalesReturnsPage() {
       showCenterAlert(
         "warning",
         "Số tiền hoàn vượt quá mức cho phép",
-        `Hoá đơn SALES gốc hiện chỉ còn có thể hoàn tối đa ${formatMoney(refundableTotalNow)} (NORMAL: ${formatMoney(
+        `Hoá đơn gốc chỉ còn hoàn được tối đa ${formatMoney(refundableTotalNow)} (tiền hàng ${formatMoney(
           refundableNormalNow
-        )}, HOLD: ${formatMoney(refundableHoldNow)}).`
+        )}, tiền giữ bảo hành ${formatMoney(refundableHoldNow)}).`
       );
       return;
     }
@@ -932,8 +934,8 @@ export default function SalesReturnsPage() {
 
     const splitText =
       built?.split && (built.split.normalPart > 0 || built.split.holdPart > 0)
-        ? ` (tách: NORMAL ${formatMoney(built.split.normalPart)}${
-            built.split.holdPart > 0 ? ` + HOLD ${formatMoney(built.split.holdPart)}` : ""
+        ? ` (gồm tiền hàng ${formatMoney(built.split.normalPart)}${
+            built.split.holdPart > 0 ? ` + tiền giữ bảo hành ${formatMoney(built.split.holdPart)}` : ""
           })`
         : "";
 
@@ -946,7 +948,7 @@ export default function SalesReturnsPage() {
         accountId: refundAccountId,
         method: refundMethod || undefined,
         refNo: refundRefNo || undefined,
-        note: refundNote || `Hoàn tiền phiếu trả hàng ${inv.code} (cấn vào HĐ SALES gốc, Option A)${splitText}.`,
+        note: refundNote || `Hoàn tiền phiếu trả hàng ${inv.code} (trừ vào hoá đơn bán gốc)${splitText}.`,
         allocations: built.allocations,
       });
 
@@ -963,6 +965,56 @@ export default function SalesReturnsPage() {
   if (role !== "admin") return null;
 
   const effectiveHoldAmount = computeEffectiveHoldAmount(salesInvDetail);
+
+  // ✅ nút thao tác dùng chung cho bảng (máy tính) và thẻ (điện thoại)
+  const renderActions = (r: any, isLocked: boolean) => (
+    <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
+      {isLocked ? (
+        <>
+          <button style={ghostBtnStyle()} onClick={() => nav(`/sales-returns/${r.id}`)}>
+            Xem
+          </button>
+
+          {r.status === "APPROVED" ? (
+            <button style={primaryBtnStyle()} onClick={() => openRefund(r)}>
+              Hoàn tiền
+            </button>
+          ) : null}
+        </>
+      ) : (
+        <>
+          <button style={ghostBtnStyle()} onClick={() => nav(`/sales-returns/${r.id}`)}>
+            Xem/Sửa
+          </button>
+
+          {r.status === "DRAFT" && (
+            <>
+              <button style={primaryBtnStyle()} onClick={() => actSubmit(r.id)}>
+                Gửi duyệt
+              </button>
+              <button style={dangerBtnStyle()} onClick={() => actDelete(r.id)}>
+                Xoá
+              </button>
+            </>
+          )}
+
+          {r.status === "SUBMITTED" && (
+            <>
+              <button style={primaryBtnStyle()} onClick={() => actApprove(r.id)}>
+                Duyệt
+              </button>
+              <button style={dangerBtnStyle()} onClick={() => actReject(r.id)}>
+                Từ chối
+              </button>
+              <button style={ghostBtnStyle()} onClick={() => actRecall(r.id)}>
+                Hủy gửi
+              </button>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
 
   return (
     <div style={{ padding: 16 }}>
@@ -1095,7 +1147,38 @@ export default function SalesReturnsPage() {
         </button>
       </div>
 
-      {/* Table */}
+      {/* ✅ ĐIỆN THOẠI: mỗi phiếu 1 thẻ */}
+      {isMobile ? (
+        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+          {loading ? (
+            <div style={{ padding: 16 }}>Đang tải…</div>
+          ) : rows.length === 0 ? (
+            <div style={{ padding: 16 }}>Không có dữ liệu.</div>
+          ) : (
+            rows.map((r) => {
+              const isLocked = r.status === "APPROVED" || r.status === "REJECTED";
+              return (
+                <div key={r.id} style={{ border: `1px solid ${inputBaseBorder}`, borderRadius: 12, padding: 12, background: "#fff" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 800 }}>
+                        {r.code} <span style={{ fontWeight: 400, fontSize: 12, color: "#64748b" }}>{formatDateDisplay(r.issueDate)}</span>
+                      </div>
+                      <div style={{ fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.partnerName || "—"}</div>
+                      {r.refInvoiceCode ? <div style={{ fontSize: 12, color: "#64748b" }}>HĐ gốc {r.refInvoiceCode}</div> : null}
+                    </div>
+                    <div style={{ textAlign: "right", flexShrink: 0 }}>
+                      <span style={statusPillStyle(r.status)}>{statusLabel(r.status)}</span>
+                      <div style={{ marginTop: 6, fontWeight: 800 }}>{formatMoney(r.total)}</div>
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 10 }}>{renderActions(r, isLocked)}</div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      ) : (
       <div style={{ marginTop: 14, border: `1px solid ${inputBaseBorder}`, borderRadius: 14, overflow: "hidden", background: "#fff" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead style={{ background: "#F9FAFB" }}>
@@ -1142,52 +1225,7 @@ export default function SalesReturnsPage() {
                     </td>
 
                     <td style={{ padding: 14, borderBottom: "1px solid #F1F5F9", textAlign: "right" }}>
-                      <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                        {isLocked ? (
-                          <>
-                            <button style={ghostBtnStyle()} onClick={() => nav(`/sales-returns/${r.id}`)}>
-                              Xem
-                            </button>
-
-                            {r.status === "APPROVED" ? (
-                              <button style={primaryBtnStyle()} onClick={() => openRefund(r)}>
-                                Hoàn tiền
-                              </button>
-                            ) : null}
-                          </>
-                        ) : (
-                          <>
-                            <button style={ghostBtnStyle()} onClick={() => nav(`/sales-returns/${r.id}`)}>
-                              Xem/Sửa
-                            </button>
-
-                            {r.status === "DRAFT" && (
-                              <>
-                                <button style={primaryBtnStyle()} onClick={() => actSubmit(r.id)}>
-                                  Gửi duyệt
-                                </button>
-                                <button style={dangerBtnStyle()} onClick={() => actDelete(r.id)}>
-                                  Xoá
-                                </button>
-                              </>
-                            )}
-
-                            {r.status === "SUBMITTED" && (
-                              <>
-                                <button style={primaryBtnStyle()} onClick={() => actApprove(r.id)}>
-                                  Duyệt
-                                </button>
-                                <button style={dangerBtnStyle()} onClick={() => actReject(r.id)}>
-                                  Từ chối
-                                </button>
-                                <button style={ghostBtnStyle()} onClick={() => actRecall(r.id)}>
-                                  Hủy gửi
-                                </button>
-                              </>
-                            )}
-                          </>
-                        )}
-                      </div>
+                      {renderActions(r, isLocked)}
                     </td>
                   </tr>
                 );
@@ -1196,6 +1234,7 @@ export default function SalesReturnsPage() {
           </tbody>
         </table>
       </div>
+      )}
 
       {/* Pagination */}
       <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1227,12 +1266,12 @@ export default function SalesReturnsPage() {
 
             <div style={modalBodyStyle()}>
               <div style={{ marginBottom: 10, fontSize: 13, color: "#64748b", fontWeight: 700 }}>
-                <b>Option A:</b> Hoàn tiền tạo phiếu <b>PAYMENT</b> và phân bổ âm vào <b>HĐ SALES gốc</b>.
+                Hệ thống lập <b>phiếu chi</b> trả tiền cho khách và trừ vào <b>hoá đơn bán gốc</b>.
                 <div style={{ marginTop: 6, color: "#0f172a", fontWeight: 900 }}>
-                  ✅ Hạn mức hoàn = <b>số khách đã trả thật</b> trên HĐ gốc (NORMAL net + HOLD net).
+                  Hoàn tối đa bằng <b>số tiền khách đã thật sự trả</b> cho hoá đơn gốc.
                 </div>
                 <div style={{ marginTop: 6, color: "#b45309", fontWeight: 900 }}>
-                  ⚠️ Nếu khách <b>chưa trả HOLD</b> thì HOLD net = 0 → <b>không hoàn HOLD</b>. Nếu khách đã trả HOLD trước đó → hoàn được cả HOLD.
+                  Tiền giữ bảo hành: khách chưa trả thì không hoàn phần này; đã trả rồi thì hoàn được.
                 </div>
               </div>
 
@@ -1245,7 +1284,7 @@ export default function SalesReturnsPage() {
                   marginBottom: 12,
                 }}
               >
-                <div style={{ fontWeight: 900, marginBottom: 6 }}>Tình trạng thu/hoàn của hoá đơn SALES gốc</div>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>Tiền đã thu / đã hoàn của hoá đơn gốc</div>
 
                 {salesInvDetailLoading ? (
                   <div style={{ color: "#64748b", fontWeight: 800 }}>Đang tải thông tin hoá đơn gốc…</div>
@@ -1261,11 +1300,11 @@ export default function SalesReturnsPage() {
                         <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>Tổng HĐ: {formatMoney(salesInvDetail.total)}</div>
                         {salesInvDetail?.hasWarrantyHold ? (
                           <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>
-                            HOLD: {formatMoney(effectiveHoldAmount)}
+                            Giữ bảo hành: {formatMoney(effectiveHoldAmount)}
                             {salesInvDetail.warrantyDueDate ? ` • Hạn: ${formatDateDisplay(salesInvDetail.warrantyDueDate)}` : ""}
                           </div>
                         ) : (
-                          <div style={{ fontSize: 12, color: "#94a3b8", fontWeight: 800 }}>Không có HOLD</div>
+                          <div style={{ fontSize: 12, color: "#94a3b8", fontWeight: 800 }}>Không giữ tiền bảo hành</div>
                         )}
                       </div>
 
@@ -1273,7 +1312,7 @@ export default function SalesReturnsPage() {
                         <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>Đã hoàn trước đó</div>
                         <div style={{ fontWeight: 900 }}>{formatMoney(refundedNormalBefore + refundedHoldBefore)}</div>
                         <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>
-                          (NORMAL: {formatMoney(refundedNormalBefore)} • HOLD: {formatMoney(refundedHoldBefore)})
+                          (tiền hàng {formatMoney(refundedNormalBefore)} • giữ BH {formatMoney(refundedHoldBefore)})
                         </div>
                       </div>
 
@@ -1283,24 +1322,24 @@ export default function SalesReturnsPage() {
                           {formatMoney(refundableTotalNow)}
                         </div>
                         <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>
-                          (NORMAL: {formatMoney(refundableNormalNow)} • HOLD: {formatMoney(refundableHoldNow)})
+                          (tiền hàng {formatMoney(refundableNormalNow)} • giữ BH {formatMoney(refundableHoldNow)})
                         </div>
                       </div>
                     </div>
 
                     <div style={{ marginTop: 10, fontSize: 12, color: "#334155", fontWeight: 800 }}>
-                      Gợi ý: muốn “hoàn hết” thì nhập đúng số tiền cần hoàn. Hệ thống sẽ tự tách: <b>hoàn NORMAL trước</b>, thiếu thì <b>hoàn HOLD</b>.
+                      Gợi ý: muốn “hoàn hết” thì nhập đúng số tiền cần hoàn. Hệ thống hoàn <b>tiền hàng trước</b>, còn thiếu mới hoàn <b>tiền giữ bảo hành</b>.
                     </div>
                   </>
                 ) : salesInvId ? (
-                  <div style={{ color: "#991B1B", fontWeight: 900 }}>Không tải được hoá đơn SALES gốc.</div>
+                  <div style={{ color: "#991B1B", fontWeight: 900 }}>Không tải được hoá đơn bán gốc.</div>
                 ) : (
-                  <div style={{ color: "#64748b", fontWeight: 800 }}>Chưa chọn hoá đơn SALES gốc.</div>
+                  <div style={{ color: "#64748b", fontWeight: 800 }}>Chưa chọn hoá đơn bán gốc.</div>
                 )}
 
                 {salesInvDetail && (salesInvDetail.allocations || []).length > 0 ? (
                   <div style={{ marginTop: 10 }}>
-                    <div style={{ fontSize: 12, color: "#64748b", fontWeight: 900, marginBottom: 6 }}>Lịch sử thu/hoàn gần đây (NORMAL/HOLD)</div>
+                    <div style={{ fontSize: 12, color: "#64748b", fontWeight: 900, marginBottom: 6 }}>Lịch sử thu / hoàn gần đây</div>
 
                     <div
                       style={{
@@ -1318,7 +1357,7 @@ export default function SalesReturnsPage() {
                           const isHold = String(a.kind) === "WARRANTY_HOLD";
                           const signLabel = a.amount >= 0 ? "THU" : "HOÀN";
                           const signColor = a.amount >= 0 ? "#065F46" : "#991B1B";
-                          const kindBadge = isHold ? "HOLD" : "NORMAL";
+                          const kindBadge = isHold ? "Giữ BH" : "Tiền hàng";
                           const kindBg = isHold ? "#EEF2FF" : "#ECFDF5";
                           const kindBd = isHold ? "#C7D2FE" : "#6EE7B7";
                           const kindTx = isHold ? "#3730A3" : "#065F46";
@@ -1389,8 +1428,8 @@ export default function SalesReturnsPage() {
 
                   {overRefund ? (
                     <div style={{ marginTop: 6, color: "#991B1B", fontWeight: 900, fontSize: 12 }}>
-                      Số tiền hoàn đang vượt mức cho phép. Tối đa bạn chỉ được hoàn: {formatMoney(refundableTotalNow)} (NORMAL:{" "}
-                      {formatMoney(refundableNormalNow)} • HOLD: {formatMoney(refundableHoldNow)}).
+                      Số tiền hoàn đang vượt mức cho phép. Tối đa bạn chỉ được hoàn: {formatMoney(refundableTotalNow)} (tiền hàng{" "}
+                      {formatMoney(refundableNormalNow)} • giữ BH {formatMoney(refundableHoldNow)}).
                     </div>
                   ) : null}
                 </div>
@@ -1502,7 +1541,7 @@ export default function SalesReturnsPage() {
 
               {/* Sales invoice gốc */}
               <div style={{ marginTop: 10 }} ref={salesInvBoxRef}>
-                <div style={labelStyle()}>Hóa đơn SALES gốc (bắt buộc)</div>
+                <div style={labelStyle()}>Hoá đơn bán gốc (bắt buộc)</div>
 
                 {salesInvId ? (
                   <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -1528,7 +1567,7 @@ export default function SalesReturnsPage() {
                       onBlur={(e) => applyBlurStyle(e.currentTarget)}
                       onMouseEnter={(e) => applyHoverStyle(e.currentTarget)}
                       onMouseLeave={(e) => applyLeaveStyle(e.currentTarget)}
-                      placeholder={refundPartnerId ? "Gõ mã hóa đơn SALES để tìm..." : "Chọn khách hàng trước để lọc hóa đơn SALES..."}
+                      placeholder={refundPartnerId ? "Gõ số hoá đơn bán để tìm..." : "Chọn khách hàng trước để lọc hoá đơn bán..."}
                       disabled={!refundPartnerId}
                     />
 
@@ -1554,7 +1593,7 @@ export default function SalesReturnsPage() {
                         ) : salesInvLoading ? (
                           <div style={{ padding: 12, color: "#64748b", fontWeight: 700 }}>Đang tìm…</div>
                         ) : salesInvOptions.length === 0 ? (
-                          <div style={{ padding: 12, color: "#b45309", fontWeight: 800 }}>Không có hoá đơn SALES phù hợp. Thử gõ mã hoặc bỏ trống để xem gần đây.</div>
+                          <div style={{ padding: 12, color: "#b45309", fontWeight: 800 }}>Không có hoá đơn bán phù hợp. Thử gõ mã hoặc bỏ trống để xem gần đây.</div>
                         ) : (
                           salesInvOptions.map((x) => {
                             const label = `${x.code} • ${formatDateDisplay(x.issueDate)} • ${formatMoney(x.total)}`;
@@ -1583,7 +1622,7 @@ export default function SalesReturnsPage() {
                 )}
 
                 <div style={{ marginTop: 6, fontSize: 12, color: "#64748b", fontWeight: 800 }}>
-                  Gợi ý: chọn đúng HĐ gốc để hệ thống tự kiểm tra “khách đã trả NORMAL/HOLD bao nhiêu” và “còn được hoàn bao nhiêu”.
+                  Chọn đúng hoá đơn gốc để hệ thống tự tính khách đã trả bao nhiêu và còn hoàn được bao nhiêu.
                 </div>
               </div>
 

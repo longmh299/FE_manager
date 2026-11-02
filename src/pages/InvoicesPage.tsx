@@ -1075,7 +1075,30 @@ const InvoicesPage: React.FC = () => {
   };
 
   // ✅ nhân viên / kế toán: chỉ xoá nháp (server kiểm tra thêm: kế toán chỉ xoá nháp do mình lập); quản trị: mọi HĐ chưa duyệt
-  const canDelete = (inv: InvoiceListItem) => (isStaff || isAccountant ? inv.status === "DRAFT" : inv.status !== "APPROVED");
+  // ✅ kỳ đã chốt sổ: không xoá / mở lại hoá đơn có ngày trong kỳ đã chốt (server cũng chặn)
+  const [closedUntil, setClosedUntil] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api
+      .get("/locks/period")
+      .then((r) => alive && setClosedUntil(r?.data?.closedUntil || null))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const inClosedPeriod = (inv: InvoiceListItem) => {
+    if (!closedUntil || !inv.date) return false;
+    const t = new Date(inv.date as any).getTime();
+    if (!Number.isFinite(t)) return false;
+    const ymdVN = new Date(t + 7 * 3600 * 1000).toISOString().slice(0, 10);
+    return ymdVN <= closedUntil;
+  };
+  const closedLabel = closedUntil ? closedUntil.split("-").reverse().join("/") : "";
+  const closedTitle = `Kỳ đã chốt sổ (đến hết ${closedLabel}) — muốn sửa phải lùi mốc chốt sổ trước`;
+
+  const canDelete = (inv: InvoiceListItem) =>
+    !inClosedPeriod(inv) && (isStaff || isAccountant ? inv.status === "DRAFT" : inv.status !== "APPROVED");
 
   // ✅ mobile: bộ lọc thu gọn + đổi nhanh loại hoá đơn
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -1103,6 +1126,7 @@ const InvoicesPage: React.FC = () => {
       remainingNormal,
       canPay,
       canAdjust: isAdmin && inv.status === "APPROVED",
+      adjustLocked: isAdmin && inv.status === "APPROVED" && inClosedPeriod(inv),
       showSubmitBtn: isStaff && inv.status === "DRAFT",
       showRecallBtn: isStaff && inv.status === "SUBMITTED",
       showApproveBtn: canApprove && inv.status === "SUBMITTED",
@@ -1394,7 +1418,14 @@ const InvoicesPage: React.FC = () => {
                       </svg>
                     </button>
                     {f.canAdjust && (
-                      <button type="button" onClick={() => handleAdjustApproved(inv)} className={ACT_BTN + " !min-h-[36px] !h-9 !w-9"} aria-label="Điều chỉnh hoá đơn">
+                      <button
+                        type="button"
+                        disabled={f.adjustLocked}
+                        title={f.adjustLocked ? closedTitle : "Điều chỉnh hoá đơn"}
+                        onClick={() => handleAdjustApproved(inv)}
+                        className={ACT_BTN + " !min-h-[36px] !h-9 !w-9"}
+                        aria-label="Điều chỉnh hoá đơn"
+                      >
                         <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
                           <path d="M4 7h9M17 7h3M4 17h3M11 17h9" strokeLinecap="round" />
                           <circle cx="15" cy="7" r="2" />
@@ -1514,7 +1545,8 @@ const InvoicesPage: React.FC = () => {
                     const isHighlighted = highlightInvoiceId && String(inv.id) === String(highlightInvoiceId);
                     const returnedBadge = renderReturnBadge(inv);
 
-                    const canAdjust = isAdmin && inv.status === "APPROVED"; // ✅ chỉ quản trị + mật khẩu cấp 2
+                    const adjustLocked = inClosedPeriod(inv);
+                    const canAdjust = isAdmin && inv.status === "APPROVED" && !adjustLocked; // ✅ chỉ quản trị + mật khẩu cấp 2
 
                     return (
                       <tr
@@ -1699,6 +1731,8 @@ const InvoicesPage: React.FC = () => {
                                 title={
                                   canAdjust
                                     ? "Điều chỉnh: mở lại hoá đơn đã duyệt để sửa"
+                                    : adjustLocked && isAdmin
+                                    ? closedTitle
                                     : !isAdmin
                                     ? "Chỉ quản trị được điều chỉnh hoá đơn đã duyệt"
                                     : "Chỉ điều chỉnh được hoá đơn đã duyệt"
@@ -1718,7 +1752,13 @@ const InvoicesPage: React.FC = () => {
                               disabled={!canDelete(inv)}
                               className={ACT_BTN + " enabled:hover:bg-rose-50 enabled:hover:text-rose-600"}
                               onClick={() => handleDelete(inv)}
-                              title={canDelete(inv) ? "Xoá hoá đơn" : "Hoá đơn đã duyệt, không xoá được"}
+                              title={
+                                canDelete(inv)
+                                  ? "Xoá hoá đơn"
+                                  : inClosedPeriod(inv)
+                                  ? closedTitle
+                                  : "Hoá đơn đã duyệt, không xoá được"
+                              }
                               aria-label="Xoá hoá đơn"
                             >
                               <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">

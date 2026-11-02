@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
+import { PinActionDialog } from "../components/SecondPassword"; // ✅ đặt lại mật khẩu cần mật khẩu cấp 2
 
 type UserRole = "staff" | "accountant" | "admin";
 
@@ -31,6 +32,19 @@ const UserManagementPage: React.FC = () => {
   const [createLoading, setCreateLoading] = useState(false);
   const [newUsername, setNewUsername] = useState("");
   const { user: me } = useAuth(); // ✅ không cho tự xoá mật khẩu cấp 2 của chính mình
+
+  // ✅ admin đặt lại mật khẩu đăng nhập cho người quên mật khẩu
+  const [resetPwUser, setResetPwUser] = useState<User | null>(null);
+  const [newPw, setNewPw] = useState("");
+  const [newPw2, setNewPw2] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const openResetPw = (u: User) => {
+    setNewPw("");
+    setNewPw2("");
+    setShowPw(false);
+    setResetPwUser(u);
+  };
+  const isMe = (u: User) => String(u.id) === String((me as any)?.id);
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState<UserRole>("staff");
 
@@ -190,6 +204,15 @@ const UserManagementPage: React.FC = () => {
                   </button>
                 )}
               </div>
+              {!isMe(u) && (
+                <button
+                  type="button"
+                  onClick={() => openResetPw(u)}
+                  className="mt-2 w-full rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-700"
+                >
+                  Đặt lại mật khẩu đăng nhập
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -245,6 +268,15 @@ const UserManagementPage: React.FC = () => {
                       <option value="accountant">Accountant</option>
                       <option value="admin">Admin</option>
                     </select>
+                    {!isMe(u) && (
+                      <button
+                        type="button"
+                        onClick={() => openResetPw(u)}
+                        className="ml-2 rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        Đặt lại mật khẩu
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -338,6 +370,54 @@ const UserManagementPage: React.FC = () => {
           </div>
         </div>
       )}
+      <PinActionDialog
+        open={!!resetPwUser}
+        title={`Đặt lại mật khẩu cho ${resetPwUser?.username ?? ""}`}
+        subtitle="Dùng khi người này quên mật khẩu. Đưa mật khẩu mới cho họ, rồi nhắc họ vào Đổi mật khẩu để đổi sang mật khẩu riêng."
+        confirmLabel="Đặt lại mật khẩu"
+        busyLabel="Đang lưu…"
+        onClose={() => setResetPwUser(null)}
+        onSubmit={async (pin) => {
+          if (newPw.length < 6) throw new Error("Mật khẩu mới phải có ít nhất 6 ký tự.");
+          if (newPw !== newPw2) throw new Error("Hai lần nhập mật khẩu mới không khớp.");
+          const u = resetPwUser!;
+          await api.post(`/auth/users/${u.id}/password`, { newPassword: newPw, pin });
+          setResetPwUser(null);
+          setMessageKind("success");
+          setMessage(`Đã đặt lại mật khẩu cho ${u.username}.`);
+        }}
+      >
+        <div className="space-y-3">
+          <label className="block">
+            <span className="mb-1 block text-sm font-medium text-slate-700">Mật khẩu mới</span>
+            <div className="flex items-center rounded-lg border border-slate-300 focus-within:ring-4 focus-within:ring-slate-200">
+              <input
+                type={showPw ? "text" : "password"}
+                autoComplete="new-password"
+                value={newPw}
+                onChange={(e) => setNewPw(e.target.value)}
+                className="w-full rounded-lg bg-transparent px-3 py-2 text-sm outline-none"
+              />
+              <button type="button" tabIndex={-1} onClick={() => setShowPw((v) => !v)} className="!min-h-0 px-2 text-xs text-slate-500">
+                {showPw ? "Ẩn" : "Hiện"}
+              </button>
+            </div>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-sm font-medium text-slate-700">Nhập lại mật khẩu mới</span>
+            <input
+              type={showPw ? "text" : "password"}
+              autoComplete="new-password"
+              value={newPw2}
+              onChange={(e) => setNewPw2(e.target.value)}
+              className={`w-full rounded-lg border px-3 py-2 text-sm outline-none focus:ring-4 focus:ring-slate-200 ${
+                newPw2 && newPw2 !== newPw ? "border-rose-300" : "border-slate-300"
+              }`}
+            />
+          </label>
+          <p className="text-xs text-slate-500">Từ 6 ký tự trở lên. Nhập xong 2 ô rồi mới nhập mật khẩu cấp 2 bên dưới.</p>
+        </div>
+      </PinActionDialog>
     </div>
   );
 };

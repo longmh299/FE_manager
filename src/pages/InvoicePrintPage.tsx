@@ -159,29 +159,40 @@ async function fetchItemLoose(itemId: string): Promise<any | null> {
 }
 
 // ================= print modes =================
-type PrintMode = "A4_FULL" | "A5_SLOT_ON_A4";
+// ✅ 4 khổ in, người in tự chọn (nhớ lựa chọn lần trước):
+//   A4      : giấy A4 dọc 210×297
+//   A5L     : giấy A5 THẬT, khổ ngang 210×148 (hoá đơn bán lẻ thường dùng)
+//   A5P     : giấy A5 THẬT, khổ dọc 148×210
+//   HALF_A4 : in khung A5 lên NỬA TRÊN tờ A4 (máy in chỉ có giấy A4, in xong cắt đôi)
+type PrintMode = "A4" | "A5L" | "A5P" | "HALF_A4";
+
+type PaperCfg = {
+  label: string;
+  hint: string;
+  page: string; // @page size
+  w: number; // mm
+  h: number; // mm
+  inset: number; // khung viền cách mép giấy (mm)
+  pad: { top: number; right: number; bottom: number; left: number };
+  compact: boolean;
+};
+
+const PAPERS: Record<PrintMode, PaperCfg> = {
+  A4: { label: "A4", hint: "Giấy A4 dọc", page: "A4 portrait", w: 210, h: 297, inset: 8, pad: { top: 14, right: 16, bottom: 14, left: 16 }, compact: false },
+  A5L: { label: "A5 ngang", hint: "Giấy A5 khổ ngang 210×148mm", page: "A5 landscape", w: 210, h: 148, inset: 5, pad: { top: 7, right: 10, bottom: 6, left: 10 }, compact: true },
+  A5P: { label: "A5 dọc", hint: "Giấy A5 khổ dọc 148×210mm", page: "A5 portrait", w: 148, h: 210, inset: 5, pad: { top: 7, right: 7, bottom: 6, left: 7 }, compact: true },
+  HALF_A4: { label: "Nửa tờ A4", hint: "In khổ A5 lên nửa trên tờ A4 rồi cắt đôi", page: "A4 portrait", w: 210, h: 297, inset: 5, pad: { top: 7, right: 10, bottom: 6, left: 10 }, compact: true },
+};
+const MODES: PrintMode[] = ["A4", "A5L", "A5P", "HALF_A4"];
+const LS_PAPER = "invoice_print_paper_v1";
 
 const A5_PREFER_MAX_LINES = 2;
 
-// A4 portrait thật sự
-const A4_PAGE = { w: 210, h: 297 };
-
-// ✅ A5 slot NGANG trên A4 (an toàn hơn A5 chuẩn 210x148)
+// khung A5 ngang đặt trên nửa trên tờ A4 (chế độ Nửa tờ A4)
 const A5_SLOT = { w: 200, h: 140 }; // mm
-const A5_SLOT_POS = {
-  top: 10,
-  left: (A4_PAGE.w - A5_SLOT.w) / 2, // căn giữa
-};
+const A5_SLOT_POS = { top: 10, left: (210 - A5_SLOT.w) / 2 };
 
-// Viền khung
-const FRAME_INSET_A4 = 8;
-const FRAME_INSET_SLOT = 5;
-
-// Padding nội dung
-const CONTENT_PAD_A4 = { top: 14, right: 16, bottom: 14, left: 16 };
-const CONTENT_PAD_SLOT = { top: 9, right: 12, bottom: 9, left: 12 };
-
-const SAFE_PX = 2;
+const SAFE_PX = 3;
 
 function ensurePrintStyleTag() {
   let el = document.getElementById("print-page-style") as HTMLStyleElement | null;
@@ -195,11 +206,13 @@ function ensurePrintStyleTag() {
 
 function applyPrintMode(mode: PrintMode) {
   const styleEl = ensurePrintStyleTag();
-  const isSlot = mode === "A5_SLOT_ON_A4";
+  const cfg = PAPERS[mode];
+  const isSlot = mode === "HALF_A4";
 
   styleEl.textContent = `
 /* print-mode: ${mode} */
-@page { size: A4 portrait; margin: 0; }
+@page { size: ${cfg.page}; margin: 8mm 0; }
+@page :first { margin: 0; } /* trang 1 có khung viền sát mép; trang 2 trở đi chừa lề trên / dưới */
 
 html, body {
   margin: 0;
@@ -208,33 +221,37 @@ html, body {
   print-color-adjust: exact;
 }
 
-.mm-ruler{
-  position: fixed;
-  left: -1000mm;
-  top: 0;
-  width: 1mm;
-  height: 1mm;
-  pointer-events: none;
-  opacity: 0;
-}
+.mm-ruler{ position: fixed; left: -1000mm; top: 0; width: 1mm; height: 1mm; pointer-events: none; opacity: 0; }
 
 @media screen {
+  body { background: #e2e8f0; }
   .print-root{
-    width: ${A4_PAGE.w}mm;
-    min-height: ${A4_PAGE.h}mm;
-    margin: 16px auto;
+    width: ${cfg.w}mm;
+    min-height: ${cfg.h}mm;
+    margin: 16px auto 32px;
     background: #fff;
     box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 8px 30px rgba(0,0,0,.08);
     position: relative;
     box-sizing: border-box;
     overflow: visible;
   }
+  /* vạch báo hết trang 1 (chỉ hiện trên màn hình) */
+  .page-end{
+    position: absolute; left: 0; right: 0; top: ${isSlot ? A5_SLOT_POS.top + A5_SLOT.h : cfg.h}mm;
+    border-top: 1px dashed #ef4444; pointer-events: none; z-index: 5;
+  }
+  .page-end span{
+    position: absolute; right: 4px; top: 2px; font: 11px Arial, sans-serif; color: #ef4444; background: #fff; padding: 0 4px;
+  }
 }
 
 @media print {
+  /* CSS chung của app đặt chiều cao tối thiểu = cả màn hình -> dư 1 trang trắng khi in */
+  html, body, #root { height: auto !important; min-height: 0 !important; background: #fff !important; }
+  .no-print, .page-end { display: none !important; }
   .print-root{
-    width: ${A4_PAGE.w}mm;
-    height: ${A4_PAGE.h}mm;
+    width: ${cfg.w}mm;
+    height: ${cfg.h}mm;
     background: transparent;
     position: relative;
     overflow: visible !important;
@@ -245,24 +262,25 @@ table.invoice-table thead { display: table-header-group; }
 table.invoice-table tr { page-break-inside: avoid; break-inside: avoid; }
 .signatures-wrapper { page-break-inside: avoid; break-inside: avoid; }
 
-/* ====== Frame A4 full ====== */
+/* ====== khung viền cả trang (A4 / A5 thật) ====== */
 .a4-frame{
   position: absolute;
-  inset: ${FRAME_INSET_A4}mm;
+  inset: ${cfg.inset}mm;
   border: 1px solid #000;
   pointer-events: none;
   z-index: 0;
   display: ${isSlot ? "none" : "block"};
 }
-
-.border-box{
+.print-root{ display: flow-root; } /* chặn lề của khung con "dồn" ra ngoài làm tụt cả trang 19px -> dư trang 2 */
+.page-box{
   position: relative;
   z-index: 1;
-  border: none !important;
-  box-shadow: none !important;
+  margin: ${cfg.inset}mm;
+  min-height: ${cfg.h - 2 * cfg.inset}mm;
 }
+.border-box{ border: none !important; box-shadow: none !important; }
 
-/* ====== Slot A5 ngang trên A4 ====== */
+/* ====== Nửa tờ A4 ====== */
 .a5-slot{
   position: absolute;
   top: ${A5_SLOT_POS.top}mm;
@@ -272,18 +290,10 @@ table.invoice-table tr { page-break-inside: avoid; break-inside: avoid; }
   box-sizing: border-box;
   display: ${isSlot ? "block" : "none"};
 }
-.a5-frame{
-  position: absolute;
-  inset: ${FRAME_INSET_SLOT}mm;
-  border: 1px solid #000;
-  pointer-events: none;
-  z-index: 0;
-}
-
-/* border-box chỉ nằm TRONG slot */
+.a5-frame{ position: absolute; inset: ${cfg.inset}mm; border: 1px solid #000; pointer-events: none; z-index: 0; }
 .a5-slot .border-box{
   position: absolute;
-  inset: ${FRAME_INSET_SLOT}mm;
+  inset: ${cfg.inset}mm;
   z-index: 1;
   display: flex;
   flex-direction: column;
@@ -292,9 +302,6 @@ table.invoice-table tr { page-break-inside: avoid; break-inside: avoid; }
 `;
 }
 
-function preferSlotByLines(lineCount: number) {
-  return lineCount <= A5_PREFER_MAX_LINES;
-}
 
 // ================= types =================
 type ApiPartner = {
@@ -446,9 +453,20 @@ const InvoicePrintPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
 
   const [unitByItemId, setUnitByItemId] = useState<Record<string, string>>({});
-  const [printMode, setPrintMode] = useState<PrintMode>("A4_FULL");
+  // ✅ khổ in: lấy lựa chọn lần trước; chưa chọn bao giờ thì tự đoán theo số dòng (như cũ)
+  const savedPaper = (() => {
+    try {
+      const v = localStorage.getItem(LS_PAPER) as PrintMode | null;
+      return v && MODES.includes(v) ? v : null;
+    } catch {
+      return null;
+    }
+  })();
+  const [printMode, setPrintMode] = useState<PrintMode>(savedPaper || "A4");
+  const userPicked = useRef<boolean>(!!savedPaper);
+  const [overflow, setOverflow] = useState(false);
 
-  const printModeRef = useRef<PrintMode>("A4_FULL");
+  const printModeRef = useRef<PrintMode>(printMode);
   useEffect(() => {
     printModeRef.current = printMode;
   }, [printMode]);
@@ -456,6 +474,14 @@ const InvoicePrintPage: React.FC = () => {
   const borderBoxRef = useRef<HTMLDivElement>(null);
   const mmRef = useRef<HTMLDivElement>(null);
   const [layoutTick, setLayoutTick] = useState(0);
+
+  const pickPaper = (m: PrintMode) => {
+    userPicked.current = true;
+    setPrintMode(m);
+    try {
+      localStorage.setItem(LS_PAPER, m);
+    } catch {}
+  };
 
   useEffect(() => {
     applyPrintMode(printMode);
@@ -575,40 +601,36 @@ const InvoicePrintPage: React.FC = () => {
 
   const linesKey = useMemo(() => lines.map((x) => `${x.id}|${x.qty}|${x.price}|${x.amount}|${x.code}`).join("||"), [lines]);
 
-  // ✅ Auto: ít dòng => thử slot A5 ngang; nếu tràn => A4 full
+  // ✅ chưa chọn khổ bao giờ: ít dòng thì nửa tờ A4 (giống trước), nhiều dòng thì A4
+  useEffect(() => {
+    if (!invoice || userPicked.current) return;
+    setPrintMode(lines.length <= A5_PREFER_MAX_LINES ? "HALF_A4" : "A4");
+  }, [invoice?.id, lines.length]);
+
+  // ✅ đo xem nội dung có dài quá 1 trang của khổ đang chọn không -> cảnh báo (không tự đổi khổ)
   useLayoutEffect(() => {
     if (!invoice) return;
-
-    const preferSlot = preferSlotByLines(lines.length);
-    const first: PrintMode = preferSlot ? "A5_SLOT_ON_A4" : "A4_FULL";
-
-    if (printModeRef.current !== first) setPrintMode(first);
-    applyPrintMode(first);
-
-    if (!preferSlot) return;
-
     let cancelled = false;
-
-    const checkOverflow = () => {
+    const check = () => {
       if (cancelled) return;
       const box = borderBoxRef.current;
+      const mm = 96 / 25.4; // 1mm = 3.7795px (CSS chuẩn); đo bằng thước bị làm tròn nên lệch
       if (!box) return;
-
-      if (box.scrollHeight > box.clientHeight + SAFE_PX) {
-        if (printModeRef.current !== "A4_FULL") setPrintMode("A4_FULL");
-        applyPrintMode("A4_FULL");
-      }
+      const cfg = PAPERS[printModeRef.current];
+      const over =
+        printModeRef.current === "HALF_A4"
+          ? box.scrollHeight > box.clientHeight + SAFE_PX
+          : box.offsetHeight > (cfg.h - 2 * cfg.inset) * mm + SAFE_PX;
+      setOverflow(over);
     };
-
-    const raf1 = requestAnimationFrame(() => requestAnimationFrame(checkOverflow));
-    const t = window.setTimeout(checkOverflow, 160);
-
+    const raf = requestAnimationFrame(() => requestAnimationFrame(check));
+    const t = window.setTimeout(check, 200);
     return () => {
       cancelled = true;
-      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf);
       window.clearTimeout(t);
     };
-  }, [invoice?.id, linesKey, layoutTick, lines.length]);
+  }, [invoice?.id, linesKey, layoutTick, printMode]);
 
   useEffect(() => {
     const onBeforePrint = () => applyPrintMode(printModeRef.current);
@@ -635,99 +657,104 @@ const InvoicePrintPage: React.FC = () => {
   const customerTax = partner?.taxCode ?? partner?.mst ?? partner?.tax ?? invoice.partnerTax ?? "";
 
   const title = (() => {
-    if (invoice.type === "PURCHASE") return "HÓA ĐƠN NHẬP HÀNG";
-    if (invoice.type === "SALES") return "HÓA ĐƠN BÁN HÀNG";
+    // ✅ phiếu in nội bộ, không phải hoá đơn điện tử (VAT) -> gọi là "Phiếu" để khỏi nhầm
+    if (invoice.type === "PURCHASE") return "PHIẾU NHẬP HÀNG";
+    if (invoice.type === "SALES") return "PHIẾU BÁN HÀNG";
     if (invoice.type === "SALES_RETURN") return "PHIẾU TRẢ HÀNG (BÁN)";
     if (invoice.type === "PURCHASE_RETURN") return "PHIẾU TRẢ HÀNG (NHẬP)";
     return "HÓA ĐƠN";
   })();
 
-  const isSlot = printMode === "A5_SLOT_ON_A4";
-  const pad = isSlot ? CONTENT_PAD_SLOT : CONTENT_PAD_A4;
+  const cfg = PAPERS[printMode];
+  const isSlot = printMode === "HALF_A4";
+  // compact = mọi khổ A5 (chữ nhỏ, khoảng cách hẹp); A5 dọc còn hẹp hơn nữa
+  const narrow = printMode === "A5P";
+  const pad = cfg.pad;
 
   const borderBoxStyle: React.CSSProperties = {
     ...styles.borderBox,
     padding: `${pad.top}mm ${pad.right}mm ${pad.bottom}mm ${pad.left}mm`,
-    fontSize: isSlot ? 12.5 : 13,
+    fontSize: narrow ? 11.5 : cfg.compact ? 12.5 : 13,
+    ...(isSlot ? {} : { minHeight: `${cfg.h - 2 * cfg.inset}mm` }),
   };
 
   const logoImgStyle: React.CSSProperties = {
     ...styles.logoImg,
-    width: isSlot ? 70 : 85,
-    height: isSlot ? 70 : 85,
+    width: narrow ? 52 : cfg.compact ? 64 : 85,
+    height: narrow ? 52 : cfg.compact ? 64 : 85,
   };
 
   const companyInfoStyle: React.CSSProperties = {
     ...styles.companyInfo,
-    fontSize: isSlot ? 11.2 : 12,
-    lineHeight: isSlot ? 1.25 : 1.4,
+    fontSize: narrow ? 9.6 : cfg.compact ? 11 : 12,
+    lineHeight: cfg.compact ? 1.25 : 1.4,
   };
 
   const companyNameStyle: React.CSSProperties = {
     ...styles.companyName,
-    fontSize: isSlot ? 12.8 : 14,
+    fontSize: narrow ? 11 : cfg.compact ? 12.5 : 14,
   };
 
   const invoiceTitleStyle: React.CSSProperties = {
     ...styles.invoiceTitle,
-    fontSize: isSlot ? 16.5 : 18,
-    margin: isSlot ? "2mm 0 1mm" : "3mm 0 1.5mm",
+    fontSize: cfg.compact ? 16.5 : 18,
+    margin: cfg.compact ? "2mm 0 1mm" : "3mm 0 1.5mm",
   };
 
   const customerBoxStyle: React.CSSProperties = {
     ...styles.customerBox,
-    padding: isSlot ? "2px 0" : styles.customerBox.padding,
-    marginBottom: isSlot ? 4 : 6,
-    fontSize: isSlot ? 12.3 : 13,
+    padding: cfg.compact ? "2px 0" : styles.customerBox.padding,
+    marginBottom: cfg.compact ? 4 : 6,
+    fontSize: cfg.compact ? 12.3 : 13,
   };
 
   const customerLabelStyle: React.CSSProperties = {
     ...styles.customerLabel,
-    width: isSlot ? 78 : 85,
+    width: cfg.compact ? 78 : 85,
   };
 
   const customerRowStyle: React.CSSProperties = {
     ...styles.customerRow,
-    marginBottom: isSlot ? 2 : 3,
+    marginBottom: cfg.compact ? 2 : 3,
   };
 
   const tableStyle: React.CSSProperties = {
     ...styles.table,
-    marginTop: isSlot ? 4 : 6,
-    fontSize: isSlot ? 11.7 : 12.5,
+    marginTop: cfg.compact ? 4 : 6,
+    fontSize: narrow ? 10.2 : cfg.compact ? 11.5 : 12.5,
   };
 
-  const thStyle: React.CSSProperties = { ...styles.th, padding: isSlot ? "2px 3px" : styles.th.padding };
-  const tdStyle: React.CSSProperties = { ...styles.td, padding: isSlot ? "2px 3px" : styles.td.padding };
+  const thStyle: React.CSSProperties = { ...styles.th, padding: cfg.compact ? "2px 3px" : styles.th.padding };
+  const tdStyle: React.CSSProperties = { ...styles.td, padding: cfg.compact ? "2px 3px" : styles.td.padding };
 
   const moneyRowLabelStyle: React.CSSProperties = {
     ...styles.moneyRowLabel,
-    padding: isSlot ? "2px 5px" : styles.moneyRowLabel.padding,
+    padding: cfg.compact ? "2px 5px" : styles.moneyRowLabel.padding,
   };
   const moneyRowValueStyle: React.CSSProperties = {
     ...styles.moneyRowValue,
-    padding: isSlot ? "2px 5px" : styles.moneyRowValue.padding,
+    padding: cfg.compact ? "2px 5px" : styles.moneyRowValue.padding,
   };
 
-  const signaturesWrapperStyle: React.CSSProperties = isSlot
+  const signaturesWrapperStyle: React.CSSProperties = cfg.compact
     ? { ...styles.signaturesWrapper, marginTop: "auto", marginBottom: "2mm" }
     : { ...styles.signaturesWrapper, marginTop: "auto", marginBottom: "10mm" };
 
   const signaturesRowStyle: React.CSSProperties = {
     ...styles.signaturesRow,
-    fontSize: isSlot ? 11 : 12,
+    fontSize: cfg.compact ? 11 : 12,
   };
 
   const signatureNoteStyle: React.CSSProperties = {
     ...styles.signatureNote,
-    fontSize: isSlot ? 10 : 11,
+    fontSize: cfg.compact ? 10 : 11,
   };
 
   const InvoiceContent = (
     <>
       <div style={styles.topSection}>
-        <div style={{ ...styles.headerRow, marginBottom: isSlot ? 4 : 6 }}>
-          <div style={{ ...styles.logoBox, gap: isSlot ? 8 : 10 }}>
+        <div style={{ ...styles.headerRow, marginBottom: cfg.compact ? 4 : 6 }}>
+          <div style={{ ...styles.logoBox, gap: cfg.compact ? 8 : 10 }}>
             <img
               src="/logo-mcbrother.png"
               alt="MCBROTHER logo"
@@ -748,7 +775,7 @@ const InvoicePrintPage: React.FC = () => {
 
         <div style={invoiceTitleStyle}>{title}</div>
 
-        <div style={{ ...styles.invoiceMeta, marginBottom: isSlot ? 4 : 6 }}>
+        <div style={{ ...styles.invoiceMeta, marginBottom: cfg.compact ? 4 : 6 }}>
           <div>
             Số: <span style={styles.bold}>{invoice.code}</span>
           </div>
@@ -770,10 +797,13 @@ const InvoicePrintPage: React.FC = () => {
             <div style={customerLabelStyle}>Điện thoại:</div>
             <div style={styles.customerValue}>{customerPhone}</div>
           </div>
-          <div style={{ ...customerRowStyle, marginBottom: 0 }}>
-            <div style={customerLabelStyle}>Mã số thuế:</div>
-            <div style={styles.customerValue}>{customerTax || ""}</div>
-          </div>
+          {/* ✅ khách không có mã số thuế (khách lẻ) thì ẩn dòng này cho gọn */}
+          {String(customerTax || "").trim() && (
+            <div style={customerRowStyle}>
+              <div style={customerLabelStyle}>Mã số thuế:</div>
+              <div style={styles.customerValue}>{customerTax}</div>
+            </div>
+          )}
         </div>
 
         <table style={tableStyle} className="invoice-table">
@@ -832,7 +862,7 @@ const InvoicePrintPage: React.FC = () => {
           </tbody>
         </table>
 
-        <div style={{ ...styles.textAmountRow, marginTop: isSlot ? 4 : 6, fontSize: isSlot ? 11.7 : 12.5 }}>
+        <div style={{ ...styles.textAmountRow, marginTop: cfg.compact ? 4 : 6, fontSize: cfg.compact ? 11.7 : 12.5 }}>
           Số tiền bằng chữ: <span style={styles.bold}>{totalText}</span>
         </div>
       </div>
@@ -856,26 +886,92 @@ const InvoicePrintPage: React.FC = () => {
     </>
   );
 
-  return (
-    <div className="print-root" data-mode={printMode}>
-      <div ref={mmRef} className="mm-ruler" />
-
-      {isSlot ? (
-        <div className="a5-slot" aria-hidden={false}>
-          <div className="a5-frame" aria-hidden="true" />
-          <div style={borderBoxStyle} ref={borderBoxRef} className="border-box">
-            {InvoiceContent}
+  const toolbar = (
+    <div className="no-print sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
+      <div className="mx-auto flex max-w-[1100px] flex-wrap items-center gap-2 px-4 py-2.5">
+        <div className="mr-auto min-w-0">
+          <div className="truncate text-sm font-semibold text-slate-900">
+            In {title.toLowerCase()} số {invoice.code}
+          </div>
+          <div className="text-xs text-slate-500">{cfg.hint}</div>
+        </div>
+        <div className="inline-flex flex-wrap rounded-lg border border-slate-200 bg-slate-50 p-0.5" role="radiogroup" aria-label="Khổ giấy">
+          {MODES.map((m) => (
+            <button
+              key={m}
+              type="button"
+              role="radio"
+              aria-checked={printMode === m}
+              title={PAPERS[m].hint}
+              onClick={() => pickPaper(m)}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+                printMode === m ? "bg-slate-900 text-white" : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              {PAPERS[m].label}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => window.print()}
+          className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+        >
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.9} aria-hidden="true">
+            <path d="M7 8V3h10v5M7 17H5a2 2 0 01-2-2v-5a2 2 0 012-2h14a2 2 0 012 2v5a2 2 0 01-2 2h-2" strokeLinejoin="round" />
+            <rect x="7" y="13" width="10" height="8" rx="1" />
+          </svg>
+          In (Ctrl+P)
+        </button>
+      </div>
+      {overflow && (
+        <div className="border-t border-amber-200 bg-amber-50">
+          <div className="mx-auto max-w-[1100px] px-4 py-2 text-sm text-amber-900">
+            {isSlot
+              ? "Hoá đơn dài hơn nửa tờ A4 nên sẽ bị cắt mất phần dưới. Chọn A4 hoặc A5 để in đủ."
+              : printMode === "A4"
+                ? "Hoá đơn dài, có thể in sang trang 2 (đầu bảng tự lặp lại)."
+                : `Hoá đơn dài, có thể in sang trang 2 khổ ${cfg.label}. Muốn chắc chắn gọn 1 tờ thì chọn A4.`}
           </div>
         </div>
-      ) : (
-        <>
-          <div className="a4-frame" aria-hidden="true" />
-          <div style={borderBoxStyle} ref={borderBoxRef} className="border-box">
-            {InvoiceContent}
-          </div>
-        </>
       )}
+      <div className="mx-auto max-w-[1100px] px-4 pb-2 text-xs text-slate-500">
+        Trong hộp in của trình duyệt: chọn đúng khổ giấy {isSlot ? "A4" : cfg.label.split(" ")[0]}
+        {printMode === "A5L" ? " ngang (Landscape)" : ""}, Lề = Không có (None), Tỷ lệ = 100%, tắt Đầu trang và chân trang.
+      </div>
     </div>
+  );
+
+  return (
+    <>
+      {toolbar}
+      <div className="print-root" data-mode={printMode}>
+        <div ref={mmRef} className="mm-ruler" />
+        {!isSlot && overflow && (
+          <div className="page-end" aria-hidden="true">
+            <span>hết trang 1</span>
+          </div>
+        )}
+
+        {isSlot ? (
+          <div className="a5-slot" aria-hidden={false}>
+            <div className="a5-frame" aria-hidden="true" />
+            <div style={borderBoxStyle} ref={borderBoxRef} className="border-box">
+              {InvoiceContent}
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="a4-frame" aria-hidden="true" />
+            <div className="page-box">
+              <div style={borderBoxStyle} ref={borderBoxRef} className="border-box">
+                {InvoiceContent}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </>
   );
 };
 

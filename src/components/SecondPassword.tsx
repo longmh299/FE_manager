@@ -17,7 +17,11 @@ const viDate = (ymd?: string | null) => (ymd ? ymd.slice(0, 10).split("-").rever
 const errOf = (e: any) => ({
   code: e?.response?.data?.code as string | undefined,
   message: (e?.response?.data?.message ||
-    (!e?.response ? "Không kết nối được máy chủ (BE). Kiểm tra BE còn chạy không rồi thử lại." : `Thao tác thất bại (mã lỗi ${e.response.status}).`)) as string,
+    (e?.response
+      ? `Thao tác thất bại (mã lỗi ${e.response.status}).`
+      : e?.isAxiosError
+      ? "Không kết nối được máy chủ (BE). Kiểm tra BE còn chạy không rồi thử lại."
+      : e?.message || "Thao tác thất bại.")) as string,
   attemptsLeft: e?.response?.data?.attemptsLeft as number | undefined,
 });
 
@@ -731,6 +735,8 @@ export const PinActionDialog: React.FC<{
         setShake(true);
         setTimeout(() => setShake(false), 400);
         setPin("");
+      } else {
+        setPin(""); // lỗi khác (vd nhập thiếu thông tin): xoá PIN để sửa xong nhập lại rồi gửi
       }
       setErr(x.message);
     } finally {

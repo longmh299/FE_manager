@@ -6,10 +6,11 @@
 // Huỷ phiếu bắt buộc mật khẩu cấp 2 (VoidPaymentDialog, server kiểm tra).
 // API: /cashbook/*, PATCH /payments/:id/account, POST /payments/:id/void
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import api from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { ToastHost, useToast } from "../components/Toast";
+import PaymentRequestsPanel from "../components/PaymentRequestsPanel";
 import { DialogShell, PinActionDialog, PinSettingsDialog, VoidPaymentDialog, type VoidTarget } from "../components/SecondPassword";
 
 /* ========================= types ========================= */
@@ -327,7 +328,7 @@ function buildTrend(opening: number, rows: LedgerRow[], from: string, to: string
 }
 
 /* ========================= page ========================= */
-const CashbookPage: React.FC = () => {
+const CashbookLedger: React.FC = () => {
   const { user } = useAuth();
   const isAdmin = String(user?.role || "") === "admin";
   const toast = useToast();
@@ -353,23 +354,13 @@ const CashbookPage: React.FC = () => {
   }, [fQ]);
   const filtering = !!(fType || fCat || qDebounced.trim());
 
+  // ✅ chống "nhảy dữ liệu": mỗi lần tải có số thứ tự, kết quả về muộn của lần tải cũ bị bỏ qua
+  //    (trước đây: mở trang -> tải sổ "Tất cả" + tự chọn quỹ tiền mặt -> tải lần 2; 2 kết quả về lệch thứ tự
+  //     nên sổ hiện ra, biến mất, rồi hiện lại)
   const pickedDefault = useRef(false);
-  const loadSummary = useCallback(async () => {
-    const res = await api.get("/cashbook/summary", { params: { from, to } });
-    const s: Summary = res.data;
-    setSummary(s);
-    if (!pickedDefault.current) {
-      pickedDefault.current = true;
-      const cash = s.accounts.find((a) => isCash(a.type) && a.isActive);
-      if (cash) {
-        setSel(cash.id);
-        return { switched: true };
-      }
-    }
-    return { switched: false };
-  }, [from, to]);
+  const loadSeq = useRef(0);
 
-  const loadLedger = useCallback(async () => {
+  const fetchLedger = useCallback(async () => {
     const base: any = { from, to };
     if (sel) base.accountId = sel;
     const params: any = { ...base };
@@ -377,28 +368,46 @@ const CashbookPage: React.FC = () => {
     if (fCat) params.category = fCat;
     if (qDebounced.trim()) params.q = qDebounced.trim();
     if (showVoided) params.voided = 1;
-    const res = await api.get("/cashbook/ledger", { params });
-    const lg: Ledger = res.data;
-    setLedger(lg);
+    const lg: Ledger = (await api.get("/cashbook/ledger", { params })).data;
     // đường tồn quỹ cần sổ KHÔNG lọc của 1 tài khoản
+    let tr: TrendPoint[] = [];
     if (sel) {
       const full: Ledger = filtering || showVoided ? (await api.get("/cashbook/ledger", { params: base })).data : lg;
-      setTrend(buildTrend(full.opening ?? 0, full.rows, from, to));
-    } else setTrend([]);
+      tr = buildTrend(full.opening ?? 0, full.rows, from, to);
+    }
+    return { lg, tr };
   }, [from, to, sel, fType, fCat, qDebounced, showVoided, filtering]);
 
   const reload = useCallback(async () => {
+    const my = ++loadSeq.current;
     setLoading(true);
     setErr(null);
     try {
-      const { switched } = await loadSummary();
-      if (!switched) await loadLedger();
+      // tải tổng hợp + sổ cùng lúc (nhanh hơn tải lần lượt); lần đầu chưa biết quỹ mặc định thì chờ tổng hợp trước
+      const first = !pickedDefault.current;
+      const [sRes, ledMaybe] = await Promise.all([api.get("/cashbook/summary", { params: { from, to } }), first ? Promise.resolve(null) : fetchLedger()]);
+      if (my !== loadSeq.current) return; // đã có lần tải mới hơn
+      const s: Summary = sRes.data;
+      setSummary(s);
+      // lần đầu mở trang: tự chọn quỹ tiền mặt -> đổi sel sẽ tự tải lại sổ đúng quỹ, không hiện sổ "Tất cả" chen ngang
+      if (!pickedDefault.current) {
+        pickedDefault.current = true;
+        const cash = s.accounts.find((a) => isCash(a.type) && a.isActive);
+        if (cash && cash.id !== sel) {
+          setSel(cash.id);
+          return;
+        }
+      }
+      const led = ledMaybe ?? (await fetchLedger());
+      if (my !== loadSeq.current) return;
+      setLedger(led.lg);
+      setTrend(led.tr);
     } catch (e: any) {
-      setErr(errMsg(e, "Không tải được sổ quỹ."));
+      if (my === loadSeq.current) setErr(errMsg(e, "Không tải được sổ quỹ."));
     } finally {
-      setLoading(false);
+      if (my === loadSeq.current) setLoading(false);
     }
-  }, [loadSummary, loadLedger]);
+  }, [from, to, sel, fetchLedger]);
 
   useEffect(() => {
     reload();
@@ -1285,6 +1294,62 @@ const CashbookPage: React.FC = () => {
       <PinSettingsDialog open={pinOpen} onClose={() => setPinOpen(false)} onSaved={() => toast.push({ type: "success", title: "Đã lưu", message: "Đã cập nhật mật khẩu cấp 2." })} />
 
       <ToastHost toasts={toast.toasts} onClose={toast.remove} />
+    </div>
+  );
+};
+
+/* ============== trang Thu chi: 2 tab — Sổ quỹ | Phiếu thu nợ (nhân viên báo đã thu) ============== */
+const CashbookPage: React.FC = () => {
+  const [sp, setSp] = useSearchParams();
+  const tab = sp.get("tab") === "requests" ? "requests" : "ledger";
+  const [pending, setPending] = useState(0);
+  const refreshCount = useCallback(() => {
+    api
+      .get("/payment-requests/count")
+      .then((r) => setPending(Number(r.data?.pending) || 0))
+      .catch(() => {});
+    window.dispatchEvent(new Event("payreq:changed"));
+  }, []);
+  useEffect(() => {
+    refreshCount();
+  }, [refreshCount, tab]);
+
+  const go = (t: "ledger" | "requests") => {
+    const n = new URLSearchParams(sp);
+    if (t === "ledger") n.delete("tab");
+    else n.set("tab", t);
+    setSp(n, { replace: true });
+  };
+
+  return (
+    <div className="mx-auto max-w-[1440px] space-y-4">
+      <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm" role="tablist" aria-label="Thu chi">
+        {(
+          [
+            ["ledger", "Sổ quỹ"],
+            ["requests", "Phiếu thu nợ"],
+          ] as const
+        ).map(([k, label]) => (
+          <button
+            key={k}
+            type="button"
+            role="tab"
+            aria-selected={tab === k}
+            onClick={() => go(k)}
+            className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors ${
+              tab === k ? "bg-slate-900 text-white" : "text-slate-600 hover:text-slate-900"
+            } ${focusRing}`}
+          >
+            {label}
+            {k === "requests" && pending > 0 && (
+              <span className={`min-w-[20px] rounded-full px-1.5 text-center text-xs font-semibold tabular-nums ${tab === k ? "bg-amber-400 text-slate-900" : "bg-amber-100 text-amber-800"}`}>
+                {pending}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+      {tab === "requests" ? <PaymentRequestsPanel onChanged={refreshCount} /> : <CashbookLedger />}
     </div>
   );
 };
