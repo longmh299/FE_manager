@@ -79,6 +79,7 @@ type ImportInfo = {
 type StaffUser = {
   id: string;
   name: string;
+  isTechnician?: boolean;
 };
 
 type PaymentAccount = {
@@ -2006,7 +2007,11 @@ const InvoiceDetailPage: React.FC = () => {
 
       const mapped: StaffUser[] = arr
         .filter((u) => u && (u.role === "staff" || u.role === "accountant" || u.role === "admin"))
-        .map((u) => ({ id: String(u.id), name: String(u.username || u.name || u.email || u.id) }))
+        .map((u) => ({
+          id: String(u.id),
+          name: String(u.username || u.name || u.email || u.id),
+          isTechnician: u.isTechnician === true,
+        }))
         .filter((u) => safeId(u.id));
 
       setStaffs(mapped);
@@ -2302,7 +2307,7 @@ const InvoiceDetailPage: React.FC = () => {
     if (!invoice) return;
 
     if (invoice.partnerId) {
-      toastError("Khách hàng này đã có trong danh sách đối tác.", "Không thể lưu");
+      toastError("Khách hàng này đã có trong danh sách.", "Không thể lưu");
       return;
     }
     if (!invoice.partnerName.trim()) {
@@ -2337,7 +2342,7 @@ const InvoiceDetailPage: React.FC = () => {
       setPartners((prev) => [...prev, p]);
       markDirty();
       updateInvoice({ partnerId: p.id, partnerCode: p.code });
-      toastSuccess("Đã lưu khách hàng vào danh sách đối tác.");
+      toastSuccess("Đã lưu khách hàng vào danh sách .");
     } catch (err) {
       console.error("save partner error", err);
       toastError("Lưu khách hàng thất bại, kiểm tra log console.");
@@ -2431,7 +2436,7 @@ const InvoiceDetailPage: React.FC = () => {
     if (isPartnerValid(invoice)) return true;
 
     toastError(
-      "Bạn chưa chọn / chưa lưu khách hàng vào danh sách đối tác. Vui lòng chọn từ dropdown hoặc bấm “Lưu khách hàng vào danh sách đối tác” trước khi lưu hóa đơn.",
+      "Bạn chưa chọn / chưa lưu khách hàng vào danh sách . Vui lòng chọn từ dropdown hoặc bấm “Lưu khách hàng vào danh sách ” trước khi lưu hóa đơn.",
       "Thiếu khách hàng"
     );
     setShowPartnerSuggest(true);
@@ -3068,7 +3073,11 @@ const InvoiceDetailPage: React.FC = () => {
                           }}
                         >
                           <option value="">-- Chọn NV kỹ thuật --</option>
-                          {staffs.map((s) => (
+                          {/* Chỉ người được đánh dấu kỹ thuật. Giữ người đã gán trên hoá đơn; chưa ai được đánh dấu thì hiện đủ. */}
+                          {(staffs.some((s) => s.isTechnician)
+                            ? staffs.filter((s) => s.isTechnician || s.id === invoice.techUserId)
+                            : staffs
+                          ).map((s) => (
                             <option key={s.id} value={s.id}>
                               {s.name}
                             </option>
@@ -3116,7 +3125,7 @@ const InvoiceDetailPage: React.FC = () => {
                   {/* ✅ warning inline để nhân viên khỏi quên bấm lưu khách */}
                   {status === "DRAFT" && !locked && !partnerOk && (
                     <div style={{ fontSize: 12.5, color: "#b91c1c" }}>
-                      Chọn từ danh sách gợi ý, hoặc bấm “Lưu vào danh sách đối tác” bên dưới trước khi lưu hóa đơn.
+                      Chọn từ danh sách gợi ý, hoặc bấm “Lưu vào danh sách ” bên dưới trước khi lưu hóa đơn.
                     </div>
                   )}
 
@@ -3230,7 +3239,7 @@ const InvoiceDetailPage: React.FC = () => {
                   disabled={locked || status !== "DRAFT"}
                   onClick={handleSavePartner}
                 >
-                  + Lưu vào danh sách đối tác
+                  + Lưu vào danh sách khách hàng
                 </button>
               </div>
             </div>

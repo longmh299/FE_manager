@@ -10,6 +10,7 @@ interface User {
   id: string;
   username: string;
   role: UserRole;
+  isTechnician?: boolean; // ✅ hiện trong ô "NV kỹ thuật" trên hoá đơn, không liên quan quyền
   createdAt: string;
   hasPin?: boolean; // ✅ đã đặt mật khẩu cấp 2 chưa
 }
@@ -77,6 +78,19 @@ const UserManagementPage: React.FC = () => {
     } catch (err: any) {
       setMessageKind("error");
       setMessage(err?.response?.data?.message || "Không cập nhật được quyền user.");
+    }
+  };
+
+  const handleToggleTechnician = async (u: User, isTechnician: boolean) => {
+    try {
+      setMessage(null);
+      await api.patch(`/auth/users/${u.id}/technician`, { isTechnician });
+      setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, isTechnician } : x)));
+      setMessageKind("success");
+      setMessage(isTechnician ? `Đã đánh dấu ${u.username} là kỹ thuật.` : `Đã bỏ đánh dấu kỹ thuật của ${u.username}.`);
+    } catch (err: any) {
+      setMessageKind("error");
+      setMessage(err?.response?.data?.message || `Không cập nhật được đánh dấu kỹ thuật của ${u.username}.`);
     }
   };
 
@@ -194,6 +208,14 @@ const UserManagementPage: React.FC = () => {
                   <option value="admin">Quản trị</option>
                 </select>
               </div>
+              <label className="mt-2 flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={!!u.isTechnician}
+                  onChange={(e) => handleToggleTechnician(u, e.target.checked)}
+                />
+                Nhân viên kỹ thuật
+              </label>
               <div className="mt-2 flex items-center justify-between text-xs">
                 <span className="text-slate-500">
                   Mật khẩu cấp 2: {u.hasPin ? <span className="text-teal-700">Đã đặt</span> : <span className="text-slate-400">Chưa đặt</span>}
@@ -223,6 +245,7 @@ const UserManagementPage: React.FC = () => {
               <tr>
                 <th className="px-3 py-2 text-left border-b border-slate-200">Username</th>
                 <th className="px-3 py-2 text-left border-b border-slate-200">Role</th>
+                <th className="px-3 py-2 text-center border-b border-slate-200">Kỹ thuật</th>
                 <th className="px-3 py-2 text-left border-b border-slate-200">Ngày tạo</th>
                 <th className="px-3 py-2 text-left border-b border-slate-200">Mật khẩu cấp 2</th>
                 <th className="px-3 py-2 text-left border-b border-slate-200">Hành động</th>
@@ -236,6 +259,14 @@ const UserManagementPage: React.FC = () => {
                     <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs">
                       {roleLabels[u.role]}
                     </span>
+                  </td>
+                  <td className="px-3 py-2 border-b border-slate-100 text-center">
+                    <input
+                      type="checkbox"
+                      aria-label={`${u.username} là nhân viên kỹ thuật`}
+                      checked={!!u.isTechnician}
+                      onChange={(e) => handleToggleTechnician(u, e.target.checked)}
+                    />
                   </td>
                   <td className="px-3 py-2 border-b border-slate-100 text-xs text-slate-500">
                     {new Date(u.createdAt).toLocaleString()}
@@ -283,7 +314,7 @@ const UserManagementPage: React.FC = () => {
 
               {users.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-3 py-4 text-center text-xs text-slate-500">
+                  <td colSpan={6} className="px-3 py-4 text-center text-xs text-slate-500">
                     Chưa có user nào.
                   </td>
                 </tr>
