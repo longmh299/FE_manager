@@ -164,8 +164,9 @@ export async function exportRevenueExcel(args: {
     const qty = n(r.qty);
     const revenue = n(r.revenue);
     const cogs = n(r.cogs);
-    const unitSell = qty > 0 ? revenue / qty : 0;
-    const unitCost = qty > 0 ? cogs / qty : 0;
+    // Số lượng ròng có thể âm (trả nhiều hơn bán); bằng 0 thì không có đơn giá nên để ô trống
+    const unitSell = qty !== 0 ? revenue / qty : null;
+    const unitCost = qty !== 0 ? cogs / qty : null;
 
     const rr = wsP.addRow([
       r.name,

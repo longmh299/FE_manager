@@ -10,6 +10,7 @@ import {
 } from "../api/invoiceTrace";
 import { useAuth } from "../context/AuthContext";
 
+import { roundCostDisplay } from "../utils/costDisplay"; // ✅ giá vốn hiển thị số chẵn
 function safeNum(v: any) {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -365,7 +366,7 @@ const InvoiceTracePage: React.FC = () => {
                   </td>
                   {canSeeCost ? (
                     <td className="px-4 py-3 border-b border-slate-100 text-right text-slate-500">
-                      {r.unitCost != null ? fmtMoney(r.unitCost) : "—"}
+                      {r.unitCost != null ? fmtMoney(roundCostDisplay(r.unitCost)) : "—"}
                     </td>
                   ) : null}
                 </tr>

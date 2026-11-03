@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import api from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
 
+import { roundCostDisplay } from "../utils/costDisplay"; // ✅ giá vốn hiển thị số chẵn
 type MovementType = "IN" | "OUT" | "ADJUST" | "TRANSFER";
 
 type LedgerRow = {
@@ -278,7 +279,7 @@ const LedgerPage: React.FC = () => {
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
           <div className="text-xs text-gray-500">Tổng vốn xuất</div>
           <div className="mt-1 text-2xl font-semibold">
-            {formatMoney(totalCostOut)} đ
+            {formatMoney(roundCostDisplay(totalCostOut))} đ
           </div>
         </div>
       </div>
@@ -458,11 +459,11 @@ const LedgerPage: React.FC = () => {
                     </td>
 
                     <td className="px-3 py-2 border-t border-gray-200 text-right whitespace-nowrap">
-                      {r.unitCost != null ? `${formatMoney(r.unitCost)} đ` : "-"}
+                      {r.unitCost != null ? `${formatMoney(roundCostDisplay(r.unitCost))} đ` : "-"}
                     </td>
 
                     <td className="px-3 py-2 border-t border-gray-200 text-right whitespace-nowrap">
-                      {r.costTotal != null ? `${formatMoney(r.costTotal)} đ` : "-"}
+                      {r.costTotal != null ? `${formatMoney(roundCostDisplay(r.costTotal))} đ` : "-"}
                     </td>
 
                     <td className="px-3 py-2 border-t border-gray-200">

@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import api from "../api/client";
 import { exportRevenueExcel } from "../utils/revenueExcel";
+import { roundCostDisplay } from "../utils/costDisplay"; // ✅ giá vốn hiển thị số chẵn
 import {
   AreaChart,
   Area,
@@ -90,6 +91,8 @@ type RevenueResp = {
     itemId: string;
     name: string;
     qty: number;
+    soldQty?: number;
+    returnedQty?: number;
     revenue: number;
     cogs: number;
     profit: number;
@@ -574,8 +577,9 @@ export default function RevenuePage() {
       return {
         ...r,
         qty,
-        avgSell: qty > 0 ? revenue / qty : 0,
-        avgCost: qty > 0 ? cogs / qty : 0,
+        // Số lượng ròng có thể âm (trả nhiều hơn bán); bằng 0 thì không có đơn giá để tính
+        avgSell: qty !== 0 ? revenue / qty : null,
+        avgCost: qty !== 0 ? cogs / qty : null,
       };
     });
   }, [data]);
@@ -901,7 +905,9 @@ export default function RevenuePage() {
                 <thead className="bg-slate-50">
                   <tr className="text-left">
                     <th className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 px-4 py-3">Sản phẩm</th>
-                    <th className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 px-4 py-3 text-right">Số lượng</th>
+                    <th className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 px-4 py-3 text-right">Bán</th>
+                    <th className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 px-4 py-3 text-right">Trả</th>
+                    <th className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 px-4 py-3 text-right">Còn lại</th>
                     <th className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 px-4 py-3 text-right">Giá bán</th>
                     <th className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 px-4 py-3 text-right">
                       Đơn giá vốn TB
@@ -923,12 +929,14 @@ export default function RevenuePage() {
                           />
                         </div>
                       </td>
-                      <td className="border-b border-slate-100 px-4 py-3 text-right tabular-nums">{fmtQty(r.qty)}</td>
+                      <td className="border-b border-slate-100 px-4 py-3 text-right tabular-nums">{fmtQty(Number(r.soldQty) || 0)}</td>
+                      <td className="border-b border-slate-100 px-4 py-3 text-right tabular-nums">{fmtQty(Number(r.returnedQty) || 0)}</td>
+                      <td className="border-b border-slate-100 px-4 py-3 text-right font-semibold tabular-nums">{fmtQty(r.qty)}</td>
                       <td className="border-b border-slate-100 px-4 py-3 text-right tabular-nums">
-                        {fmtVnd((r as any).avgSell || 0)}
+                        {r.avgSell == null ? "—" : fmtVnd(r.avgSell)}
                       </td>
                       <td className="border-b border-slate-100 px-4 py-3 text-right tabular-nums">
-                        {fmtVnd((r as any).avgCost || 0)}
+                        {r.avgCost == null ? "—" : fmtVnd(roundCostDisplay(r.avgCost))}
                       </td>
                       <td className="border-b border-slate-100 px-4 py-3 text-right font-semibold tabular-nums">
                         {fmtVnd(r.revenue)}
@@ -939,7 +947,7 @@ export default function RevenuePage() {
 
                   {!loading && topProducts.length === 0 && (
                     <tr>
-                      <td className="px-4 py-8 text-slate-500" colSpan={6}>
+                      <td className="px-4 py-8 text-slate-500" colSpan={8}>
                         Không có dữ liệu trong khoảng thời gian này.
                       </td>
                     </tr>

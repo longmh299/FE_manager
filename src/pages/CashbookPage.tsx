@@ -227,12 +227,13 @@ const Btn: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 
   );
 };
 
-const AccountSelect: React.FC<{ accounts: AccSum[]; value: string; onChange: (v: string) => void; exclude?: string; onlyCash?: boolean }> = ({
+const AccountSelect: React.FC<{ accounts: AccSum[]; value: string; onChange: (v: string) => void; exclude?: string; onlyCash?: boolean; hideBankBalance?: boolean }> = ({
   accounts,
   value,
   onChange,
   exclude,
   onlyCash,
+  hideBankBalance,
 }) => (
   <select className={inputCls} value={value} onChange={(e) => onChange(e.target.value)}>
     <option value="">Chọn quỹ hoặc tài khoản</option>
@@ -240,7 +241,7 @@ const AccountSelect: React.FC<{ accounts: AccSum[]; value: string; onChange: (v:
       .filter((a) => a.isActive && a.id !== exclude && (!onlyCash || isCash(a.type)))
       .map((a) => (
         <option key={a.id} value={a.id}>
-          {a.name} ({a.code}) – số dư {money(a.closing)} đ
+          {a.name} ({a.code}){hideBankBalance && !isCash(a.type) ? "" : ` – số dư ${money(a.closing)} đ`}
         </option>
       ))}
   </select>
@@ -331,6 +332,8 @@ function buildTrend(opening: number, rows: LedgerRow[], from: string, to: string
 const CashbookLedger: React.FC = () => {
   const { user } = useAuth();
   const isAdmin = String(user?.role || "") === "admin";
+  // ✅ kế toán chỉ giữ tiền mặt: chỉ xem và lập phiếu trên sổ tiền mặt
+  const cashOnly = String(user?.role || "") === "accountant";
   const toast = useToast();
 
   const today = vnToday();
@@ -392,11 +395,17 @@ const CashbookLedger: React.FC = () => {
       // lần đầu mở trang: tự chọn quỹ tiền mặt -> đổi sel sẽ tự tải lại sổ đúng quỹ, không hiện sổ "Tất cả" chen ngang
       if (!pickedDefault.current) {
         pickedDefault.current = true;
-        const cash = s.accounts.find((a) => isCash(a.type) && a.isActive);
+        const cash = s.accounts.find((a) => isCash(a.type) && a.isActive) || (cashOnly ? s.accounts.find((a) => isCash(a.type)) : undefined);
         if (cash && cash.id !== sel) {
           setSel(cash.id);
           return;
         }
+      }
+      // kế toán mà chưa có quỹ tiền mặt: không rơi về sổ "Tất cả"
+      if (cashOnly && !s.accounts.some((a) => isCash(a.type))) {
+        setLedger(null);
+        setTrend([]);
+        return;
       }
       const led = ledMaybe ?? (await fetchLedger());
       if (my !== loadSeq.current) return;
@@ -407,7 +416,7 @@ const CashbookLedger: React.FC = () => {
     } finally {
       if (my === loadSeq.current) setLoading(false);
     }
-  }, [from, to, sel, fetchLedger]);
+  }, [from, to, sel, fetchLedger, cashOnly]);
 
   useEffect(() => {
     reload();
@@ -417,8 +426,9 @@ const CashbookLedger: React.FC = () => {
     const list = summary?.accounts ?? [];
     return [...list].sort((a, b) => (isCash(a.type) === isCash(b.type) ? a.name.localeCompare(b.name) : isCash(a.type) ? -1 : 1));
   }, [summary]);
-  const selAcc = accounts.find((a) => a.id === sel) || null;
-  const head = selAcc ?? (summary ? { ...summary.total, name: "Tất cả quỹ và tài khoản" } : null);
+  const viewAccounts = useMemo(() => (cashOnly ? accounts.filter((a) => isCash(a.type)) : accounts), [accounts, cashOnly]);
+  const selAcc = viewAccounts.find((a) => a.id === sel) || null;
+  const head = selAcc ?? (summary && !cashOnly ? { ...summary.total, name: "Tất cả quỹ và tài khoản" } : null);
 
   /* ---------- modals ---------- */
   type VoucherForm = { type: "RECEIPT" | "PAYMENT"; date: string; accountId: string; amount: number; personName: string; subject: string; note: string; refNo: string };
@@ -584,7 +594,9 @@ const CashbookLedger: React.FC = () => {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Thu chi</h1>
-          <p className="mt-0.5 text-sm text-slate-500">Mọi khoản tiền vào, ra quỹ tiền mặt và tài khoản ngân hàng đều đi qua phiếu.</p>
+          <p className="mt-0.5 text-sm text-slate-500">
+            {cashOnly ? "Theo dõi và đối soát tiền vào, ra quỹ tiền mặt." : "Mọi khoản tiền vào, ra quỹ tiền mặt và tài khoản ngân hàng đều đi qua phiếu."}
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="Chọn nhanh kỳ">
@@ -615,11 +627,15 @@ const CashbookLedger: React.FC = () => {
 
       {err && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{err}</div>}
 
+      {cashOnly && summary && viewAccounts.length === 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Chưa có quỹ tiền mặt. Nhờ admin tạo quỹ tiền mặt để bắt đầu dùng sổ.</div>
+      )}
+
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
         {/* ================= rail ================= */}
         <aside className="lg:sticky lg:top-0 lg:self-start">
           <div className="grid grid-cols-2 gap-2 lg:flex lg:flex-col lg:gap-1">
-            {[{ id: "", name: "Tất cả", code: "", type: "ALL", closing: summary?.total.closing ?? 0, openingDate: null, isActive: true } as any, ...accounts].map((a: any) => {
+            {[...(cashOnly ? [] : [{ id: "", name: "Tất cả", code: "", type: "ALL", closing: summary?.total.closing ?? 0, openingDate: null, isActive: true } as any]), ...viewAccounts].map((a: any) => {
               const on = sel === a.id;
               const cash = isCash(a.type);
               const noOpen = cash && !a.openingDate;
@@ -1054,7 +1070,7 @@ const CashbookLedger: React.FC = () => {
             </div>
             <label className="block">
               <span className={labelCls}>{voucher.type === "RECEIPT" ? "Thu vào" : "Chi từ"}</span>
-              <AccountSelect accounts={accounts} value={voucher.accountId} onChange={(v) => setVoucher({ ...voucher, accountId: v })} />
+              <AccountSelect accounts={viewAccounts} value={voucher.accountId} onChange={(v) => setVoucher({ ...voucher, accountId: v })} />
             </label>
             <label className="block">
               <span className={labelCls}>Nội dung</span>
@@ -1109,7 +1125,7 @@ const CashbookLedger: React.FC = () => {
           <>
             <label className="block">
               <span className={labelCls}>Từ</span>
-              <AccountSelect accounts={accounts} value={transfer.fromAccountId} onChange={(v) => setTransfer({ ...transfer, fromAccountId: v })} />
+              <AccountSelect accounts={accounts} hideBankBalance={cashOnly} value={transfer.fromAccountId} onChange={(v) => setTransfer({ ...transfer, fromAccountId: v })} />
             </label>
             <div className="flex justify-center text-slate-400" aria-hidden="true">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -1118,7 +1134,7 @@ const CashbookLedger: React.FC = () => {
             </div>
             <label className="block">
               <span className={labelCls}>Sang</span>
-              <AccountSelect accounts={accounts} value={transfer.toAccountId} exclude={transfer.fromAccountId} onChange={(v) => setTransfer({ ...transfer, toAccountId: v })} />
+              <AccountSelect accounts={accounts} hideBankBalance={cashOnly} value={transfer.toAccountId} exclude={transfer.fromAccountId} onChange={(v) => setTransfer({ ...transfer, toAccountId: v })} />
             </label>
             <div className="grid grid-cols-[1fr_auto] gap-3">
               <label>

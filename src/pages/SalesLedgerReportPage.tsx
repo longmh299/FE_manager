@@ -4,6 +4,7 @@ import api from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
 import { saveAs } from "file-saver";
 
+import { roundCostDisplay } from "../utils/costDisplay"; // ✅ giá vốn hiển thị số chẵn
 type PaymentStatus = "UNPAID" | "PARTIAL" | "PAID" | "";
 
 type StaffUser = {
@@ -957,7 +958,7 @@ const SalesLedgerReportPage: React.FC = () => {
                     <td className={`px-4 py-3 border-b border-slate-100 text-right font-semibold whitespace-nowrap ${r.isReturn ? "text-violet-700" : ""}`}>
                       {fmtMoney(r.lineAmount)}
                     </td>
-                    <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">{fmtMoney(r.unitCost)}</td>
+                    <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">{fmtMoney(roundCostDisplay(r.unitCost))}</td>
 
                     <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap">{fmtMoney(r.costTotal)}</td>
 
@@ -973,7 +974,7 @@ const SalesLedgerReportPage: React.FC = () => {
 
                     {/* ✅ tách riêng khỏi nhóm giá vốn chính, chỉ mang tính tham khảo */}
                     <td className="px-4 py-3 border-b border-slate-100 text-right whitespace-nowrap text-slate-500">
-                      {fmtMoney(safeNum(r.unitCostMonthAvg))}
+                      {fmtMoney(roundCostDisplay(safeNum(r.unitCostMonthAvg)))}
                     </td>
                   </tr>
                 );

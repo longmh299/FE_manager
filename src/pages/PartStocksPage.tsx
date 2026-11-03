@@ -4,6 +4,7 @@ import ItemStockHistory from "../components/ItemStockHistory"; // ✅ lịch s�
 import api, { extractList } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import DeleteItemDialog, { type DeleteItemTarget } from "../components/DeleteItemDialog"; // ✅ xoá mặt hàng (admin + mật khẩu cấp 2)
+import { roundCostDisplay } from "../utils/costDisplay"; // ✅ giá vốn hiển thị số chẵn
 
 type PartStockRow = {
   itemId?: string; // ✅ from BE summary-by-item
@@ -1312,7 +1313,7 @@ const PartStocksPage: React.FC = () => {
                               whiteSpace: "nowrap",
                             }}
                           >
-                            {fmtMoney(row.avgCost || 0)}
+                            {fmtMoney(roundCostDisplay(row.avgCost || 0))}
                           </td>
                           <td
                             style={{
@@ -1323,7 +1324,7 @@ const PartStocksPage: React.FC = () => {
                               whiteSpace: "nowrap",
                             }}
                           >
-                            {fmtMoney(row.stockValue || 0)}
+                            {fmtMoney(roundCostDisplay(row.stockValue || 0))}
                           </td>
                           <td
                             style={{
@@ -1495,8 +1496,8 @@ const PartStocksPage: React.FC = () => {
                 {isPrivileged && (
                   <div className="mt-2 flex items-center justify-between border-t pt-2 text-xs">
                     <div>
-                      <div className="text-slate-400">Giá vốn TB: {fmtMoney(row.avgCost || 0)}</div>
-                      <div className="text-slate-400">Giá trị tồn: {fmtMoney(row.stockValue || 0)}</div>
+                      <div className="text-slate-400">Giá vốn TB: {fmtMoney(roundCostDisplay(row.avgCost || 0))}</div>
+                      <div className="text-slate-400">Giá trị tồn: {fmtMoney(roundCostDisplay(row.stockValue || 0))}</div>
                     </div>
                     <div className="flex shrink-0">
                     <button
