@@ -65,8 +65,8 @@ type RevenueResp = {
     netVat?: number;
     shipRevenue?: number;
     laborRevenue?: number;
-    shipCostPaid?: number;
-    profitAfterCost?: number;
+    shipCostPaid?: number | null;
+    profitAfterCost?: number | null;
     netTotal?: number;
     netCollected?: number;
     netCogs?: number;
@@ -743,14 +743,14 @@ export default function RevenuePage() {
           />
           <KpiCard
             tone="slate"
-            label="Đã chi ship"
-            value={fmtVnd(data?.kpis?.shipCostPaid ?? 0)}
+            label="Đã chi ship (phiếu chi Sổ quỹ)"
+            value={data?.kpis?.shipCostPaid == null ? "Không tách theo bộ lọc" : fmtVnd(data.kpis.shipCostPaid)}
             icon={<IconUndo className="h-4 w-4" />}
           />
           <KpiCard
             tone="violet"
             label="Lợi nhuận sau chi phí"
-            value={fmtVnd(data?.kpis?.profitAfterCost ?? 0)}
+            value={data?.kpis?.profitAfterCost == null ? "Không tách theo bộ lọc" : fmtVnd(data.kpis.profitAfterCost)}
             icon={<IconPercent className="h-4 w-4" />}
           />
           <KpiCard

@@ -14,6 +14,7 @@ type Row = {
   arrived: boolean;
   stockQty: number | null;
   unitCost: number;
+  costIsTemp?: boolean;
   note: string | null;
   days: number;
   late: boolean;
@@ -142,6 +143,11 @@ const StockBackordersPage: React.FC = () => {
                   <td className="px-3 py-2.5">
                     <b>{r.item.sku}</b> {r.item.name}
                     {r.stockQty != null && <div className="text-xs text-slate-500">Tồn hiện tại: {nf.format(r.stockQty)}</div>}
+                    {r.costIsTemp && (
+                      <div className="mt-1">
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">Giá vốn tạm {nf.format(r.unitCost)} đ</span>
+                      </div>
+                    )}
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums">{nf.format(r.qty)}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums">{nf.format(r.covered)}</td>

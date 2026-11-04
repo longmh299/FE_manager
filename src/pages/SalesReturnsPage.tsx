@@ -403,7 +403,7 @@ export default function SalesReturnsPage() {
       setLoadingRole(false);
 
       if (!r) return nav("/login", { replace: true });
-      if (r !== "admin") {
+      if (r !== "admin" && r !== "accountant") {
         toast.push({ type: "error", title: "Không có quyền", message: "Chức năng này chỉ dành cho ADMIN." });
         return nav("/", { replace: true });
       }
@@ -450,14 +450,14 @@ export default function SalesReturnsPage() {
   }
 
   useEffect(() => {
-    if (role !== "admin") return;
+    if (role !== "admin" && role !== "accountant") return;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [role, page, status]);
 
   // Load payment accounts
   useEffect(() => {
-    if (role !== "admin") return;
+    if (role !== "admin" && role !== "accountant") return;
     (async () => {
       try {
         const res = await api.get("/payment-accounts", { params: { active: 1 } });
@@ -963,7 +963,7 @@ export default function SalesReturnsPage() {
   }
 
   if (loadingRole) return <div style={{ padding: 16 }}>Đang kiểm tra đăng nhập…</div>;
-  if (role !== "admin") return null;
+  if (role !== "admin" && role !== "accountant") return null;
 
   const effectiveHoldAmount = computeEffectiveHoldAmount(salesInvDetail);
 
@@ -1001,12 +1001,18 @@ export default function SalesReturnsPage() {
 
           {r.status === "SUBMITTED" && (
             <>
-              <button style={primaryBtnStyle()} onClick={() => actApprove(r.id)}>
-                Duyệt
-              </button>
-              <button style={dangerBtnStyle()} onClick={() => actReject(r.id)}>
-                Từ chối
-              </button>
+              {role === "admin" ? (
+                <>
+                  <button style={primaryBtnStyle()} onClick={() => actApprove(r.id)}>
+                    Duyệt
+                  </button>
+                  <button style={dangerBtnStyle()} onClick={() => actReject(r.id)}>
+                    Từ chối
+                  </button>
+                </>
+              ) : (
+                <span style={{ alignSelf: "center", fontSize: 13, color: "#92400e" }}>Chờ quản trị duyệt</span>
+              )}
               <button style={ghostBtnStyle()} onClick={() => actRecall(r.id)}>
                 Hủy gửi
               </button>

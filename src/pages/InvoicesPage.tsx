@@ -1,4 +1,5 @@
 // src/pages/InvoicesPage.tsx
+import BackorderCostDialog, { NEED_BACKORDER_COST, type BackorderCostItem } from "../components/BackorderCostDialog";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import api from "../api/client";
@@ -456,6 +457,7 @@ const InvoicesPage: React.FC = () => {
   const isAccountant = role === "accountant";
   const canApprove = role === "admin" || role === "accountant";
 
+  const [costAsk, setCostAsk] = useState<null | { items: BackorderCostItem[]; submit: (costs: Record<string, number>) => Promise<void> }>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmTitle, setConfirmTitle] = useState("Xác nhận");
   const [confirmMessage, setConfirmMessage] = useState<React.ReactNode>(null);
@@ -864,9 +866,25 @@ const InvoicesPage: React.FC = () => {
         </div>
       ),
       action: async () => {
-        await api.post(`/invoices/${inv.id}/approve`, {});
-        toast.push({ type: "success", title: "Đã duyệt", message: "Hóa đơn đã được duyệt." });
-        await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
+        const done = async () => {
+          toast.push({ type: "success", title: "Đã duyệt", message: "Hóa đơn đã được duyệt." });
+          await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
+        };
+        try {
+          await api.post(`/invoices/${inv.id}/approve`, {});
+          await done();
+        } catch (e: any) {
+          // ✅ linh kiện xuất âm chưa có giá vốn: hỏi giá ngay tại đây
+          if (e?.response?.data?.code !== NEED_BACKORDER_COST) throw e;
+          setCostAsk({
+            items: e.response.data.items,
+            submit: async (costs) => {
+              await api.post(`/invoices/${inv.id}/approve`, { backorderCosts: costs });
+              setCostAsk(null);
+              await done();
+            },
+          });
+        }
       },
     });
   };
@@ -1218,8 +1236,8 @@ const InvoicesPage: React.FC = () => {
       adjustLocked: isAdmin && inv.status === "APPROVED" && inClosedPeriod(inv),
       showSubmitBtn: (isStaff || canApprove) && inv.status === "DRAFT",
       showRecallBtn: isStaff && inv.status === "SUBMITTED",
-      showApproveBtn: canApprove && inv.status === "SUBMITTED",
-      showRejectBtn: canApprove && inv.status === "SUBMITTED",
+      showApproveBtn: canApprove && inv.status === "SUBMITTED" && (isAdmin || String(inv.type) !== "SALES_RETURN"),
+      showRejectBtn: canApprove && inv.status === "SUBMITTED" && (isAdmin || String(inv.type) !== "SALES_RETURN"),
     };
   };
   const showApprovalColumn = canApprove;
@@ -1641,8 +1659,8 @@ const InvoicesPage: React.FC = () => {
                     const showSubmitBtn = (isStaff || canApprove) && inv.status === "DRAFT";
                     const showRecallBtn = isStaff && inv.status === "SUBMITTED";
 
-                    const showApproveBtn = canApprove && inv.status === "SUBMITTED";
-                    const showRejectBtn = canApprove && inv.status === "SUBMITTED";
+                    const showApproveBtn = canApprove && inv.status === "SUBMITTED" && (isAdmin || String(inv.type) !== "SALES_RETURN");
+                    const showRejectBtn = canApprove && inv.status === "SUBMITTED" && (isAdmin || String(inv.type) !== "SALES_RETURN");
 
                     const grossTotal = clamp0(inv.totalAmount);
 
@@ -2036,6 +2054,8 @@ const InvoicesPage: React.FC = () => {
           />
         </div>
       </Modal>
+
+      <BackorderCostDialog items={costAsk?.items ?? null} onClose={() => setCostAsk(null)} onSubmit={(c) => costAsk!.submit(c)} />
 
       {/* Mở lại hoá đơn đã duyệt: chỉ quản trị + mật khẩu cấp 2 */}
       <PinActionDialog

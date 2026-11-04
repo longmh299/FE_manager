@@ -121,6 +121,8 @@ const ACTION_VI: Record<string, string> = {
   INVOICE_CREATE: "Tạo hoá đơn",
   INVOICE_UPDATE: "Sửa hoá đơn",
   INVOICE_NOTE_UPDATE: "Sửa ghi chú hoá đơn",
+  INVOICE_TECH_CHANGE: "Đổi kỹ thuật viên",
+  INVOICE_FEES_UPDATE: "Sửa phí hoá đơn đã duyệt",
   INVOICE_SUBMIT: "Gửi duyệt hoá đơn",
   INVOICE_RECALL: "Rút lại hoá đơn",
   INVOICE_APPROVE: "Duyệt hoá đơn",

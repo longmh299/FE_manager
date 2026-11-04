@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../api/client";
+import { postOnce } from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
 
 type InvoiceStatus = "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
@@ -320,7 +321,7 @@ export default function SalesReturnFormPage() {
 
   // Load items ONCE
   useEffect(() => {
-    if (role !== "admin") return;
+    if (role !== "admin" && role !== "accountant") return;
 
     (async () => {
       try {
@@ -347,7 +348,7 @@ export default function SalesReturnFormPage() {
 
   // ✅ Search invoice gốc (SALES đã duyệt) (debounced)
   useEffect(() => {
-    if (role !== "admin") return;
+    if (role !== "admin" && role !== "accountant") return;
     if (!refSuggestOpen) return;
 
     const q = (refInvoiceQuery || "").trim();
@@ -562,7 +563,7 @@ export default function SalesReturnFormPage() {
 
   // Load invoice if edit
   useEffect(() => {
-    if (role !== "admin") return;
+    if (role !== "admin" && role !== "accountant") return;
 
     if (isNew) {
       setLines([{ itemId: "", itemName: "", qty: 1, price: 0 }]);
@@ -715,7 +716,7 @@ export default function SalesReturnFormPage() {
     setLoading(true);
     try {
       if (isNew) {
-        const r = await api.post("/invoices", body);
+        const r = await postOnce("/invoices", body);
         const inv = r.data?.data ?? r.data;
         toast.push({ type: "success", title: "Thành công", message: "Đã tạo phiếu." });
         nav(`/sales-returns/${inv.id}`, { replace: true });

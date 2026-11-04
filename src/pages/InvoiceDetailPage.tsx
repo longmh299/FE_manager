@@ -4,6 +4,7 @@ import { useNavigate, useParams, useLocation } from "react-router-dom";
 import api from "../api/client";
 import { postOnce } from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
+import BackorderCostDialog, { NEED_BACKORDER_COST, type BackorderCostItem } from "../components/BackorderCostDialog";
 import { VoidPaymentDialog, PinActionDialog, type VoidTarget } from "../components/SecondPassword";
 
 type InvoiceType = "SALES" | "PURCHASE";
@@ -127,8 +128,6 @@ type Invoice = {
   shipFee?: number; // phí ship thu khách, có VAT
   shipTax?: number;
   laborFee?: number; // công kỹ thuật, không VAT
-  shipCost?: number; // tiền công ty trả nhà xe, sinh phiếu chi
-  shipCostAccountId?: string | null;
   note?: string;
 
   status?: InvoiceStatus;
@@ -1496,6 +1495,12 @@ const InvoiceDetailPage: React.FC = () => {
   );
 
   const [staffs, setStaffs] = useState<StaffUser[]>([]);
+  const [savedTechId, setSavedTechId] = useState<string | null>(null); // kỹ thuật viên đang lưu trên server
+  const [techSaving, setTechSaving] = useState(false);
+  const [savedFees, setSavedFees] = useState({ shipFee: 0, laborFee: 0 }); // phí đang lưu trên server
+  const [feeReason, setFeeReason] = useState("");
+  const [costAskItems, setCostAskItems] = useState<BackorderCostItem[] | null>(null);
+  const [feeBusy, setFeeBusy] = useState(false);
   const [accounts, setAccounts] = useState<PaymentAccount[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -2081,6 +2086,8 @@ const InvoiceDetailPage: React.FC = () => {
       const res = await api.get(`/invoices/${id}`);
       const x = unwrap<any>(res);
 
+      setSavedTechId(x.techUserId ?? null);
+      setSavedFees({ shipFee: Number(x.shipFee || 0), laborFee: Number(x.laborFee || 0) });
       const lines: InvoiceLine[] =
         x.lines?.map((l: any) => ({
           id: l.id,
@@ -2148,8 +2155,6 @@ const InvoiceDetailPage: React.FC = () => {
         shipFee: Number(x.shipFee || 0),
         shipTax: Number(x.shipTax || 0),
         laborFee: Number(x.laborFee || 0),
-        shipCost: Number(x.shipCost || 0),
-        shipCostAccountId: x.shipCostAccountId ?? null,
         paySplits: Array.isArray(x.paySplits) && x.paySplits.length === 2 ? x.paySplits.map((s: any) => ({ accountId: String(s.accountId), amount: Number(s.amount) || 0 })) : null,
         note: x.note ?? "",
 
@@ -2507,8 +2512,6 @@ const InvoiceDetailPage: React.FC = () => {
       receiveAccountId: splitOn ? inv.paySplits![0].accountId : safeId(inv.receiveAccountId),
       shipFee: Number(inv.shipFee || 0),
       laborFee: Number(inv.laborFee || 0),
-      shipCost: Number(inv.shipCost || 0),
-      shipCostAccountId: Number(inv.shipCost || 0) > 0 ? safeId(inv.shipCostAccountId) : null,
       ...(inv.status === "APPROVED"
         ? {}
         : {
@@ -2706,6 +2709,29 @@ const InvoiceDetailPage: React.FC = () => {
     setReopenPinOpen(true); // ✅ mật khẩu cấp 2 (hộp bên dưới)
   }
 
+  async function doSaveFees() {
+    if (!invoice?.id) return;
+    if (feeReason.trim().length < 3) {
+      toastError("Ghi lý do sửa phí trước đã.", "Thiếu lý do");
+      return;
+    }
+    setFeeBusy(true);
+    try {
+      await api.put(`/invoices/${invoice.id}/fees`, {
+        shipFee: Number(invoice.shipFee || 0),
+        laborFee: Number(invoice.laborFee || 0),
+        reason: feeReason.trim(),
+      });
+      setFeeReason("");
+      toastSuccess("Đã sửa phí. Tổng hoá đơn và công nợ đã cập nhật.");
+      await loadInvoiceIfNeeded();
+    } catch (err: any) {
+      toastError(err?.response?.data?.message || "Không sửa được phí.", "Chưa lưu được");
+    } finally {
+      setFeeBusy(false);
+    }
+  }
+
   async function doReopenWithPin(pin: string) {
     if (!invoice?.id) return;
     setReopenBusy(true);
@@ -2798,6 +2824,12 @@ const InvoiceDetailPage: React.FC = () => {
           toastSuccess("Đã duyệt hóa đơn.");
           closeConfirm();
         } catch (err: any) {
+          // ✅ linh kiện xuất âm chưa có giá vốn: hỏi giá ngay tại đây
+          if (err?.response?.data?.code === NEED_BACKORDER_COST) {
+            closeConfirm();
+            setCostAskItems(err.response.data.items);
+            return;
+          }
           console.error("approve error", err);
           const msg = err?.response?.data?.message || "Duyệt thất bại.";
           setMessage({ type: "error", text: msg });
@@ -2891,6 +2923,13 @@ const InvoiceDetailPage: React.FC = () => {
   // - APPROVED: chỉ admin + adjust-mode mới sửa (điều chỉnh & post lại)
   const canEditApprovedAdjust = isAdmin && isAdjustMode && status === "APPROVED";
   const canEdit = status === "DRAFT" || canEditApprovedAdjust;
+  // ✅ đổi kỹ thuật viên trên hoá đơn bán đã duyệt: kế toán, admin, không cần mở lại
+  const canChangeTech =
+    invoice.type === "SALES" &&
+    status === "APPROVED" &&
+    !canEditApprovedAdjust &&
+    ["admin", "accountant"].includes(String(me.role || "").trim().toLowerCase());
+  const feesChanged = Number(invoice.shipFee || 0) !== savedFees.shipFee || Number(invoice.laborFee || 0) !== savedFees.laborFee;
 
   const locked = !canEdit;
 
@@ -2920,8 +2959,6 @@ const InvoiceDetailPage: React.FC = () => {
   const cashAccs = accounts.filter((a) => a.type === "CASH" && a.isActive !== false);
   const bankAccs = accounts.filter((a) => a.type !== "CASH" && a.isActive !== false);
   const splitLocked = locked || status === "APPROVED";
-  // hoá đơn đã gửi duyệt: kế toán, admin vẫn sửa được tiền trả nhà xe
-  const shipCostLocked = status === "DRAFT" ? locked : !(isAdmin || String(me.role || "").trim().toLowerCase() === "accountant");
   const splitPaidAll = calcCollectible(invoice);
   const setSplitLine = (cash: { accountId: string; amount: number }, bank: { accountId: string; amount: number }) => {
     markDirty();
@@ -3202,9 +3239,9 @@ const InvoiceDetailPage: React.FC = () => {
                         <select
                           style={styles.select}
                           value={invoice.techUserId || ""}
-                          disabled={locked}
+                          disabled={locked && !canChangeTech}
                           onChange={(e) => {
-                            markDirty();
+                            if (!canChangeTech) markDirty();
                             updateInvoice({ techUserId: safeId(e.target.value) });
                           }}
                         >
@@ -3219,6 +3256,39 @@ const InvoiceDetailPage: React.FC = () => {
                             </option>
                           ))}
                         </select>
+                        {canChangeTech && (invoice.techUserId || null) !== (savedTechId || null) && (
+                          <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                            <button
+                              type="button"
+                              className="inv-btn"
+                              style={styles.secondarySmallBtn}
+                              disabled={techSaving}
+                              onClick={async () => {
+                                setTechSaving(true);
+                                try {
+                                  await api.put(`/invoices/${invoice.id}/technician`, { techUserId: invoice.techUserId || null });
+                                  setSavedTechId(invoice.techUserId || null);
+                                  toastSuccess("Đã đổi kỹ thuật viên. Tiền và tồn kho không thay đổi.");
+                                } catch (err: any) {
+                                  toastError(err?.response?.data?.message || "Không đổi được kỹ thuật viên.", "Lỗi");
+                                } finally {
+                                  setTechSaving(false);
+                                }
+                              }}
+                            >
+                              {techSaving ? "Đang lưu..." : "Lưu kỹ thuật viên"}
+                            </button>
+                            <button
+                              type="button"
+                              className="inv-btn"
+                              style={styles.secondarySmallBtn}
+                              disabled={techSaving}
+                              onClick={() => updateInvoice({ techUserId: savedTechId })}
+                            >
+                              Huỷ
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -3869,7 +3939,7 @@ const InvoiceDetailPage: React.FC = () => {
                           <b>Thiếu {shortQty}:</b> tồn {Number(lineItem?.stockQty ?? 0)}, cần {sameItemQty}. Nhập ghi chú để xuất âm, dòng này sẽ vào "Hàng chờ bù" khi hoá đơn được duyệt.
                         </div>
                       )}
-                      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,2fr) minmax(0,1fr)", gap: 6 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: isStaffRole ? "minmax(0,1fr)" : "minmax(0,2fr) minmax(0,1fr)", gap: 6 }}>
                         <input
                           aria-label="Ghi chú xuất âm"
                           style={styles.input}
@@ -3883,7 +3953,7 @@ const InvoiceDetailPage: React.FC = () => {
                             setInvoice((prev) => (prev ? { ...prev, lines: prev.lines.map((x, i) => (i === idx ? { ...x, backorderNote: v } : x)) } : prev));
                           }}
                         />
-                        <div title="Chỉ cần khi linh kiện chưa từng nhập">
+                        {!isStaffRole && <div title="Chỉ cần khi linh kiện chưa từng nhập">
                           <PaidAmountInput
                             value={Number(line.backorderCost || 0)}
                             disabled={locked}
@@ -3894,9 +3964,9 @@ const InvoiceDetailPage: React.FC = () => {
                             }}
                             styleInput={{ textAlign: "right" }}
                           />
-                        </div>
+                        </div>}
                       </div>
-                      <div style={{ fontSize: 12, color: C.muted }}>Ô số bên phải là giá vốn tạm, chỉ cần nhập nếu linh kiện chưa từng nhập kho.</div>
+                      {!isStaffRole && <div style={{ fontSize: 12, color: C.muted }}>Ô số bên phải là giá vốn tạm, không bắt buộc. Thiếu giá thì app hỏi lúc duyệt.</div>}
                     </div>
                   )}
                   </React.Fragment>
@@ -3949,28 +4019,69 @@ const InvoiceDetailPage: React.FC = () => {
                         <div style={{ flex: 1, minWidth: 140 }}>
                           <PaidAmountInput
                             value={Number(invoice.shipFee || 0)}
-                            disabled={locked}
+                            disabled={locked && !canChangeTech}
                             onChange={(raw) => {
-                              markDirty();
+                              if (!canChangeTech) markDirty();
                               const v = Math.max(0, raw);
-                              setInvoice((prev) => {
-                                if (!prev) return prev;
-                                // tiền trả nhà xe mặc định bằng phí ship, người dùng đã sửa khác thì giữ nguyên
-                                const follow = Number(prev.shipCost || 0) === Number(prev.shipFee || 0);
-                                return recomputeInvoiceCore(prev, {
-                                  shipFee: v,
-                                  ...(follow
-                                    ? {
-                                        shipCost: v,
-                                        shipCostAccountId:
-                                          prev.shipCostAccountId || (accounts.find((a) => a.type === "CASH" && a.isActive !== false)?.id ?? null),
-                                      }
-                                    : {}),
-                                });
-                              });
+                              setInvoice((prev) => (prev ? recomputeInvoiceCore(prev, { shipFee: v }) : prev));
                             }}
                             styleInput={{ textAlign: "right" }}
                           />
+                        </div>
+                      </div>
+                    )}
+
+                    {invoice.type === "SALES" && (
+                      <div className="inv-sum-row" style={styles.summaryRow}>
+                        <span className="inv-sum-label" style={styles.summaryLabel}>Công kỹ thuật</span>
+                        <div style={{ flex: 1, minWidth: 140 }}>
+                          <PaidAmountInput
+                            value={Number(invoice.laborFee || 0)}
+                            disabled={locked && !canChangeTech}
+                            onChange={(raw) => {
+                              if (!canChangeTech) markDirty();
+                              setInvoice((prev) => (prev ? recomputeInvoiceCore(prev, { laborFee: Math.max(0, raw) }) : prev));
+                            }}
+                            styleInput={{ textAlign: "right" }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {canChangeTech && feesChanged && (
+                      <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: 10, margin: "2px 0 8px", display: "grid", gap: 6 }}>
+                        <div style={{ fontSize: 12.5, color: "#92400e" }}>
+                          Tổng hoá đơn và công nợ của khách sẽ đổi theo. Lý do được lưu vào nhật ký.
+                        </div>
+                        <input
+                          aria-label="Lý do sửa phí"
+                          style={styles.input}
+                          maxLength={200}
+                          value={feeReason}
+                          placeholder="Lý do sửa, ví dụ: nhà xe báo lại phí"
+                          onChange={(e) => setFeeReason(e.target.value)}
+                        />
+                        <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+                          <button
+                            type="button"
+                            className="inv-btn"
+                            style={styles.secondarySmallBtn}
+                            onClick={() => {
+                              setFeeReason("");
+                              setInvoice((prev) => (prev ? recomputeInvoiceCore(prev, { shipFee: savedFees.shipFee, laborFee: savedFees.laborFee }) : prev));
+                            }}
+                          >
+                            Huỷ
+                          </button>
+                          <button
+                            type="button"
+                            className="inv-btn"
+                            style={primarySmallBtn(feeBusy)}
+                            disabled={feeBusy}
+                            onClick={doSaveFees}
+                          >
+                            {feeBusy ? "Đang lưu..." : "Lưu phí"}
+                          </button>
                         </div>
                       </div>
                     )}
@@ -4038,80 +4149,9 @@ const InvoiceDetailPage: React.FC = () => {
                       <span style={styles.summaryValue}>{formatMoney(vatAmount + Number(invoice.shipTax || 0))} đ</span>
                     </div>
 
-                    {invoice.type === "SALES" && (
-                      <div className="inv-sum-row" style={styles.summaryRow}>
-                        <span className="inv-sum-label" style={styles.summaryLabel}>Công kỹ thuật (không VAT)</span>
-                        <div style={{ flex: 1, minWidth: 140 }}>
-                          <PaidAmountInput
-                            value={Number(invoice.laborFee || 0)}
-                            disabled={locked}
-                            onChange={(raw) => {
-                              markDirty();
-                              setInvoice((prev) => (prev ? recomputeInvoiceCore(prev, { laborFee: Math.max(0, raw) }) : prev));
-                            }}
-                            styleInput={{ textAlign: "right" }}
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {invoice.type === "SALES" && (
-                      <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: 8, margin: "4px 0", display: "grid", gap: 6 }}>
-                        <div style={{ fontSize: 12.5, fontWeight: 600 }}>Tiền ship công ty trả nhà xe</div>
-                        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 6 }}>
-                          <select
-                            aria-label="Tài khoản chi tiền ship"
-                            style={styles.select}
-                            disabled={shipCostLocked}
-                            value={invoice.shipCostAccountId || ""}
-                            onChange={(e) => {
-                              markDirty();
-                              updateInvoice({ shipCostAccountId: e.target.value || null });
-                            }}
-                          >
-                            <option value="">Chọn tài khoản</option>
-                            {accounts.filter((a) => a.isActive !== false).map((a) => (
-                              <option key={a.id} value={a.id}>{a.code} - {a.name}</option>
-                            ))}
-                          </select>
-                          <PaidAmountInput
-                            value={Number(invoice.shipCost || 0)}
-                            disabled={shipCostLocked}
-                            onChange={(raw) => {
-                              markDirty();
-                              const v = Math.max(0, raw);
-                              updateInvoice({
-                                shipCost: v,
-                                shipCostAccountId:
-                                  invoice.shipCostAccountId || (v > 0 ? accounts.find((a) => a.type === "CASH" && a.isActive !== false)?.id ?? null : null),
-                              });
-                            }}
-                            styleInput={{ textAlign: "right" }}
-                          />
-                        </div>
-                        <div style={{ fontSize: 12, color: C.muted }}>
-                          Gửi duyệt sẽ tạo phiếu chi chờ duyệt, không đổi tiền khách trả. Mình bao ship: để trống phí vận chuyển, chỉ nhập ô này. COD khách đã trả ship: để trống cả 2.
-                        </div>
-                        {status !== "DRAFT" && (isAdmin || String(me.role || "").trim().toLowerCase() === "accountant") && (
-                          <button
-                            type="button"
-                            className="inv-btn"
-                            style={{ ...styles.secondarySmallBtn, justifySelf: "end" }}
-                            onClick={async () => {
-                              try {
-                                await api.put(`/invoices/${invoice.id}/ship-cost`, {
-                                  shipCost: Number(invoice.shipCost || 0),
-                                  accountId: invoice.shipCostAccountId || null,
-                                });
-                                toastSuccess("Đã lưu tiền ship. Phần tăng thêm đã sang Chờ duyệt thu chi.");
-                              } catch (err: any) {
-                                toastError(err?.response?.data?.message || "Không lưu được tiền ship.", "Lỗi");
-                              }
-                            }}
-                          >
-                            Lưu tiền ship
-                          </button>
-                        )}
+                    {invoice.type === "SALES" && (Number(invoice.shipFee || 0) > 0 || Number(invoice.laborFee || 0) > 0) && (
+                      <div style={{ fontSize: 12, color: C.muted, padding: "0 0 6px", textAlign: "right" }}>
+                        VAT tính trên tiền hàng và phí vận chuyển, không tính trên công kỹ thuật.
                       </div>
                     )}
 
@@ -4652,6 +4692,20 @@ const InvoiceDetailPage: React.FC = () => {
         busyLabel="Đang mở lại…"
         onClose={() => setReopenPinOpen(false)}
         onSubmit={doReopenWithPin}
+      />
+
+
+      <BackorderCostDialog
+        items={costAskItems}
+        onClose={() => setCostAskItems(null)}
+        onSubmit={async (costs) => {
+          await api.post(`/invoices/${invoice.id}/approve`, { backorderCosts: costs });
+          setCostAskItems(null);
+          updateInvoice({ status: "APPROVED" });
+          setMessage({ type: "success", text: "Đã duyệt hóa đơn." });
+          toastSuccess("Đã duyệt hóa đơn.");
+          await loadInvoiceIfNeeded();
+        }}
       />
 
       <VoidPaymentDialog
