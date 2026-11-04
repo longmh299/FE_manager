@@ -23,7 +23,7 @@ type Item = {
 type StockCountLine = {
   id: string;
   itemId: string;
-  countedQty: string;
+  countedQty: string | null; // null = chưa đếm
   bookQty?: string;
   diff?: string;
   item?: Item;
@@ -132,7 +132,7 @@ const StockCountDetailPage: React.FC = () => {
 
       const init: Record<string, string> = {};
       (detail.lines || []).forEach((l) => {
-        init[l.id] = (l.countedQty as any)?.toString?.() ?? l.countedQty ?? "0";
+        init[l.id] = (l.countedQty as any)?.toString?.() ?? ""; // trống = chưa đếm
       });
       setEditingValues(init);
     } catch (err) {
@@ -166,13 +166,10 @@ const StockCountDetailPage: React.FC = () => {
     let diff = 0;
     for (const l of lines) {
       const b = parseNumber(l.bookQty ?? "0");
-      const c = parseNumber(
-        (editingValues[l.id] ??
-          (l.countedQty as any)?.toString?.() ??
-          l.countedQty ??
-          "0") as string
-      );
+      const raw = (editingValues[l.id] ?? (l.countedQty as any)?.toString?.() ?? "") as string;
       book += b;
+      if (raw.trim() === "") continue; // chưa đếm: không tính chênh lệch
+      const c = parseNumber(raw);
       counted += c;
       diff += c - b;
     }
@@ -191,12 +188,13 @@ const StockCountDetailPage: React.FC = () => {
     if (isReadOnly) return;
 
     const value =
-      editingValues[line.id] ?? (line.countedQty as any)?.toString?.() ?? "0";
+      editingValues[line.id] ?? (line.countedQty as any)?.toString?.() ?? "";
+    const isBlank = String(value).trim() === "";
 
     try {
       setSavingLineId(line.id);
       await api.put(`/stock-counts/lines/${line.id}`, {
-        countedQty: value || "0",
+        countedQty: isBlank ? null : value,
       });
 
       // Cập nhật local state cho dòng đó, không reload toàn phiếu
@@ -204,13 +202,11 @@ const StockCountDetailPage: React.FC = () => {
         if (!prev) return prev;
         const newLines = prev.lines.map((l) => {
           if (l.id !== line.id) return l;
-          const newCounted = value || "0";
           const book = parseNumber(l.bookQty ?? "0");
-          const counted = parseNumber(newCounted);
-          const diff = counted - book;
+          const diff = isBlank ? 0 : parseNumber(value) - book;
           return {
             ...l,
-            countedQty: newCounted,
+            countedQty: isBlank ? null : value,
             diff: diff.toString(),
           };
         });
@@ -610,18 +606,19 @@ const StockCountDetailPage: React.FC = () => {
 
                 {visibleLines.map((line) => {
                   const inputValue =
-                    editingValues[line.id] ?? (line.countedQty as any)?.toString?.() ?? "0";
+                    editingValues[line.id] ?? (line.countedQty as any)?.toString?.() ?? "";
 
                   return (
                     <tr key={line.id} style={{ borderTop: "1px solid #edf2f7" }}>
                       <td style={tdStyle}>{line.item?.sku || ""}</td>
                       <td style={tdStyle}>{line.item?.name || ""}</td>
                       <td style={tdStyle}>{line.item?.unit || ""}</td>
-                      <td style={tdStyle}>{line.bookQty ?? "0"}</td>
+                      <td style={tdStyle}>{line.bookQty ?? ""}</td>
                       <td style={tdStyle}>
                         <input
                           type="number"
                           value={inputValue}
+                          placeholder="Chưa đếm"
                           disabled={isReadOnly}
                           onChange={(e) =>
                             setEditingValues((prev) => ({

@@ -8,6 +8,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import api from "../api/client";
+import { postOnce } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { ToastHost, useToast } from "../components/Toast";
 import PaymentRequestsPanel from "../components/PaymentRequestsPanel";
@@ -494,7 +495,7 @@ const CashbookLedger: React.FC = () => {
     let code = "";
     run(
       async () => {
-        const r = await api.post("/cashbook/vouchers", voucher);
+        const r = await postOnce("/cashbook/vouchers", voucher);
         code = String(r.data?.code || "");
       },
       () => `${voucher.type === "RECEIPT" ? "Đã lập phiếu thu" : "Đã lập phiếu chi"}${code ? ` ${code}` : ""}.`,
@@ -506,7 +507,7 @@ const CashbookLedger: React.FC = () => {
     if (!transfer.fromAccountId || !transfer.toAccountId) return setFormErr("Chọn nơi chuyển đi và nơi nhận.");
     if (transfer.fromAccountId === transfer.toAccountId) return setFormErr("Nơi chuyển đi và nơi nhận phải khác nhau.");
     if (!transfer.amount) return setFormErr("Nhập số tiền.");
-    run(async () => void (await api.post("/cashbook/transfers", transfer)), "Đã chuyển quỹ.", () => setTransfer(null));
+    run(async () => void (await postOnce("/cashbook/transfers", transfer)), "Đã chuyển quỹ.", () => setTransfer(null));
   };
   const countDiff = count && count.book != null ? count.actual - count.book : null;
   const countMismatch = countDiff != null && Math.abs(countDiff) >= 0.5;
@@ -523,15 +524,30 @@ const CashbookLedger: React.FC = () => {
   const submitOpening = () => {
     if (!opening) return;
     if (opening.enabled && !opening.date) return setFormErr("Chọn ngày bắt đầu sổ.");
-    run(
-      async () =>
-        void (await api.put(`/cashbook/accounts/${opening.acc.id}/opening`, {
-          openingBalance: opening.enabled ? opening.amount : 0,
-          openingDate: opening.enabled ? opening.date : null,
-        })),
-      "Đã lưu số dư đầu kỳ.",
-      () => setOpening(null)
-    );
+    setFormErr(null);
+    setOpeningPin(true);
+  };
+  // ✅ đổi số dư đầu kỳ cần mật khẩu cấp 2
+  const [openingPin, setOpeningPin] = useState(false);
+  const doSaveOpeningWithPin = async (pin: string) => {
+    if (!opening) return;
+    try {
+      await api.put(`/cashbook/accounts/${opening.acc.id}/opening`, {
+        openingBalance: opening.enabled ? opening.amount : 0,
+        openingDate: opening.enabled ? opening.date : null,
+        pin,
+      });
+    } catch (e: any) {
+      const code = e?.response?.data?.code;
+      if (code && String(code).startsWith("PIN_")) throw e; // hộp mật khẩu tự xử lý
+      setOpeningPin(false);
+      setFormErr(errMsg(e, "Không lưu được số dư đầu kỳ."));
+      return;
+    }
+    setOpeningPin(false);
+    toast.push({ type: "success", title: "Đã lưu", message: "Đã lưu số dư đầu kỳ." });
+    setOpening(null);
+    await reload();
   };
   // ✅ chọn xong tài khoản mới -> nhập mật khẩu cấp 2 rồi mới đổi
   const [changeAccPin, setChangeAccPin] = useState(false);
@@ -599,7 +615,7 @@ const CashbookLedger: React.FC = () => {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="Chọn nhanh kỳ">
+          <div className="inline-flex max-w-full overflow-x-auto rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="Chọn nhanh kỳ">
             {presets.map((p) => {
               const on = p.from === from && p.to === to;
               return (
@@ -617,10 +633,10 @@ const CashbookLedger: React.FC = () => {
               );
             })}
           </div>
-          <div className="flex items-center gap-1.5">
-            <input type="date" aria-label="Từ ngày" className={inputBase} value={from} onChange={(e) => e.target.value && setFrom(e.target.value)} />
+          <div className="flex w-full items-center gap-1.5 md:w-auto">
+            <input type="date" aria-label="Từ ngày" className={`${inputBase} w-0 flex-1 md:w-auto md:flex-none`} value={from} onChange={(e) => e.target.value && setFrom(e.target.value)} />
             <span className="text-slate-400">–</span>
-            <input type="date" aria-label="Đến ngày" className={inputBase} value={to} onChange={(e) => e.target.value && setTo(e.target.value)} />
+            <input type="date" aria-label="Đến ngày" className={`${inputBase} w-0 flex-1 md:w-auto md:flex-none`} value={to} onChange={(e) => e.target.value && setTo(e.target.value)} />
           </div>
         </div>
       </div>
@@ -1289,6 +1305,16 @@ const CashbookLedger: React.FC = () => {
       </DialogShell>
 
       <PinActionDialog
+        open={openingPin}
+        title="Xác nhận đổi số dư đầu kỳ"
+        subtitle={opening ? `${opening.acc.code}: ${money(opening.enabled ? opening.amount : 0)} đ` : undefined}
+        confirmLabel="Lưu số dư"
+        busyLabel="Đang lưu…"
+        onClose={() => setOpeningPin(false)}
+        onSubmit={doSaveOpeningWithPin}
+      />
+
+      <PinActionDialog
         open={changeAccPin}
         title="Xác nhận đổi tài khoản"
         subtitle={changeAcc ? `Phiếu ${changeAcc.row.code || ""}, ${money(changeAcc.row.amount)} đ` : undefined}
@@ -1343,7 +1369,7 @@ const CashbookPage: React.FC = () => {
         {(
           [
             ["ledger", "Sổ quỹ"],
-            ["requests", "Phiếu thu nợ"],
+            ["requests", "Chờ duyệt thu chi"],
           ] as const
         ).map(([k, label]) => (
           <button

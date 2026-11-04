@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import api from "../api/client";
+import { postOnce } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { ToastHost, useToast } from "../components/Toast";
 import InvoicePayDialog, { type PayAccount } from "../components/InvoicePayDialog";
@@ -33,6 +34,9 @@ type InvoiceListItem = {
 
   partnerId?: string;
   partnerName: string;
+  note?: string | null;
+  pendingPayAmount?: number; // đang chờ duyệt thu chi, chưa tính vào đã thu
+  bookedPayAmount?: number; // đã vào sổ qua phiếu chưa huỷ
 
   totalAmount: number; // ✅ Gross total (subtotal + tax)
 
@@ -54,6 +58,28 @@ type InvoiceListItem = {
 };
 
 type InvoiceTypeFilter = "" | "SALES" | "PURCHASE";
+
+/**
+ * Lấy đơn vị vận chuyển từ ghi chú dạng "COD - X" (X là chữ viết tắt, ví dụ COD - VTP).
+ * Không phân biệt hoa thường; "COD-VTP" hoặc "COD – VTP" cũng nhận. Ghi chú không có COD - X thì trả null.
+ */
+function codCarrier(note?: string | null): string | null {
+  const m = String(note ?? "").match(/(?:^|[^\p{L}\p{N}])COD\s*[-–—]\s*([\p{L}\p{N}&]+)/iu);
+  return m ? m[1].toUpperCase() : null;
+}
+
+function CarrierTag({ note }: { note?: string | null }) {
+  const carrier = codCarrier(note);
+  if (!carrier) return null;
+  return (
+    <span
+      title={`COD qua ${carrier}`}
+      className="inline-block max-w-full truncate rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-800"
+    >
+      {carrier}
+    </span>
+  );
+}
 type SourceFilter = "INVOICE" | "ADJUST"; // ✅ NEW: hóa đơn / chứng từ điều chỉnh (adjust move)
 
 const LS_LAST_PAY_ACCOUNT = "lastPayAccountId";
@@ -272,6 +298,9 @@ function mapInvoiceRow(x: any): InvoiceListItem {
 
           partnerId: x.partnerId ?? x.partner?.id ?? undefined,
           partnerName: x.partner?.name ?? x.partnerName ?? "",
+          note: x.note ?? null,
+          pendingPayAmount: toNum(x.pendingPayAmount ?? 0),
+          bookedPayAmount: toNum(x.bookedPayAmount ?? 0),
 
           totalAmount: total,
 
@@ -378,7 +407,7 @@ const InvoicesPage: React.FC = () => {
     const safeSrc: SourceFilter = !staffSalesOnly && src === "ADJUST" ? "ADJUST" : "INVOICE";
 
     const view: "all" | "debt" = sp.get("view") === "debt" ? "debt" : "all";
-    return { q, from, to, type: safeType, src: safeSrc, view };
+    return { q, from, to, type: safeType, src: safeSrc, view, cod: sp.get("cod") ?? "" };
   };
 
   const writeQuery = (next: { q: string; from: string; to: string; type: InvoiceTypeFilter; src: SourceFilter; view?: "all" | "debt" }) => {
@@ -390,6 +419,7 @@ const InvoicesPage: React.FC = () => {
     if (next.src && next.src !== "INVOICE") params.src = next.src; // mặc định INVOICE thì không cần ghi
     const v = next.view ?? viewRef.current;
     if (v === "debt") params.view = "debt";
+    if (codRef.current) params.cod = codRef.current;
     setSp(params, { replace: true });
   };
 
@@ -402,6 +432,10 @@ const InvoicesPage: React.FC = () => {
   // ✅ mặc định theo URL (nếu không có thì SALES)
   const [typeFilter, setTypeFilter] = useState<InvoiceTypeFilter>(initial.type || "SALES");
 
+  // ✅ lọc đơn COD: "" = tất cả, "all" = mọi đơn COD, còn lại là đơn vị vận chuyển
+  const [codFilter, setCodFilter] = useState(initial.cod);
+  const [codCarriers, setCodCarriers] = useState<string[]>([]);
+
   // ✅ NEW: hóa đơn / điều chỉnh
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>(initial.src || "INVOICE");
 
@@ -410,6 +444,7 @@ const InvoicesPage: React.FC = () => {
   // ✅ tab "Chưa thu đủ": hoá đơn đã duyệt còn nợ (không theo khoảng ngày, cũ nhất lên đầu)
   const [view, setView] = useState<"all" | "debt">(initial.view);
   const viewRef = useRef(view);
+  const codRef = useRef("");
   viewRef.current = view;
   const [debtRows, setDebtRows] = useState<InvoiceListItem[]>([]);
   const [debtLoading, setDebtLoading] = useState(false);
@@ -515,6 +550,7 @@ const InvoicesPage: React.FC = () => {
           type: typeVal || "",
           from: fromVal || undefined,
           to: toVal || undefined,
+          cod: codRef.current || undefined,
           _ts: Date.now(),
         },
       });
@@ -614,7 +650,7 @@ const InvoicesPage: React.FC = () => {
     try {
       setDebtLoading(true);
       const res = await api.get("/invoices", {
-        params: { q, page: 1, pageSize: 1000, type: typeVal || "", status: "APPROVED", paymentStatus: "UNPAID,PARTIAL", _ts: Date.now() },
+        params: { q, page: 1, pageSize: 1000, type: typeVal || "", status: "APPROVED", paymentStatus: "UNPAID,PARTIAL", cod: codRef.current || undefined, _ts: Date.now() },
       });
       const data: any[] = unwrapList(res);
       const rows = (Array.isArray(data) ? data : [])
@@ -677,6 +713,9 @@ const InvoicesPage: React.FC = () => {
     setTypeFilter(q0.type || "SALES");
     setSourceFilter(q0.src || "INVOICE");
     setView(q0.view);
+    setCodFilter(q0.cod);
+    codRef.current = q0.cod;
+    api.get("/invoices/cod-carriers").then((r) => setCodCarriers(r.data?.data || [])).catch(() => setCodCarriers([]));
 
     runFetchBySource({ q: q0.q, from: q0.from, to: q0.to, type: q0.type || "SALES", src: q0.src || "INVOICE" });
     loadAccounts();
@@ -731,6 +770,8 @@ const InvoicesPage: React.FC = () => {
     setTo("");
     setTypeFilter("SALES");
     setSourceFilter("INVOICE");
+    setCodFilter("");
+    codRef.current = "";
 
     writeQuery(next);
     await runFetchBySource(next);
@@ -885,14 +926,19 @@ const InvoicesPage: React.FC = () => {
 
     const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal, paidNormal });
 
+    const waitingPay = clamp0(inv.pendingPayAmount);
+    if (remainingNormal > 0 && remainingNormal - waitingPay <= 0.5) {
+      toast.push({ type: "info", title: "Đang chờ duyệt", message: "Toàn bộ số còn lại đã có phiếu đang chờ duyệt thu chi." });
+      return;
+    }
     if (remainingNormal <= 0) {
       toast.push({ type: "info", title: "Không còn nợ", message: "Hoá đơn này đã hết nợ." });
       return;
     }
 
     setPayTarget(inv);
-    setPayAmount(remainingNormal);
-    setPayAmountText(formatMoney(remainingNormal));
+    setPayAmount(remainingNormal - waitingPay);
+    setPayAmountText(formatMoney(remainingNormal - waitingPay));
     // nhớ tài khoản dùng lần trước (nếu vẫn còn hoạt động)
     let lastAcc = "";
     try {
@@ -904,7 +950,7 @@ const InvoicesPage: React.FC = () => {
     setPayOpen(true);
   };
 
-  const submitPayment = async () => {
+  const submitPayment = async (splitLines?: Array<{ accountId: string; amount: number }>) => {
     if (paySubmitting) return;
     if (!payTarget) return;
 
@@ -932,42 +978,38 @@ const InvoicesPage: React.FC = () => {
       toast.push({ type: "warning", title: "Không hợp lệ", message: "Nhập số tiền lớn hơn 0." });
       return;
     }
-    if (amount > remainingNormal) {
+    const canPayNow = remainingNormal - clamp0(payTarget.pendingPayAmount);
+    if (amount > canPayNow) {
       toast.push({
         type: "warning",
         title: "Không hợp lệ",
-        message: `Số tiền (${formatMoney(amount)} đ) nhiều hơn số còn nợ (${formatMoney(remainingNormal)} đ).`,
+        message: `Số tiền (${formatMoney(amount)} đ) nhiều hơn số còn được thu (${formatMoney(canPayNow)} đ).`,
       });
       return;
     }
-    if (!payAccountId) {
+    if (!splitLines && !payAccountId) {
       toast.push({ type: "warning", title: "Thiếu dữ liệu", message: "Chọn tài khoản nhận / trả tiền." });
       return;
     }
 
     try {
-      localStorage.setItem(LS_LAST_PAY_ACCOUNT, String(payAccountId));
+      if (!splitLines) localStorage.setItem(LS_LAST_PAY_ACCOUNT, String(payAccountId));
     } catch {}
 
     try {
       setPaySubmitting(true);
 
-      const nextPaid = Math.max(0, paidNormal + amount);
-      const nextStatus: PaymentStatus = nextPaid + 0.0001 >= collectibleTotal ? "PAID" : "PARTIAL";
-
-      setInvoices((prev) =>
-        prev.map((x) => {
-          if (String(x.id) !== String(payTarget.id)) return x;
-          return { ...x, paidAmount: nextPaid, paymentStatus: nextStatus };
-        })
-      );
-      setDebtRows((prev) =>
-        nextStatus === "PAID"
-          ? prev.filter((x) => String(x.id) !== String(payTarget.id))
-          : prev.map((x) => (String(x.id) === String(payTarget.id) ? { ...x, paidAmount: nextPaid, paymentStatus: nextStatus } : x))
-      );
-
-      await api.post("/payments", {
+      if (splitLines) {
+        // ✅ thanh toán gộp: 2 phiếu cùng được tạo hoặc cùng không
+        await postOnce("/payments/split", {
+          date: payDate,
+          partnerId: String(payTarget.partnerId),
+          type: payTarget.type === "PURCHASE" ? "PAYMENT" : "RECEIPT",
+          invoiceId: String(payTarget.id),
+          lines: splitLines,
+          note: payNote.trim() ? `HĐ ${payTarget.code}: ${payNote.trim()}` : `Thanh toán HĐ ${payTarget.code}`,
+        });
+      } else await postOnce("/payments", {
         date: payDate,
         partnerId: String(payTarget.partnerId),
         type: payTarget.type === "PURCHASE" ? "PAYMENT" : "RECEIPT",
@@ -978,7 +1020,14 @@ const InvoicesPage: React.FC = () => {
         allocations: [{ invoiceId: String(payTarget.id), amount, kind: "NORMAL" }],
       });
 
-      toast.push({ type: "success", title: "Thành công", message: `Đã ${payTarget.type === "PURCHASE" ? "trả" : "thu"} ${formatMoney(amount)} đ cho hoá đơn ${payTarget.code}.` });
+      const isCashAcc = String(accounts.find((a) => String(a.id) === String(payAccountId))?.type || "") === "CASH";
+      toast.push({
+        type: "success",
+        title: "Đã gửi chờ duyệt",
+        message: splitLines
+          ? `2 phiếu: tiền mặt ${formatMoney(splitLines[0].amount)} đ chờ kế toán duyệt, chuyển khoản ${formatMoney(splitLines[1].amount)} đ chờ quản trị duyệt.`
+          : `Phiếu ${formatMoney(amount)} đ đang chờ ${isCashAcc ? "kế toán" : "quản trị"} duyệt. Duyệt rồi mới vào sổ thu chi và trừ công nợ.`,
+      });
 
       setPayOpen(false);
 
@@ -1024,7 +1073,31 @@ const InvoicesPage: React.FC = () => {
       label = "Chưa thanh toán";
       className += "bg-red-100 text-red-700 border-red-200";
     }
-    return <span className={className}>{label}</span>;
+    // ✅ đã có phiếu chờ duyệt đủ số còn lại: không ghi "Chưa thanh toán", tránh hiểu nhầm là chưa thu
+    const waiting = clamp0(inv.pendingPayAmount);
+    if (waiting > 0) {
+      const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal: getCollectibleTotal(inv), paidNormal: clamp0(inv.paidAmount) });
+      if (waiting + 0.5 >= remainingNormal) {
+        return (
+          <span
+            className="inline-flex items-center rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800"
+            title={`Đã ghi nhận ${formatMoney(waiting)} đ, đang chờ duyệt thu chi. Duyệt rồi mới vào sổ.`}
+          >
+            Chờ duyệt {inv.type === "PURCHASE" ? "chi" : "thu"} {formatMoney(waiting)} đ
+          </span>
+        );
+      }
+    }
+    return (
+      <span className="inline-flex flex-col items-center gap-0.5">
+        <span className={className}>{label}</span>
+        {clamp0(inv.pendingPayAmount) > 0 && (
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800" title="Đang chờ duyệt thu chi, chưa tính vào đã thu">
+            Chờ duyệt {formatMoney(clamp0(inv.pendingPayAmount))} đ
+          </span>
+        )}
+      </span>
+    );
   };
 
   const renderStatusBadge = (status?: InvoiceStatus, inv?: InvoiceListItem) => {
@@ -1111,7 +1184,14 @@ const InvoicesPage: React.FC = () => {
 
   // ✅ mobile: bộ lọc thu gọn + đổi nhanh loại hoá đơn
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const activeFilterCount = (from ? 1 : 0) + (to ? 1 : 0) + (sourceFilter === "ADJUST" ? 1 : 0);
+  const activeFilterCount = (from ? 1 : 0) + (to ? 1 : 0) + (sourceFilter === "ADJUST" ? 1 : 0) + (codFilter ? 1 : 0);
+  const applyCod = async (v: string) => {
+    setCodFilter(v);
+    codRef.current = v;
+    const next = { q: search.trim(), from, to, type: typeFilter, src: sourceFilter };
+    writeQuery(next);
+    await runFetchBySource(next);
+  };
   const applyType = async (t: InvoiceTypeFilter) => {
     setTypeFilter(t);
     const next = { q: search.trim(), from, to, type: t, src: sourceFilter };
@@ -1129,14 +1209,14 @@ const InvoicesPage: React.FC = () => {
       inv.status === "APPROVED" &&
       !isFullyReturned(inv) &&
       (paySt === "UNPAID" || paySt === "PARTIAL") &&
-      remainingNormal > 0;
+      remainingNormal - clamp0(inv.pendingPayAmount) > 0.5;
     return {
       grossTotal: clamp0(inv.totalAmount),
       remainingNormal,
       canPay,
       canAdjust: isAdmin && inv.status === "APPROVED",
       adjustLocked: isAdmin && inv.status === "APPROVED" && inClosedPeriod(inv),
-      showSubmitBtn: isStaff && inv.status === "DRAFT",
+      showSubmitBtn: (isStaff || canApprove) && inv.status === "DRAFT",
       showRecallBtn: isStaff && inv.status === "SUBMITTED",
       showApproveBtn: canApprove && inv.status === "SUBMITTED",
       showRejectBtn: canApprove && inv.status === "SUBMITTED",
@@ -1145,7 +1225,7 @@ const InvoicesPage: React.FC = () => {
   const showApprovalColumn = canApprove;
   const showStaffWorkflowColumns = isStaff;
 
-  const colCount = 7 + (showApprovalColumn ? 1 : 0) + (showStaffWorkflowColumns ? 3 : 0);
+  const colCount = 8 + (showApprovalColumn ? 1 : 0) + (showStaffWorkflowColumns ? 3 : 0);
   const showRoleWarning = useMemo(() => !role, [role]);
 
   return (
@@ -1213,6 +1293,25 @@ const InvoicesPage: React.FC = () => {
           </div>
 
           <div className={`${filtersOpen ? "grid" : "hidden"} grid-cols-2 items-end gap-3 text-sm md:flex md:flex-wrap`}>
+            <div className="col-span-2 md:col-span-1">
+              <label className="block text-xs font-semibold mb-1">Vận chuyển</label>
+              <select
+                aria-label="Lọc theo vận chuyển"
+                value={codFilter}
+                disabled={sourceFilter === "ADJUST" || loading}
+                onChange={(e) => applyCod(e.target.value)}
+                className="w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-sm disabled:opacity-50"
+              >
+                <option value="">Tất cả</option>
+                <option value="all">Tất cả đơn COD</option>
+                {codCarriers.map((c) => (
+                  <option key={c} value={c}>COD - {c}</option>
+                ))}
+                {codFilter && codFilter !== "all" && !codCarriers.includes(codFilter) && (
+                  <option value={codFilter}>COD - {codFilter}</option>
+                )}
+              </select>
+            </div>
             <div>
               <label className="block text-xs font-semibold mb-1">Từ ngày</label>
               <input
@@ -1364,6 +1463,7 @@ const InvoicesPage: React.FC = () => {
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className="font-semibold text-slate-900">{inv.code}</span>
                         {renderReturnBadge(inv)}
+                        <CarrierTag note={inv.note} />
                       </div>
                       <div className="truncate text-sm text-slate-700">{inv.partnerName || "—"}</div>
                     </div>
@@ -1489,6 +1589,9 @@ const InvoicesPage: React.FC = () => {
                   <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[100px]">
                     Trạng thái
                   </th>
+                  <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[96px]">
+                    Vận chuyển
+                  </th>
 
                   {showStaffWorkflowColumns && (
                     <>
@@ -1535,7 +1638,7 @@ const InvoicesPage: React.FC = () => {
 
                 {!loading &&
                   rowsShown.map((inv) => {
-                    const showSubmitBtn = isStaff && inv.status === "DRAFT";
+                    const showSubmitBtn = (isStaff || canApprove) && inv.status === "DRAFT";
                     const showRecallBtn = isStaff && inv.status === "SUBMITTED";
 
                     const showApproveBtn = canApprove && inv.status === "SUBMITTED";
@@ -1553,7 +1656,7 @@ const InvoicesPage: React.FC = () => {
                       inv.status === "APPROVED" &&
                       !isFullyReturned(inv) &&
                       (paySt === "UNPAID" || paySt === "PARTIAL") &&
-                      remainingNormal > 0;
+                      remainingNormal - clamp0(inv.pendingPayAmount) > 0.5;
 
                     const canPay = (isAdmin || isAccountant) && canPayBase; // ✅ kế toán được ghi tiền
 
@@ -1593,7 +1696,7 @@ const InvoicesPage: React.FC = () => {
                           })()}
                         </td>
 
-                        <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap truncate">{inv.partnerName}</td>
+                        <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap truncate" title={inv.partnerName}>{inv.partnerName}</td>
 
                         <td className="px-3 py-2 border-t border-gray-200 text-right whitespace-nowrap">
                           <div className="flex flex-col items-end leading-tight gap-0.5">
@@ -1606,6 +1709,9 @@ const InvoicesPage: React.FC = () => {
 
                         <td className="px-3 py-2 border-t border-gray-200 text-center">{renderPaymentBadge(inv)}</td>
                         <td className="px-3 py-2 border-t border-gray-200 text-center">{renderStatusBadge(inv.status, inv)}</td>
+                        <td className="px-3 py-2 border-t border-gray-200 text-center">
+                          <CarrierTag note={inv.note} />
+                        </td>
 
                         {showStaffWorkflowColumns && (
                           <>
@@ -1663,6 +1769,15 @@ const InvoicesPage: React.FC = () => {
                               >
                                 Xem
                               </button>
+                              {showSubmitBtn && (
+                                <button
+                                  type="button"
+                                  className="rounded-lg bg-orange-600 px-2 py-1 text-xs font-semibold text-white hover:bg-orange-700"
+                                  onClick={() => handleSubmit(inv)}
+                                >
+                                  Gửi duyệt
+                                </button>
+                              )}
                               {showApproveBtn && (
                                 <button
                                   type="button"
@@ -1906,6 +2021,12 @@ const InvoicesPage: React.FC = () => {
           <div className="text-sm text-gray-700">
             Hóa đơn <b>{rejectTarget?.code}</b> sẽ <b>trả về nháp</b> để nhân viên sửa rồi gửi duyệt lại. Ghi lý do để nhân viên biết cần sửa gì:
           </div>
+          {(clamp0(rejectTarget?.pendingPayAmount) > 0 || clamp0(rejectTarget?.bookedPayAmount) > 0) && (
+            <div role="alert" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              Hoá đơn này có <b>{formatMoney(clamp0(rejectTarget?.pendingPayAmount))} đ</b> phiếu chờ và{" "}
+              <b>{formatMoney(clamp0(rejectTarget?.bookedPayAmount))} đ</b> đã vào sổ. Từ chối hoá đơn không tự huỷ phiếu, cần xử lý ở trang Thu chi.
+            </div>
+          )}
           <textarea
             value={rejectReason}
             onChange={(e) => setRejectReason(e.target.value)}
@@ -1959,7 +2080,7 @@ const InvoicesPage: React.FC = () => {
             calcCollectibleRemaining({
               collectibleTotal: getCollectibleTotal(payTarget),
               paidNormal: clamp0(payTarget.paidAmount),
-            }).remainingNormal
+            }).remainingNormal - clamp0(payTarget.pendingPayAmount)
           }
           accounts={accounts}
           accountsLoading={accountsLoading}

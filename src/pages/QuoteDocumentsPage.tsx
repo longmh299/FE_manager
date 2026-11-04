@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { saveAs } from "file-saver";
 import * as mammoth from "mammoth";
+import DOMPurify from "dompurify";
 import api, { extractList } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 
@@ -37,6 +38,8 @@ function formatDate(iso?: string) {
 const QuoteDocumentsPage: React.FC = () => {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin"; // ✅ chỉ admin được xoá báo giá
+  // ✅ staff chỉ sửa được báo giá do chính mình tải lên (server cũng chặn)
+  const canEdit = (doc: QuoteDoc) => user?.role !== "staff" || doc.uploadedBy?.id === user?.id;
 
   const [q, setQ] = useState("");
   const [rows, setRows] = useState<QuoteDoc[]>([]);
@@ -205,7 +208,8 @@ const QuoteDocumentsPage: React.FC = () => {
         const arrayBuffer = await blob.arrayBuffer();
         const result = await mammoth.convertToHtml({ arrayBuffer });
         setPreviewKind("docx");
-        setPreviewHtml(result.value);
+        // ✅ mammoth không lọc link: file Word có link javascript: sẽ chạy được trong phiên người xem
+        setPreviewHtml(DOMPurify.sanitize(result.value));
       } else {
         setPreviewKind("unsupported");
       }
@@ -389,12 +393,14 @@ const QuoteDocumentsPage: React.FC = () => {
                     )}
                   </td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
-                    <button
-                      className="rounded border px-3 py-1 mr-2 hover:bg-slate-100"
-                      onClick={() => openEdit(doc)}
-                    >
-                      Cập nhật
-                    </button>
+                    {canEdit(doc) && (
+                      <button
+                        className="rounded border px-3 py-1 mr-2 hover:bg-slate-100"
+                        onClick={() => openEdit(doc)}
+                      >
+                        Cập nhật
+                      </button>
+                    )}
                     <button
                       className="rounded border px-3 py-1 mr-2 hover:bg-slate-100"
                       onClick={() => onPreview(doc)}
@@ -465,12 +471,14 @@ const QuoteDocumentsPage: React.FC = () => {
                 </div>
 
                 <div className="mt-3 grid grid-cols-2 gap-2">
-                  <button
-                    className="rounded border px-2 py-2 text-sm hover:bg-slate-100"
-                    onClick={() => openEdit(doc)}
-                  >
-                    Cập nhật
-                  </button>
+                  {canEdit(doc) && (
+                    <button
+                      className="rounded border px-2 py-2 text-sm hover:bg-slate-100"
+                      onClick={() => openEdit(doc)}
+                    >
+                      Cập nhật
+                    </button>
+                  )}
                   <button
                     className="rounded border px-2 py-2 text-sm hover:bg-slate-100"
                     onClick={() => onPreview(doc)}

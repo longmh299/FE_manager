@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useIsMobile } from "../hooks/uselsMobile"; // ✅ giao diện điện thoại
 import api from "../api/client";
+import { postOnce } from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
@@ -46,6 +47,8 @@ type ReceivableInvoiceRow = {
 
   normalOutstanding: number; // tiền hàng còn phải thu
   warrantyOutstanding: number; // bảo hành còn phải thu
+  pendingNormal?: number; // đang chờ duyệt thu chi
+  pendingWarranty?: number;
 
   warrantyHoldNotDue: number;
   warrantyHoldDue: number;
@@ -635,7 +638,7 @@ function ensureAccountSelected() {
   function openCollectWarranty(row: ReceivableInvoiceRow) {
     setWhRow(row);
     setWhPayDate(todayYmd());
-    setWhAmount(Math.max(0, Math.round(num(row.warrantyOutstanding))));
+    setWhAmount(Math.max(0, Math.round(num(row.warrantyOutstanding) - num(row.pendingWarranty))));
     const tpl = NOTE_TEMPLATES[0] || "Thu bảo hành";
     setWhNoteTpl(tpl);
     setWhNote(`${tpl} - HĐ ${row.code}`);
@@ -659,7 +662,7 @@ function ensureAccountSelected() {
       return;
     }
 
-    const remain = num(whRow.warrantyOutstanding);
+    const remain = num(whRow.warrantyOutstanding) - num(whRow.pendingWarranty);
     const amt = Math.round(num(whAmount));
 
     if (!Number.isFinite(amt) || amt <= 0) {
@@ -680,7 +683,7 @@ function ensureAccountSelected() {
     try {
       setLoadingPay(true);
 
-      await api.post("/payments", {
+      await postOnce("/payments", {
         date: whPayDate,
         partnerId,
         type: "RECEIPT",
@@ -690,7 +693,7 @@ function ensureAccountSelected() {
         allocations: [{ invoiceId: whRow.invoiceId, amount: amt, kind: "WARRANTY_HOLD" }],
       });
 
-      push({ type: "success", message: `Đã thu bảo hành: ${fmtMoney(amt)} (HĐ ${whRow.code})` });
+      push({ type: "success", message: `Đã gửi chờ duyệt: thu bảo hành ${fmtMoney(amt)} (HĐ ${whRow.code}). Duyệt rồi mới vào sổ.` });
 
       setWhOpen(false);
       setWhRow(null);
@@ -717,7 +720,7 @@ function ensureAccountSelected() {
   function openCollectNormal(row: ReceivableInvoiceRow) {
     setNRow(row);
     setNPayDate(todayYmd());
-    setNAmount(Math.max(0, Math.round(num(row.normalOutstanding))));
+    setNAmount(Math.max(0, Math.round(num(row.normalOutstanding) - num(row.pendingNormal))));
     const tpl = NOTE_TEMPLATES[0] || "Thu tiền";
     setNNoteTpl(tpl);
     setNNote(`${tpl} - HĐ ${row.code}`);
@@ -741,7 +744,7 @@ function ensureAccountSelected() {
       return;
     }
 
-    const remain = num(nRow.normalOutstanding);
+    const remain = num(nRow.normalOutstanding) - num(nRow.pendingNormal);
     const amt = Math.round(num(nAmount));
 
     if (!Number.isFinite(amt) || amt <= 0) {
@@ -762,7 +765,7 @@ function ensureAccountSelected() {
     try {
       setLoadingPay(true);
 
-      await api.post("/payments", {
+      await postOnce("/payments", {
         date: nPayDate,
         partnerId,
         type: "RECEIPT",
@@ -772,7 +775,7 @@ function ensureAccountSelected() {
         allocations: [{ invoiceId: nRow.invoiceId, amount: amt, kind: "NORMAL" }],
       });
 
-      push({ type: "success", message: `Đã thu tiền hàng: ${fmtMoney(amt)} (HĐ ${nRow.code})` });
+      push({ type: "success", message: `Đã gửi chờ duyệt: thu tiền hàng ${fmtMoney(amt)} (HĐ ${nRow.code}). Duyệt rồi mới vào sổ.` });
 
       setNOpen(false);
       setNRow(null);
@@ -922,6 +925,11 @@ function ensureAccountSelected() {
                         <div style={{ minWidth: 0 }}>
                           <div style={{ fontWeight: 800 }}>
                             {r.code} <span style={{ fontWeight: 400, fontSize: 12, opacity: 0.65 }}>{r.issueDate}</span>
+                            {num(r.pendingNormal) + num(r.pendingWarranty) > 0 && (
+                              <span style={{ marginLeft: 6, padding: "1px 8px", borderRadius: 999, background: "#fef3c7", color: "#92400e", fontSize: 12, fontWeight: 600 }}>
+                                Chờ duyệt {fmtMoney(num(r.pendingNormal) + num(r.pendingWarranty))}
+                              </span>
+                            )}
                           </div>
                           <div style={{ fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.partnerName}</div>
                           <div style={{ fontSize: 12, opacity: 0.65 }}>Sale: {r.saleName || "-"}</div>
@@ -998,6 +1006,9 @@ function ensureAccountSelected() {
                         <tr key={r.invoiceId} style={trRow} className="rowHover">
                           <td style={tdLeft}>
                             <div style={{ fontWeight: 900 }}>{r.code}</div>
+                            {num(r.pendingNormal) + num(r.pendingWarranty) > 0 && (
+                              <div style={{ fontSize: 12, fontWeight: 600, color: "#92400e" }}>Chờ duyệt {fmtMoney(num(r.pendingNormal) + num(r.pendingWarranty))}</div>
+                            )}
                             {r.hasWarrantyHold ? (
                               <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>
                                 BH: {fmtMoney(r.warrantyHoldAmount)} {r.warrantyDueDate ? `· đến ${r.warrantyDueDate}` : ""}

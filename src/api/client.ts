@@ -34,6 +34,15 @@ const LOCK_RE = /đã chốt sổ|quá hạn chỉnh sửa/i;
 api.interceptors.response.use(
   (res) => res,
   (error) => {
+    // ✅ phiên hết hạn / token bị thu hồi giữa chừng: về trang đăng nhập (trừ chính lời gọi đăng nhập)
+    const isLoginCall = String(error?.config?.url || "").includes("/auth/login");
+    if (error?.response?.status === 401 && !isLoginCall && window.location.pathname !== "/login") {
+      localStorage.removeItem("token");
+      sessionStorage.removeItem("token");
+      window.location.assign("/login");
+      return new Promise(() => {}); // đang chuyển trang, không để màn hình báo lỗi thêm
+    }
+
     const data = error?.response?.data;
     const msg = typeof data?.message === "string" ? data.message : "";
     if (msg && LOCK_RE.test(msg)) {
@@ -47,6 +56,25 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+/**
+ * ✅ Gửi POST có chống ghi trùng: nếu mạng lỗi không biết server đã lưu chưa, bấm lại cùng nội dung
+ * sẽ dùng lại khoá cũ và server trả kết quả lần đầu thay vì ghi thêm. Có phản hồi từ server thì khoá hết tác dụng.
+ */
+const pendingIdemKeys = new Map<string, string>();
+export async function postOnce(url: string, body: any) {
+  const fp = `${url}:${JSON.stringify(body)}`;
+  const key = pendingIdemKeys.get(fp) ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+  pendingIdemKeys.set(fp, key);
+  try {
+    const res = await api.post(url, body, { headers: { "Idempotency-Key": key } });
+    pendingIdemKeys.delete(fp);
+    return res;
+  } catch (e: any) {
+    if (e?.response) pendingIdemKeys.delete(fp); // server đã trả lời: lần sau là yêu cầu mới
+    throw e;
+  }
+}
 
 /**
  * Lấy base URL gốc (để mở link export Excel, v.v…)

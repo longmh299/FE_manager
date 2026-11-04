@@ -342,6 +342,9 @@ type ApiInvoice = {
   subtotal?: any;
   tax?: any;
   total?: any;
+  shipFee?: any;
+  shipTax?: any;
+  laborFee?: any;
   lines: ApiInvoiceLine[];
 };
 
@@ -451,6 +454,7 @@ const InvoicePrintPage: React.FC = () => {
   const [invoice, setInvoice] = useState<ApiInvoice | null>(null);
   const [partner, setPartner] = useState<ApiPartner | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [unitByItemId, setUnitByItemId] = useState<Record<string, string>>({});
   // ✅ khổ in: lấy lựa chọn lần trước; chưa chọn bao giờ thì tự đoán theo số dòng (như cũ)
@@ -561,6 +565,10 @@ const InvoicePrintPage: React.FC = () => {
         }
       } catch (err) {
         console.error("load invoice print error", err);
+        if (alive) {
+          const st = (err as any)?.response?.status;
+          setLoadError(st === 403 ? "Bạn không có quyền xem phiếu này." : st === 404 ? "Không tìm thấy phiếu." : "Không tải được phiếu. Vui lòng thử lại.");
+        }
       } finally {
         if (alive) setLoading(false);
       }
@@ -640,11 +648,15 @@ const InvoicePrintPage: React.FC = () => {
 
   const computedSubtotal = useMemo(() => lines.reduce((sum, l) => sum + toNum(l.amount), 0), [lines]);
 
+  if (loadError) return <div style={{ padding: 20, color: "#b91c1c" }}>{loadError}</div>;
   if (loading || !invoice) return <div style={{ padding: 20 }}>Đang tải hóa đơn...</div>;
 
   const subtotal = invoice.subtotal != null ? toNum(invoice.subtotal) : computedSubtotal;
   const tax = invoice.tax != null ? toNum(invoice.tax) : 0;
   const total = invoice.total != null ? toNum(invoice.total) : subtotal + tax;
+  const shipFee = toNum(invoice.shipFee);
+  const shipTax = toNum(invoice.shipTax);
+  const laborFee = toNum(invoice.laborFee);
 
   const hasTax = tax > 0.0001;
   const taxPercent = subtotal > 0 ? (tax / subtotal) * 100 : 0;
@@ -840,13 +852,35 @@ const InvoicePrintPage: React.FC = () => {
               </td>
             </tr>
 
+            {shipFee > 0 && (
+              <tr>
+                <td colSpan={6} style={moneyRowLabelStyle}>
+                  Phí vận chuyển
+                </td>
+                <td colSpan={1} style={moneyRowValueStyle}>
+                  {formatMoney(shipFee)} đ
+                </td>
+              </tr>
+            )}
+
             {hasTax && (
               <tr>
                 <td colSpan={6} style={moneyRowLabelStyle}>
                   Thuế GTGT ({taxPercentStr}%)
                 </td>
                 <td colSpan={1} style={moneyRowValueStyle}>
-                  {formatMoney(tax)} đ
+                  {formatMoney(tax + shipTax)} đ
+                </td>
+              </tr>
+            )}
+
+            {laborFee > 0 && (
+              <tr>
+                <td colSpan={6} style={moneyRowLabelStyle}>
+                  Công kỹ thuật (không VAT)
+                </td>
+                <td colSpan={1} style={moneyRowValueStyle}>
+                  {formatMoney(laborFee)} đ
                 </td>
               </tr>
             )}

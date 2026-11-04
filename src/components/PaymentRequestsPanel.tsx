@@ -1,8 +1,8 @@
 // src/components/PaymentRequestsPanel.tsx
-// ✅ Trang Thu chi > tab "Phiếu thu nợ"
-//   - Nhân viên báo khách đã trả -> hiện ở đây (mặc định: Chờ duyệt, cũ nhất lên đầu)
-//   - CHỈ QUẢN TRỊ duyệt / từ chối. Kế toán xem để đối chiếu sao kê.
-//   - Duyệt = lập phiếu thu PT thật (vào sổ quỹ / tài khoản, trừ công nợ hoá đơn)
+// ✅ Trang Thu chi > tab "Chờ duyệt thu chi"
+//   - Phiếu từ hoá đơn, nút thu tiền, hoàn tiền, nhân viên báo thu nợ đều vào đây
+//   - Tiền mặt: kế toán hoặc quản trị duyệt. Ngân hàng: chỉ quản trị (server trả canDecide).
+//   - Duyệt = lập phiếu PT/PC thật (vào sổ quỹ / tài khoản, đổi công nợ hoá đơn)
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import api from "../api/client";
@@ -33,9 +33,15 @@ const FILTERS: Array<{ key: string; label: string }> = [
   { key: "PENDING", label: "Chờ duyệt" },
   { key: "APPROVED", label: "Đã duyệt" },
   { key: "REJECTED", label: "Bị từ chối" },
-  { key: "CANCELLED", label: "NV tự huỷ" },
+  { key: "CANCELLED", label: "Đã huỷ" },
   { key: "", label: "Tất cả" },
 ];
+
+const typeWord = (r: PaymentRequestRow) => (r.type === "PAYMENT" ? "chi" : "thu");
+const sourceLabel = (r: PaymentRequestRow) =>
+  r.source === "SHIP_COST" ? "Tiền ship nhà xe" : r.source === "INVOICE" ? "Từ hoá đơn" : r.source === "MANUAL" ? (r.type === "PAYMENT" ? "Chi tiền" : "Thu tiền") : "NV báo thu nợ";
+/** ngày theo giờ Việt Nam, dạng yyyy-mm-dd cho ô chọn ngày */
+const vnYmdOf = (raw: string) => new Date(new Date(raw).getTime() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 
 const QUICK_REASONS = ["Chưa thấy tiền về tài khoản", "Chưa nộp tiền mặt cho quỹ", "Sai số tiền", "Nhầm hoá đơn / nhầm khách"];
 
@@ -63,7 +69,7 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
       const res = await api.get("/payment-requests", { params: { status: status || undefined } });
       setRows(Array.isArray(res.data) ? res.data : []);
     } catch (e: any) {
-      setErr(apiErr(e, "Không tải được danh sách phiếu thu nợ"));
+      setErr(apiErr(e, "Không tải được danh sách phiếu chờ duyệt"));
       setRows([]);
     }
   }, [status]);
@@ -101,7 +107,7 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
     setDlgErr(null);
     const cash = accounts.filter((a) => a.type === "CASH");
     const def = r.account?.id || (r.method === "CASH" && cash.length === 1 ? cash[0].id : "");
-    setApprove({ r, accountId: def, date: String(r.paidDate).slice(0, 10), note: "" });
+    setApprove({ r, accountId: def, date: vnYmdOf(r.paidDate), note: "" });
   };
 
   const doApprove = async () => {
@@ -118,7 +124,7 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
       toast.push({
         type: "success",
         title: "Đã duyệt",
-        message: `Đã lập phiếu ${res.data?.payment?.code || ""} — ${money(approve.r.amount)}đ, trừ nợ HĐ ${approve.r.invoice.code}.`,
+        message: `Đã lập phiếu ${res.data?.payment?.code || ""} — ${money(approve.r.amount)}đ, đã vào sổ thu chi.`,
       });
       setApprove(null);
       load();
@@ -148,15 +154,16 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
     }
   };
 
-  const accOf = (r: PaymentRequestRow) => (r.method === "CASH" ? accounts.filter((a) => a.type === "CASH") : accounts.filter((a) => a.type !== "CASH"));
+  const accOf = (r: PaymentRequestRow) => (!isAdmin || r.method === "CASH" ? accounts.filter((a) => a.type === "CASH") : accounts.filter((a) => a.type !== "CASH"));
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Phiếu thu nợ</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Chờ duyệt thu chi</h1>
           <p className="mt-0.5 text-sm text-slate-500">
-            Nhân viên báo khách đã trả tiền. {isAdmin ? "Duyệt thì hệ thống lập phiếu thu và trừ công nợ ngay." : "Chỉ quản trị duyệt; kế toán xem để đối chiếu sao kê."}
+            Phiếu thu, phiếu chi gắn hoá đơn. Duyệt rồi mới vào sổ thu chi và đổi công nợ.
+            {isAdmin ? "" : " Bạn duyệt phiếu tiền mặt, phiếu ngân hàng do quản trị duyệt."}
           </p>
         </div>
         <input className={`${inputCls} sm:max-w-xs`} placeholder="Tìm HĐ, khách, nhân viên…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Tìm phiếu thu nợ" />
@@ -205,19 +212,34 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
         <div className="rounded-xl border border-slate-200 bg-white py-12 text-center text-sm text-slate-500">Đang tải…</div>
       ) : shown.length === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white py-12 text-center">
-          <div className="text-base font-medium text-slate-800">{status === "PENDING" ? "Không có phiếu thu nợ nào chờ duyệt" : "Không có phiếu thu nợ nào"}</div>
+          <div className="text-base font-medium text-slate-800">{status === "PENDING" ? "Không có phiếu nào chờ duyệt" : "Không có phiếu thu nợ nào"}</div>
           {status === "PENDING" && <div className="mt-1 text-sm text-slate-500">Nhân viên báo đã thu ở trang “Công nợ của tôi”, phiếu thu nợ sẽ hiện ở đây.</div>}
         </div>
       ) : (
         <ul className="space-y-2">
           {shown.map((r) => {
-            const shortBy = r.debt && r.amount > r.debt.remaining + 0.5;
+            const shortBy = r.debt && r.source !== "SHIP_COST" && r.amount > r.debt.remaining + 0.5;
             return (
               <li key={r.id} className={`rounded-xl border bg-white p-3 sm:p-4 ${shortBy ? "border-rose-200" : "border-slate-200"}`}>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <StatusChip status={r.status as PRStatus} />
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${r.type === "PAYMENT" ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
+                        Phiếu {typeWord(r)}{r.kind === "WARRANTY_HOLD" ? " tiền giữ BH" : ""}
+                      </span>
+                      <span className="text-xs text-slate-500">{sourceLabel(r)}</span>
+                      {r.status === "PENDING" && r.invoice.returned && (
+                        <span
+                          className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-800"
+                          title="Hoá đơn đã về nháp. Kiểm tra lại trước khi duyệt phiếu."
+                        >
+                          Hoá đơn bị trả về
+                        </span>
+                      )}
+                      {r.status === "PENDING" && r.invoice.approved === false && !r.invoice.returned && (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">Hoá đơn chưa duyệt</span>
+                      )}
                       <span className="text-sm font-medium text-slate-900">{r.requestedBy.username}</span>
                       <span className="text-xs text-slate-500">gửi {viDateTime(r.createdAt)}</span>
                     </div>
@@ -231,11 +253,11 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
                     <div className="mt-1 flex items-start gap-1.5 text-xs text-slate-600">
                       <span className="mt-px shrink-0 text-slate-400">{r.method === "CASH" ? Ico.cash : Ico.bank}</span>
                       <span>
-                        {methodLabel(r)} · khách trả ngày {viDate(r.paidDate)}
+                        {methodLabel(r)} · ngày {viDate(r.paidDate)}
                       </span>
                     </div>
                     {r.note && <div className="mt-1.5 text-sm text-slate-700">“{r.note}”</div>}
-                    {r.debt && (
+                    {r.debt && r.source !== "SHIP_COST" && (
                       <div className={`mt-2 text-xs ${shortBy ? "font-medium text-rose-700" : "text-slate-500"}`}>
                         {shortBy
                           ? `⚠ Hoá đơn giờ chỉ còn nợ ${money(r.debt.remaining)}đ — ít hơn số báo. Nên từ chối.`
@@ -264,7 +286,7 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
                           Ảnh CK
                         </button>
                       )}
-                      {isAdmin && r.status === "PENDING" && (
+                      {r.canDecide && r.status === "PENDING" && (
                         <>
                           <button
                             type="button"
@@ -299,7 +321,7 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
       {/* ===== Duyệt ===== */}
       <DialogShell
         open={!!approve}
-        title="Duyệt & lập phiếu thu"
+        title={approve?.r.type === "PAYMENT" ? "Duyệt & lập phiếu chi" : "Duyệt & lập phiếu thu"}
         subtitle={approve ? <>HĐ {approve.r.invoice.code} · {approve.r.invoice.customerName} · NV {approve.r.requestedBy.username}</> : null}
         onClose={() => !busy && setApprove(null)}
         width="max-w-lg"
@@ -323,7 +345,7 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
         {approve && (
           <>
             <div className="flex items-baseline justify-between rounded-xl bg-emerald-50 px-4 py-3">
-              <span className="text-sm text-emerald-900">Số tiền thu</span>
+              <span className="text-sm text-emerald-900">Số tiền {approve.r.type === "PAYMENT" ? "chi" : "thu"}</span>
               <span className="text-2xl font-semibold tabular-nums text-emerald-900">{money(approve.r.amount)}</span>
             </div>
             {approve.r.method === "CASH" ? (
@@ -350,7 +372,7 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
                       <span className="min-w-0">
                         <span className="block truncate text-sm font-medium">{a.name}</span>
                         <span className={`block truncate text-xs ${on ? "text-emerald-100" : "text-slate-500"}`}>
-                          {a.id === approve.r.account?.id ? "nhân viên chọn" : a.accountNo || a.code}
+                          {a.id === approve.r.account?.id ? "đã chọn trên phiếu" : a.accountNo || a.code}
                         </span>
                       </span>
                     </button>
@@ -364,7 +386,7 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
                   Ngày ghi sổ
                 </label>
                 <input id="ap-date" type="date" className={inputCls} value={approve.date} onChange={(e) => setApprove({ ...approve, date: e.target.value })} />
-                <p className="mt-1 text-xs text-slate-500">Mặc định là ngày khách trả.</p>
+                <p className="mt-1 text-xs text-slate-500">Mặc định là ngày trên phiếu.</p>
               </div>
               <div>
                 <label className={labelCls} htmlFor="ap-note">
@@ -382,7 +404,7 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
       <DialogShell
         open={!!reject}
         tone="danger"
-        title="Từ chối phiếu thu nợ"
+        title="Từ chối phiếu"
         subtitle={reject ? <>HĐ {reject.r.invoice.code} · {money(reject.r.amount)}đ · NV {reject.r.requestedBy.username}</> : null}
         onClose={() => !busy && setReject(null)}
         footer={
@@ -412,7 +434,7 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
             </div>
             <div>
               <label className={labelCls} htmlFor="rj-reason">
-                Lý do (nhân viên sẽ thấy)
+                Lý do (người tạo phiếu sẽ thấy)
               </label>
               <textarea id="rj-reason" rows={3} className={inputCls} value={reject.reason} onChange={(e) => setReject({ ...reject, reason: e.target.value })} maxLength={500} autoFocus />
             </div>

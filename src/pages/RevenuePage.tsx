@@ -63,6 +63,10 @@ type RevenueResp = {
 
     // backend cũ
     netVat?: number;
+    shipRevenue?: number;
+    laborRevenue?: number;
+    shipCostPaid?: number;
+    profitAfterCost?: number;
     netTotal?: number;
     netCollected?: number;
     netCogs?: number;
@@ -730,6 +734,24 @@ export default function RevenuePage() {
             value={fmtVnd(data?.kpis?.netVat ?? 0)}
             icon={<IconPercent className="h-4 w-4" />}
             delta={<DeltaBadge pct={kpiDeltas.netVat} />}
+          />
+          <KpiCard
+            tone="slate"
+            label="Phí ship + công thu khách"
+            value={fmtVnd((data?.kpis?.shipRevenue ?? 0) + (data?.kpis?.laborRevenue ?? 0))}
+            icon={<IconReceipt className="h-4 w-4" />}
+          />
+          <KpiCard
+            tone="slate"
+            label="Đã chi ship"
+            value={fmtVnd(data?.kpis?.shipCostPaid ?? 0)}
+            icon={<IconUndo className="h-4 w-4" />}
+          />
+          <KpiCard
+            tone="violet"
+            label="Lợi nhuận sau chi phí"
+            value={fmtVnd(data?.kpis?.profitAfterCost ?? 0)}
+            icon={<IconPercent className="h-4 w-4" />}
           />
           <KpiCard
             tone="violet"

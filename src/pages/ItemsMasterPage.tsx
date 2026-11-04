@@ -24,14 +24,6 @@ const ItemsMasterPage: React.FC = () => {
   const [importing, setImporting] = useState(false);
   const [excelOpen, setExcelOpen] = useState(false);
 
-  if (!isAdmin) {
-    return (
-      <div className="text-sm text-red-600">
-        Bạn không có quyền truy cập trang danh mục hàng.
-      </div>
-    );
-  }
-
   const fetchItems = async () => {
     setLoading(true);
     try {
@@ -51,7 +43,7 @@ const ItemsMasterPage: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchItems();
+    if (isAdmin) fetchItems(); // không có quyền thì không gọi API
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -93,14 +85,29 @@ const ItemsMasterPage: React.FC = () => {
       const formData = new FormData();
       formData.append("file", importFile);
 
-      await api.post("/items/import", formData, {
+      const res = await api.post("/items/import", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
+      const sum = res.data?.summary || {};
+      const warn: Array<{ row: number; message: string }> = res.data?.warningRows || [];
 
       setImportFile(null);
       setExcelOpen(false);
       fetchItems();
-      appAlert("Danh mục mặt hàng đã cập nhật theo file Excel.", { title: "Nhập xong", tone: "success" });
+      appAlert(
+        <div className="space-y-1 text-left">
+          <div>Tạo mới: <b>{sum.created ?? 0}</b> · Cập nhật: <b>{sum.updated ?? 0}</b> · Đổi giá bán: <b>{sum.priceChanged ?? 0}</b></div>
+          <div className="text-xs text-slate-500">Cột không có trong file hoặc ô để trống thì giữ nguyên dữ liệu cũ.</div>
+          {warn.length > 0 && (
+            <ul className="max-h-40 list-disc overflow-auto pl-4 text-xs text-amber-700">
+              {warn.slice(0, 30).map((w, i) => (
+                <li key={i}>Dòng {w.row}: {w.message}</li>
+              ))}
+            </ul>
+          )}
+        </div>,
+        { title: "Nhập xong", tone: "success" }
+      );
     } catch (err: any) {
       console.error("Import items error", err);
       appAlert(err?.response?.data?.message || "Không nhập được file. Kiểm tra lại file theo mẫu.", { title: "Nhập file lỗi", tone: "danger" });
@@ -138,6 +145,16 @@ const ItemsMasterPage: React.FC = () => {
   const currentPage = Math.min(page, totalPages);
   const start = (currentPage - 1) * PAGE_SIZE;
   const pagedItems = items.slice(start, start + PAGE_SIZE);
+
+
+  // ✅ để SAU mọi Hook
+  if (!isAdmin) {
+    return (
+      <div className="text-sm text-red-600">
+        Bạn không có quyền truy cập trang danh mục hàng.
+      </div>
+    );
+  }
 
   return (
     <div>

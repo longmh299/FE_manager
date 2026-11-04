@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import api from "../api/client";
+import { postOnce } from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
 import { VoidPaymentDialog, PinActionDialog, type VoidTarget } from "../components/SecondPassword";
 
@@ -45,6 +46,8 @@ type InvoiceLine = {
   unit?: string;
   qty: number;
   price: number;
+  backorderNote?: string; // ghi chú xuất âm linh kiện
+  backorderCost?: number; // giá vốn tạm khi chưa từng nhập
   _imp?: ImpMeta; // ✅ MỚI: dòng đến từ "Nhập từ file" (chỉ dùng trên giao diện, payload KHÔNG gửi trường này)
 };
 
@@ -116,8 +119,16 @@ type Invoice = {
 
   paymentStatus?: PaymentStatus;
   paidAmount?: number;
+  pendingPayAmount?: number; // đang chờ duyệt thu chi
+  bookedPayAmount?: number; // đã vào sổ qua phiếu chưa huỷ
 
   receiveAccountId?: string | null;
+  paySplits?: Array<{ accountId: string; amount: number }> | null; // thanh toán gộp: dòng 1 tiền mặt, dòng 2 chuyển khoản
+  shipFee?: number; // phí ship thu khách, có VAT
+  shipTax?: number;
+  laborFee?: number; // công kỹ thuật, không VAT
+  shipCost?: number; // tiền công ty trả nhà xe, sinh phiếu chi
+  shipCostAccountId?: string | null;
   note?: string;
 
   status?: InvoiceStatus;
@@ -1386,12 +1397,16 @@ const QuickCreateItemModal: React.FC<{
 function calcTotal(lines: InvoiceLine[]) {
   return lines.reduce((s, l) => s + l.qty * l.price, 0);
 }
-function recalcTotals(lines: InvoiceLine[], taxPercent?: number) {
+function recalcTotals(lines: InvoiceLine[], taxPercent?: number, shipFee = 0, laborFee = 0) {
   const subtotal = calcTotal(lines);
   let tax = 0;
-  if (taxPercent && taxPercent > 0) tax = Math.round((subtotal * taxPercent) / 100);
-  const totalAmount = subtotal + tax;
-  return { subtotal, tax, totalAmount };
+  let shipTax = 0;
+  if (taxPercent && taxPercent > 0) {
+    tax = Math.round((subtotal * taxPercent) / 100);
+    shipTax = Math.round((shipFee * taxPercent) / 100);
+  }
+  const totalAmount = subtotal + tax + shipFee + shipTax + laborFee;
+  return { subtotal, tax, shipTax, totalAmount };
 }
 function createEmptyInvoice(): Invoice {
   const today = new Date().toISOString().slice(0, 10);
@@ -1780,9 +1795,10 @@ const InvoiceDetailPage: React.FC = () => {
   function recomputeInvoiceCore(prev: Invoice, nextPartial?: Partial<Invoice>) {
     const next: Invoice = { ...prev, ...(nextPartial || {}) };
 
-    const { subtotal, tax, totalAmount } = recalcTotals(next.lines, next.taxPercent);
+    const { subtotal, tax, shipTax, totalAmount } = recalcTotals(next.lines, next.taxPercent, Number(next.shipFee || 0), Number(next.laborFee || 0));
     next.subtotal = subtotal;
     next.tax = tax;
+    next.shipTax = shipTax;
     next.totalAmount = totalAmount;
 
     if (next.hasWarrantyHold) {
@@ -2073,6 +2089,8 @@ const InvoiceDetailPage: React.FC = () => {
           unit: l.item?.unit ?? l.unit,
           qty: Number(l.qty ?? 0),
           price: Number(l.unitPrice ?? l.price ?? 0),
+          backorderNote: l.backorderNote ?? "",
+          backorderCost: l.backorderCost != null ? Number(l.backorderCost) : 0,
         })) ?? [];
 
       const subtotalFromApi = x.subtotal != null ? Number(x.subtotal) : calcTotal(lines);
@@ -2123,8 +2141,16 @@ const InvoiceDetailPage: React.FC = () => {
 
         paymentStatus: (x.paymentStatus as PaymentStatus) ?? "UNPAID",
         paidAmount: x.paidAmount != null ? Number(x.paidAmount) : 0,
+        pendingPayAmount: x.pendingPayAmount != null ? Number(x.pendingPayAmount) : 0,
+        bookedPayAmount: x.bookedPayAmount != null ? Number(x.bookedPayAmount) : 0,
 
         receiveAccountId: x.receiveAccountId ?? null,
+        shipFee: Number(x.shipFee || 0),
+        shipTax: Number(x.shipTax || 0),
+        laborFee: Number(x.laborFee || 0),
+        shipCost: Number(x.shipCost || 0),
+        shipCostAccountId: x.shipCostAccountId ?? null,
+        paySplits: Array.isArray(x.paySplits) && x.paySplits.length === 2 ? x.paySplits.map((s: any) => ({ accountId: String(s.accountId), amount: Number(s.amount) || 0 })) : null,
         note: x.note ?? "",
 
         status,
@@ -2303,49 +2329,126 @@ const InvoiceDetailPage: React.FC = () => {
     });
   }
 
+  /** thông tin khách trên form có khác khách đã lưu không */
+  function partnerFormDiffers(inv: Invoice, p: Partner) {
+    const v = (x?: string | null) => String(x ?? "").trim();
+    return (
+      v(inv.partnerName) !== v(p.name) ||
+      (!!v(inv.partnerCode) && v(inv.partnerCode) !== v(p.code)) ||
+      (!!v(inv.partnerAddress) && v(inv.partnerAddress) !== v(p.address)) ||
+      (!!v(inv.partnerPhone) && v(inv.partnerPhone) !== v(p.phone)) ||
+      (!!v(inv.partnerTaxCode) && v(inv.partnerTaxCode) !== v(p.taxCode)) ||
+      (!!v(inv.partnerEmail) && v(inv.partnerEmail) !== v(p.email))
+    );
+  }
+
+  function partnerPayload(inv: Invoice) {
+    return {
+      code: inv.partnerCode || undefined,
+      name: inv.partnerName,
+      address: inv.partnerAddress,
+      phone: inv.partnerPhone,
+      taxCode: inv.partnerTaxCode,
+      email: inv.partnerEmail,
+    };
+  }
+
+  function toPartner(raw: any): Partner {
+    return {
+      id: String(raw.id),
+      name: raw.name,
+      code: raw.code,
+      address: raw.address,
+      phone: raw.phone,
+      taxCode: raw.taxCode,
+      email: raw.email,
+    };
+  }
+
+  /** ✅ ghi đè thông tin khách đã có. Ô để trống thì giữ nguyên giá trị cũ. */
+  async function updateExistingPartner(id: string, inv: Invoice) {
+    const res = await api.put(`/partners/${id}`, partnerPayload(inv));
+    const body = (res as any).data || {};
+    const p = toPartner(body.data ?? body);
+    setPartners((prev) => prev.map((x) => (String(x.id) === p.id ? p : x)));
+    markDirty(); // thông tin trên hoá đơn cũng đổi, cần lưu lại hoá đơn
+    updateInvoice({
+      partnerId: p.id,
+      partnerName: p.name,
+      partnerCode: p.code,
+      partnerAddress: p.address,
+      partnerPhone: p.phone,
+      partnerTaxCode: p.taxCode,
+      partnerEmail: p.email,
+    });
+    toastSuccess(`Đã cập nhật thông tin ${partnerWord.toLowerCase()}.`);
+  }
+
   async function handleSavePartner() {
     if (!invoice) return;
-
-    if (invoice.partnerId) {
-      toastError("Khách hàng này đã có trong danh sách.", "Không thể lưu");
+    if (!invoice.partnerName.trim()) {
+      toastError(`Vui lòng nhập tên ${partnerWord.toLowerCase()} trước.`, "Thiếu thông tin");
       return;
     }
-    if (!invoice.partnerName.trim()) {
-      toastError("Vui lòng nhập tên khách hàng trước.", "Thiếu thông tin");
+
+    const partnerError = (err: any, fallback: string) => {
+      console.error("save partner error", err);
+      const d = err?.response?.data;
+      toastError(d?.message || d?.error || fallback);
+    };
+
+    // đang gắn với khách đã có -> cập nhật luôn
+    const currentId = safeId(invoice.partnerId);
+    if (currentId) {
+      try {
+        await updateExistingPartner(String(currentId), invoice);
+      } catch (err) {
+        partnerError(err, "Cập nhật thất bại.");
+      }
+      return;
+    }
+
+    // ✅ chưa gắn nhưng mã / MST / tên trùng khách đã có -> hỏi rồi cập nhật vào khách đó, không tạo trùng
+    const norm = (x?: string | null) => String(x ?? "").trim().toLowerCase();
+    const code = norm(invoice.partnerCode);
+    const tax = norm(invoice.partnerTaxCode);
+    const name = norm(invoice.partnerName);
+    const same =
+      partners.find((p) => !!code && norm(p.code) === code) ||
+      partners.find((p) => !!tax && norm(p.taxCode) === tax) ||
+      partners.find((p) => norm(p.name) === name);
+    if (same) {
+      const snapshot = invoice;
+      openConfirm({
+        title: `${partnerWord} đã có trong danh sách`,
+        message: `Đã có "${same.name}"${same.code ? ` (mã ${same.code})` : ""}${same.phone ? `, SĐT ${same.phone}` : ""}. Ghi đè bằng thông tin đang nhập? Ô để trống sẽ giữ nguyên giá trị cũ.`,
+        confirmText: "Cập nhật",
+        cancelText: "Hủy",
+        onConfirm: async () => {
+          try {
+            setConfirmBusy(true);
+            await updateExistingPartner(same.id, snapshot);
+            closeConfirm();
+          } catch (err) {
+            partnerError(err, "Cập nhật thất bại.");
+          } finally {
+            setConfirmBusy(false);
+          }
+        },
+      });
       return;
     }
 
     try {
-      const payload = {
-        code: invoice.partnerCode || undefined,
-        name: invoice.partnerName,
-        address: invoice.partnerAddress,
-        phone: invoice.partnerPhone,
-        taxCode: invoice.partnerTaxCode,
-        email: invoice.partnerEmail,
-      };
-
-      const res = await api.post("/partners", payload);
+      const res = await api.post("/partners", partnerPayload(invoice));
       const body = (res as any).data || {};
-      const partner = body.data ?? body;
-
-      const p: Partner = {
-        id: String(partner.id),
-        name: partner.name,
-        code: partner.code,
-        address: partner.address,
-        phone: partner.phone,
-        taxCode: partner.taxCode,
-        email: partner.email,
-      };
-
+      const p = toPartner(body.data ?? body);
       setPartners((prev) => [...prev, p]);
       markDirty();
       updateInvoice({ partnerId: p.id, partnerCode: p.code });
-      toastSuccess("Đã lưu khách hàng vào danh sách .");
+      toastSuccess(`Đã lưu ${partnerWord.toLowerCase()} vào danh sách.`);
     } catch (err) {
-      console.error("save partner error", err);
-      toastError("Lưu khách hàng thất bại, kiểm tra log console.");
+      partnerError(err, `Lưu ${partnerWord.toLowerCase()} thất bại.`);
     }
   }
 
@@ -2371,6 +2474,7 @@ const InvoiceDetailPage: React.FC = () => {
 
     if (paymentStatus === "UNPAID") paidAmount = 0;
     if (paymentStatus === "PAID") paidAmount = totalBase;
+    const splitOn = paymentStatus !== "UNPAID" && Array.isArray(inv.paySplits) && inv.paySplits.length === 2;
     if (paymentStatus === "PARTIAL") {
       if (paidAmount > totalBase) paidAmount = totalBase;
       if (paidAmount < 0) paidAmount = 0;
@@ -2400,7 +2504,21 @@ const InvoiceDetailPage: React.FC = () => {
       paymentStatus,
       paidAmount,
 
-      receiveAccountId: safeId(inv.receiveAccountId),
+      receiveAccountId: splitOn ? inv.paySplits![0].accountId : safeId(inv.receiveAccountId),
+      shipFee: Number(inv.shipFee || 0),
+      laborFee: Number(inv.laborFee || 0),
+      shipCost: Number(inv.shipCost || 0),
+      shipCostAccountId: Number(inv.shipCost || 0) > 0 ? safeId(inv.shipCostAccountId) : null,
+      ...(inv.status === "APPROVED"
+        ? {}
+        : {
+            paySplits: splitOn
+              ? [
+                  { accountId: inv.paySplits![0].accountId, amount: inv.paySplits![0].amount },
+                  { accountId: inv.paySplits![1].accountId, amount: paymentStatus === "PAID" ? paidAmount - inv.paySplits![0].amount : inv.paySplits![1].amount },
+                ]
+              : null,
+          }),
 
       hasWarrantyHold,
       warrantyHoldAmount,
@@ -2414,6 +2532,8 @@ const InvoiceDetailPage: React.FC = () => {
         price: l.price,
         unitPrice: l.price,
         itemName: l.itemName,
+        backorderNote: (l.backorderNote || "").trim() || null,
+        backorderCost: Number(l.backorderCost || 0) > 0 ? Number(l.backorderCost) : null,
       })),
     };
 
@@ -2478,7 +2598,24 @@ const InvoiceDetailPage: React.FC = () => {
     const allowAdjustApprovedEdit = isAdmin && isAdjustMode && status === "APPROVED" && !isCreate && !!invoice.id;
 
     // ✅ đã thu / đã trả mà chưa chọn tài khoản -> BE sẽ chặn, báo sớm ở đây cho rõ
-    if (!allowAdjustApprovedEdit && (invoice.paymentStatus ?? "UNPAID") !== "UNPAID" && !safeId(invoice.receiveAccountId)) {
+    // ✅ thanh toán gộp: 2 dòng đều phải có tài khoản và số tiền
+    if (!allowAdjustApprovedEdit && (invoice.paymentStatus ?? "UNPAID") !== "UNPAID" && invoice.paySplits?.length === 2) {
+      const [c, b] = invoice.paySplits;
+      const paidAll = calcCollectible(invoice);
+      const bankAmt = invoice.paymentStatus === "PAID" ? paidAll - c.amount : b.amount;
+      if (!c.accountId || !b.accountId) {
+        toastError("Chọn tài khoản cho cả 2 dòng thanh toán.", "Thiếu tài khoản");
+        return;
+      }
+      if (!(c.amount > 0) || !(bankAmt > 0)) {
+        toastError("Mỗi dòng thanh toán phải có số tiền lớn hơn 0.", "Sai số tiền");
+        return;
+      }
+      if (invoice.paymentStatus === "PARTIAL" && c.amount + bankAmt > paidAll) {
+        toastError("Tổng 2 dòng lớn hơn số phải thu.", "Sai số tiền");
+        return;
+      }
+    } else if (!allowAdjustApprovedEdit && (invoice.paymentStatus ?? "UNPAID") !== "UNPAID" && !safeId(invoice.receiveAccountId)) {
       toastError(
         invoice.type === "PURCHASE"
           ? "Phiếu nhập đã trả tiền thì phải chọn tài khoản chi tiền (quỹ tiền mặt / ngân hàng)."
@@ -2510,21 +2647,11 @@ const InvoiceDetailPage: React.FC = () => {
 
       // ✅ CREATE
       if (!invoice.id) {
-        const res = await api.post("/invoices", payload);
+        const res = await postOnce("/invoices", payload);
         const created = unwrap<any>(res);
         const newId = created?.id ?? created?.data?.id;
         if (newId != null) {
           setInvoice((prev) => (prev ? { ...prev, id: newId } : prev));
-        }
-
-        // ✅ admin: tạo xong -> auto submit luôn (hoá đơn thường)
-        if (isAdmin && newId != null && !isAdjustMode) {
-          await api.post(`/invoices/${newId}/submit`);
-          toastSuccess("Đã lưu & gửi duyệt (auto).");
-          setDirtySinceLastSave(false);
-          setMessage(null);
-          gotoListSoon(invoice.type);
-          return;
         }
 
         toastSuccess("Đã tạo hóa đơn.");
@@ -2551,18 +2678,7 @@ const InvoiceDetailPage: React.FC = () => {
       // ✅ normal: PUT
       await api.put(`/invoices/${invId}`, payload);
 
-      // ✅ CASE A: Admin save => auto submit (DRAFT -> SUBMITTED)
-      if (isAdmin && !isAdjustMode) {
-        await api.post(`/invoices/${invId}/submit`);
-        updateInvoice({ status: "SUBMITTED" });
-        setDirtySinceLastSave(false);
-        setMessage(null);
-        toastSuccess("Đã lưu & gửi duyệt (auto).");
-        gotoListSoon(invoice.type);
-        return;
-      }
-
-      // ✅ staff: chỉ save
+      // ✅ chỉ lưu (admin cũng được giữ nháp), gửi duyệt là bước riêng
       setDirtySinceLastSave(false);
       setMessage(null);
       toastSuccess("Đã lưu hóa đơn.");
@@ -2629,7 +2745,7 @@ const InvoiceDetailPage: React.FC = () => {
 
     openConfirm({
       title: "Gửi duyệt hóa đơn",
-      message: "Gửi hóa đơn này để admin duyệt?",
+      message: "Gửi hóa đơn này để duyệt?",
       confirmText: "Gửi duyệt",
       cancelText: "Hủy",
       onConfirm: async () => {
@@ -2703,7 +2819,10 @@ const InvoiceDetailPage: React.FC = () => {
 
     openPrompt({
       title: "Từ chối hóa đơn",
-      message: "Nhập lý do từ chối (tuỳ chọn).",
+      message:
+        Number(invoice.pendingPayAmount || 0) > 0 || Number(invoice.bookedPayAmount || 0) > 0
+          ? `Hoá đơn này có ${formatMoney(Number(invoice.pendingPayAmount || 0))} đ phiếu chờ và ${formatMoney(Number(invoice.bookedPayAmount || 0))} đ đã vào sổ. Từ chối hoá đơn không tự huỷ phiếu, cần xử lý ở trang Thu chi. Nhập lý do từ chối (tuỳ chọn).`
+          : "Nhập lý do từ chối (tuỳ chọn).",
       placeholder: "VD: Sai thông tin khách / sai dòng hàng / sai giá...",
       defaultValue: "",
       confirmText: "Từ chối",
@@ -2796,6 +2915,22 @@ const InvoiceDetailPage: React.FC = () => {
   const showPaidInput = (invoice.paymentStatus ?? "UNPAID") === "PARTIAL";
   // ✅ đã thu / đã trả thì tiền phải vào 1 quỹ / tài khoản cụ thể
   const needAccount = (invoice.paymentStatus ?? "UNPAID") !== "UNPAID";
+  // ✅ thanh toán gộp: tiền mặt + chuyển khoản
+  const paySplit = needAccount && invoice.paySplits?.length === 2 ? invoice.paySplits : null;
+  const cashAccs = accounts.filter((a) => a.type === "CASH" && a.isActive !== false);
+  const bankAccs = accounts.filter((a) => a.type !== "CASH" && a.isActive !== false);
+  const splitLocked = locked || status === "APPROVED";
+  // hoá đơn đã gửi duyệt: kế toán, admin vẫn sửa được tiền trả nhà xe
+  const shipCostLocked = status === "DRAFT" ? locked : !(isAdmin || String(me.role || "").trim().toLowerCase() === "accountant");
+  const splitPaidAll = calcCollectible(invoice);
+  const setSplitLine = (cash: { accountId: string; amount: number }, bank: { accountId: string; amount: number }) => {
+    markDirty();
+    updateInvoice(
+      invoice.paymentStatus === "PARTIAL"
+        ? { paySplits: [cash, bank], paidAmount: cash.amount + bank.amount, receiveAccountId: cash.accountId }
+        : { paySplits: [cash, bank], receiveAccountId: cash.accountId }
+    );
+  };
 
   const statusText =
     status === "APPROVED"
@@ -2844,12 +2979,13 @@ const InvoiceDetailPage: React.FC = () => {
   const saveLabel = (() => {
     if (saving) return "Đang lưu...";
     if (canEditApprovedAdjust) return "Điều chỉnh & Post lại";
-    if (isAdmin && status === "DRAFT" && !isAdjustMode) return "Lưu & Gửi duyệt";
     if (isCreate) return "Tạo hóa đơn"; // ✅ nhân viên / kế toán lập hoá đơn mới
     return "Lưu hóa đơn";
   })();
 
   const partnerOk = status !== "DRAFT" ? true : isPartnerValid(invoice);
+  const linkedPartner = partners.find((p) => String(p.id) === String(safeId(invoice.partnerId) ?? ""));
+  const partnerChanged = !!linkedPartner && partnerFormDiffers(invoice, linkedPartner);
 
   // ---- nhãn hiển thị (chỉ UI)
   const statusPill =
@@ -3236,11 +3372,17 @@ const InvoiceDetailPage: React.FC = () => {
                   type="button"
                   className="inv-btn"
                   style={styles.secondarySmallBtn}
-                  disabled={locked || status !== "DRAFT"}
+                  disabled={locked || status !== "DRAFT" || (!!linkedPartner && !partnerChanged)}
+                  title={linkedPartner && !partnerChanged ? "Thông tin chưa thay đổi" : undefined}
                   onClick={handleSavePartner}
                 >
-                  + Lưu vào danh sách khách hàng
+                  {linkedPartner ? `Cập nhật thông tin ${partnerWord.toLowerCase()}` : `+ Lưu vào danh sách ${partnerWord.toLowerCase()}`}
                 </button>
+                {status === "DRAFT" && !locked && partnerChanged && (
+                  <div style={{ marginTop: 6, fontSize: 12.5, color: "#b45309" }}>
+                    Bạn đã sửa thông tin {partnerWord.toLowerCase()}. Bấm “Cập nhật” để lưu vào danh sách.
+                  </div>
+                )}
               </div>
             </div>
 
@@ -3413,8 +3555,19 @@ const InvoiceDetailPage: React.FC = () => {
                         .map(({ item }) => item)
                     : [];
 
+                // ✅ xuất âm linh kiện: chỉ hiện ở dòng đầu của mỗi mã
+                const lineItem = line.itemId ? items.find((x) => x.id === String(line.itemId)) : undefined;
+                const firstOfItem = !!line.itemId && invoice.lines.findIndex((x) => x.itemId === line.itemId) === idx;
+                const sameItemQty = invoice.lines.filter((x) => x.itemId === line.itemId).reduce((t, x) => t + Number(x.qty || 0), 0);
+                const shortQty = lineItem ? sameItemQty - Number(lineItem.stockQty ?? 0) : 0;
+                const showBackorder =
+                  invoice.type === "SALES" &&
+                  firstOfItem &&
+                  (!!line.backorderNote || (status === "DRAFT" && lineItem?.kind !== "MACHINE" && !!lineItem && shortQty > 0));
+
                 return (
-                  <div key={line.id ?? `line-${idx}`} style={styles.gridRow} className="inv-line-grid inv-line">
+                  <React.Fragment key={line.id ?? `line-${idx}`}>
+                  <div style={styles.gridRow} className="inv-line-grid inv-line">
                     <div className="inv-col-stt" style={{ textAlign: "center", fontSize: 12.5, color: "#94a3b8", fontWeight: 600 }}>
                       {idx + 1}
                     </div>
@@ -3709,6 +3862,44 @@ const InvoiceDetailPage: React.FC = () => {
                       </button>
                     </div>
                   </div>
+                  {showBackorder && (
+                    <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: 10, margin: "4px 0 10px", display: "grid", gap: 6 }}>
+                      {status === "DRAFT" && shortQty > 0 && (
+                        <div style={{ fontSize: 13, color: "#92400e" }}>
+                          <b>Thiếu {shortQty}:</b> tồn {Number(lineItem?.stockQty ?? 0)}, cần {sameItemQty}. Nhập ghi chú để xuất âm, dòng này sẽ vào "Hàng chờ bù" khi hoá đơn được duyệt.
+                        </div>
+                      )}
+                      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,2fr) minmax(0,1fr)", gap: 6 }}>
+                        <input
+                          aria-label="Ghi chú xuất âm"
+                          style={styles.input}
+                          disabled={locked}
+                          maxLength={300}
+                          value={line.backorderNote || ""}
+                          placeholder="Ghi chú xuất âm: tháo từ máy nào, lý do"
+                          onChange={(e) => {
+                            markDirty();
+                            const v = e.target.value;
+                            setInvoice((prev) => (prev ? { ...prev, lines: prev.lines.map((x, i) => (i === idx ? { ...x, backorderNote: v } : x)) } : prev));
+                          }}
+                        />
+                        <div title="Chỉ cần khi linh kiện chưa từng nhập">
+                          <PaidAmountInput
+                            value={Number(line.backorderCost || 0)}
+                            disabled={locked}
+                            onChange={(raw) => {
+                              markDirty();
+                              const v = Math.max(0, raw);
+                              setInvoice((prev) => (prev ? { ...prev, lines: prev.lines.map((x, i) => (i === idx ? { ...x, backorderCost: v } : x)) } : prev));
+                            }}
+                            styleInput={{ textAlign: "right" }}
+                          />
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 12, color: C.muted }}>Ô số bên phải là giá vốn tạm, chỉ cần nhập nếu linh kiện chưa từng nhập kho.</div>
+                    </div>
+                  )}
+                  </React.Fragment>
                 );
               })}
 
@@ -3751,6 +3942,38 @@ const InvoiceDetailPage: React.FC = () => {
                       <span className="inv-sum-label" style={styles.summaryLabel}>Tạm tính</span>
                       <span style={styles.summaryValue}>{formatMoney(invoice.subtotal ?? 0)} đ</span>
                     </div>
+
+                    {invoice.type === "SALES" && (
+                      <div className="inv-sum-row" style={styles.summaryRow}>
+                        <span className="inv-sum-label" style={styles.summaryLabel}>Phí vận chuyển</span>
+                        <div style={{ flex: 1, minWidth: 140 }}>
+                          <PaidAmountInput
+                            value={Number(invoice.shipFee || 0)}
+                            disabled={locked}
+                            onChange={(raw) => {
+                              markDirty();
+                              const v = Math.max(0, raw);
+                              setInvoice((prev) => {
+                                if (!prev) return prev;
+                                // tiền trả nhà xe mặc định bằng phí ship, người dùng đã sửa khác thì giữ nguyên
+                                const follow = Number(prev.shipCost || 0) === Number(prev.shipFee || 0);
+                                return recomputeInvoiceCore(prev, {
+                                  shipFee: v,
+                                  ...(follow
+                                    ? {
+                                        shipCost: v,
+                                        shipCostAccountId:
+                                          prev.shipCostAccountId || (accounts.find((a) => a.type === "CASH" && a.isActive !== false)?.id ?? null),
+                                      }
+                                    : {}),
+                                });
+                              });
+                            }}
+                            styleInput={{ textAlign: "right" }}
+                          />
+                        </div>
+                      </div>
+                    )}
 
                     <div className="inv-sum-row" style={styles.summaryRow}>
                       <span className="inv-sum-label" style={styles.summaryLabel}>Thuế VAT</span>
@@ -3812,8 +4035,85 @@ const InvoiceDetailPage: React.FC = () => {
                         </span>
                       </div>
 
-                      <span style={styles.summaryValue}>{formatMoney(vatAmount)} đ</span>
+                      <span style={styles.summaryValue}>{formatMoney(vatAmount + Number(invoice.shipTax || 0))} đ</span>
                     </div>
+
+                    {invoice.type === "SALES" && (
+                      <div className="inv-sum-row" style={styles.summaryRow}>
+                        <span className="inv-sum-label" style={styles.summaryLabel}>Công kỹ thuật (không VAT)</span>
+                        <div style={{ flex: 1, minWidth: 140 }}>
+                          <PaidAmountInput
+                            value={Number(invoice.laborFee || 0)}
+                            disabled={locked}
+                            onChange={(raw) => {
+                              markDirty();
+                              setInvoice((prev) => (prev ? recomputeInvoiceCore(prev, { laborFee: Math.max(0, raw) }) : prev));
+                            }}
+                            styleInput={{ textAlign: "right" }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {invoice.type === "SALES" && (
+                      <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: 8, margin: "4px 0", display: "grid", gap: 6 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 600 }}>Tiền ship công ty trả nhà xe</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 6 }}>
+                          <select
+                            aria-label="Tài khoản chi tiền ship"
+                            style={styles.select}
+                            disabled={shipCostLocked}
+                            value={invoice.shipCostAccountId || ""}
+                            onChange={(e) => {
+                              markDirty();
+                              updateInvoice({ shipCostAccountId: e.target.value || null });
+                            }}
+                          >
+                            <option value="">Chọn tài khoản</option>
+                            {accounts.filter((a) => a.isActive !== false).map((a) => (
+                              <option key={a.id} value={a.id}>{a.code} - {a.name}</option>
+                            ))}
+                          </select>
+                          <PaidAmountInput
+                            value={Number(invoice.shipCost || 0)}
+                            disabled={shipCostLocked}
+                            onChange={(raw) => {
+                              markDirty();
+                              const v = Math.max(0, raw);
+                              updateInvoice({
+                                shipCost: v,
+                                shipCostAccountId:
+                                  invoice.shipCostAccountId || (v > 0 ? accounts.find((a) => a.type === "CASH" && a.isActive !== false)?.id ?? null : null),
+                              });
+                            }}
+                            styleInput={{ textAlign: "right" }}
+                          />
+                        </div>
+                        <div style={{ fontSize: 12, color: C.muted }}>
+                          Gửi duyệt sẽ tạo phiếu chi chờ duyệt, không đổi tiền khách trả. Mình bao ship: để trống phí vận chuyển, chỉ nhập ô này. COD khách đã trả ship: để trống cả 2.
+                        </div>
+                        {status !== "DRAFT" && (isAdmin || String(me.role || "").trim().toLowerCase() === "accountant") && (
+                          <button
+                            type="button"
+                            className="inv-btn"
+                            style={{ ...styles.secondarySmallBtn, justifySelf: "end" }}
+                            onClick={async () => {
+                              try {
+                                await api.put(`/invoices/${invoice.id}/ship-cost`, {
+                                  shipCost: Number(invoice.shipCost || 0),
+                                  accountId: invoice.shipCostAccountId || null,
+                                });
+                                toastSuccess("Đã lưu tiền ship. Phần tăng thêm đã sang Chờ duyệt thu chi.");
+                              } catch (err: any) {
+                                toastError(err?.response?.data?.message || "Không lưu được tiền ship.", "Lỗi");
+                              }
+                            }}
+                          >
+                            Lưu tiền ship
+                          </button>
+                        )}
+                      </div>
+                    )}
 
                     {/* Bảo hành */}
                     <div className="inv-sum-row" style={styles.summaryRow}>
@@ -3917,6 +4217,16 @@ const InvoiceDetailPage: React.FC = () => {
                     <option value="PAID">Đã thanh toán đủ</option>
                   </select>
                 </div>
+                {Number(invoice.pendingPayAmount || 0) > 0 && (
+                  <div style={{ fontSize: 12.5, color: "#92400e", marginTop: 4 }}>
+                    Đã ghi nhận {formatMoney(Number(invoice.pendingPayAmount))} đ, đang chờ duyệt thu chi. Duyệt rồi trạng thái mới đổi.
+                  </div>
+                )}
+                {status !== "APPROVED" && Number(invoice.paidAmount || 0) > 0 && (
+                  <div style={{ fontSize: 12.5, color: "#92400e", marginTop: 4 }}>
+                    Số này chưa vào sổ. Khi gửi duyệt, phiếu sẽ sang “Chờ duyệt thu chi”. Duyệt phiếu rồi mới vào sổ và trừ công nợ, không cần chờ duyệt hoá đơn.
+                  </div>
+                )}
 
                 <div className="inv-sum-row" style={styles.summaryRow}>
                   <span className="inv-sum-label" style={styles.summaryLabel}>
@@ -3925,7 +4235,7 @@ const InvoiceDetailPage: React.FC = () => {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <PaidAmountInput
                       value={invoice.paidAmount ?? 0}
-                      disabled={!showPaidInput || locked}
+                      disabled={!showPaidInput || locked || !!paySplit}
                       onChange={(raw) => {
                         markDirty();
                         applyPaymentStatus("PARTIAL", raw);
@@ -3935,6 +4245,90 @@ const InvoiceDetailPage: React.FC = () => {
                   </div>
                 </div>
 
+                {needAccount && !splitLocked && cashAccs.length > 0 && bankAccs.length > 0 && (
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, margin: "6px 0", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={!!paySplit}
+                      onChange={(e) => {
+                        markDirty();
+                        if (!e.target.checked) {
+                          updateInvoice({ paySplits: null });
+                          return;
+                        }
+                        const cur = invoice.receiveAccountId;
+                        const cash = cashAccs.find((a) => a.id === cur) || cashAccs[0];
+                        const bank = bankAccs.find((a) => a.id === cur) || bankAccs[0];
+                        const partial = invoice.paymentStatus === "PARTIAL";
+                        updateInvoice({
+                          paySplits: [
+                            { accountId: String(cash.id), amount: partial ? Number(invoice.paidAmount || 0) : 0 },
+                            { accountId: String(bank.id), amount: 0 },
+                          ],
+                          receiveAccountId: String(cash.id),
+                        });
+                      }}
+                    />
+                    {isPurchase ? "Trả" : "Thu"} 2 hình thức: tiền mặt + chuyển khoản
+                  </label>
+                )}
+
+                {paySplit ? (
+                  <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: 8, margin: "4px 0", display: "grid", gap: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 4 }}>Dòng 1: Tiền mặt</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 6 }}>
+                        <select
+                          aria-label="Quỹ tiền mặt"
+                          style={styles.select}
+                          disabled={splitLocked}
+                          value={paySplit[0].accountId}
+                          onChange={(e) => setSplitLine({ ...paySplit[0], accountId: e.target.value }, paySplit[1])}
+                        >
+                          {!cashAccs.some((a) => String(a.id) === paySplit[0].accountId) && <option value={paySplit[0].accountId}>Tài khoản đã chọn</option>}
+                          {cashAccs.map((a) => (
+                            <option key={a.id} value={a.id}>{a.code} - {a.name}</option>
+                          ))}
+                        </select>
+                        <PaidAmountInput
+                          value={paySplit[0].amount}
+                          disabled={splitLocked}
+                          onChange={(raw) => setSplitLine({ ...paySplit[0], amount: Math.max(0, raw) }, paySplit[1])}
+                          styleInput={{ textAlign: "right" }}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 4 }}>Dòng 2: Chuyển khoản</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 6 }}>
+                        <select
+                          aria-label="Tài khoản chuyển khoản"
+                          style={styles.select}
+                          disabled={splitLocked}
+                          value={paySplit[1].accountId}
+                          onChange={(e) => setSplitLine(paySplit[0], { ...paySplit[1], accountId: e.target.value })}
+                        >
+                          {!bankAccs.some((a) => String(a.id) === paySplit[1].accountId) && <option value={paySplit[1].accountId}>Tài khoản đã chọn</option>}
+                          {bankAccs.map((a) => (
+                            <option key={a.id} value={a.id}>{a.code} - {a.name}</option>
+                          ))}
+                        </select>
+                        <PaidAmountInput
+                          value={invoice.paymentStatus === "PAID" ? Math.max(0, splitPaidAll - paySplit[0].amount) : paySplit[1].amount}
+                          disabled={splitLocked || invoice.paymentStatus === "PAID"}
+                          onChange={(raw) => setSplitLine(paySplit[0], { ...paySplit[1], amount: Math.max(0, raw) })}
+                          styleInput={{ textAlign: "right" }}
+                        />
+                      </div>
+                      {invoice.paymentStatus === "PAID" && !splitLocked && (
+                        <div style={{ fontSize: 12, color: C.muted, marginTop: 3, textAlign: "right" }}>Tự tính: số phải thu trừ tiền mặt.</div>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 12, color: "#92400e" }}>
+                      Gửi duyệt hoá đơn sẽ tạo 2 phiếu chờ duyệt: tiền mặt do kế toán hoặc quản trị duyệt, chuyển khoản do quản trị duyệt.
+                    </div>
+                  </div>
+                ) : (
                 <div className="inv-sum-row" style={styles.summaryRow}>
                   <span className="inv-sum-label" style={styles.summaryLabel}>
                     {isPurchase ? "Tài khoản chi tiền" : "Tài khoản nhận tiền"}
@@ -3960,7 +4354,13 @@ const InvoiceDetailPage: React.FC = () => {
                     ))}
                   </select>
                 </div>
-                {needAccount && !invoice.receiveAccountId && !locked && (
+                )}
+                {isStaffRole && needAccount && !locked && (
+                  <div style={{ fontSize: 12, color: C.muted, marginTop: -2, marginBottom: 4, textAlign: "right" }}>
+                    Tiền chỉ vào sổ quỹ khi hoá đơn được duyệt.
+                  </div>
+                )}
+                {needAccount && !paySplit && !invoice.receiveAccountId && !locked && (
                   <div style={{ fontSize: 12, color: C.red, marginTop: -2, marginBottom: 4, textAlign: "right" }}>
                     {isPurchase ? "Đã trả tiền thì phải chọn quỹ / tài khoản chi." : "Đã thu tiền thì phải chọn quỹ / tài khoản nhận."}
                   </div>
@@ -4013,6 +4413,11 @@ const InvoiceDetailPage: React.FC = () => {
                     {paymentHistoryLoading ? "Đang tải..." : "↻ Tải lại"}
                   </button>
                 </div>
+                {Number(invoice.pendingPayAmount || 0) > 0 && (
+                  <div style={{ margin: "8px 0", padding: "8px 12px", borderRadius: 8, background: "#fef3c7", color: "#92400e", fontSize: 13 }}>
+                    Đang chờ duyệt thu chi: <b>{formatMoney(Number(invoice.pendingPayAmount))} đ</b>. Số này chưa tính vào đã thu, duyệt rồi mới vào sổ.
+                  </div>
+                )}
 
                 <div style={{ fontSize: 13, color: C.muted, marginBottom: 10 }}>
                   Tổng phân bổ vào HĐ: <b style={{ color: C.text }}>{formatMoney(paidTotal)} đ</b>
@@ -4135,8 +4540,8 @@ const InvoiceDetailPage: React.FC = () => {
                   </b>
                 </span>
 
-                {/* staff: giữ nút gửi duyệt */}
-                {!isAdmin && status === "DRAFT" && (
+                {/* gửi duyệt là bước riêng cho mọi quyền */}
+                {status === "DRAFT" && (
                   <button
                     type="button"
                     className="inv-btn"

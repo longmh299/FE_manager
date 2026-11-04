@@ -6,6 +6,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import api from "../api/client";
+import { postOnce } from "../api/client";
 import { DialogShell } from "../components/SecondPassword";
 import { ToastHost, useToast } from "../components/Toast";
 import {
@@ -128,7 +129,7 @@ const ReportDialog: React.FC<{
         proof = { proofKey: init.data.key, proofName: f.file.name, proofMime: f.file.type };
       }
       setBusy("Đang gửi…");
-      const res = await api.post("/payment-requests", {
+      const res = await postOnce("/payment-requests", {
         invoiceId: row.invoiceId,
         amount: f.amount,
         method: f.method,
@@ -173,7 +174,7 @@ const ReportDialog: React.FC<{
             className={`inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60 ${focusRing}`}
           >
             {Ico.send}
-            {busy || "Gửi quản trị duyệt"}
+            {busy || "Gửi duyệt"}
           </button>
         </>
       }
@@ -681,7 +682,7 @@ const MyDebtsPage: React.FC = () => {
         onClose={() => setReportRow(null)}
         onSent={(r) => {
           setReportRow(null);
-          toast.push({ type: "success", title: "Đã gửi", message: `Đã báo thu ${money(r.amount)}đ cho hoá đơn ${r.invoice.code}. Chờ quản trị duyệt.` });
+          toast.push({ type: "success", title: "Đã gửi", message: `Đã báo thu ${money(r.amount)}đ cho hoá đơn ${r.invoice.code}. Chờ duyệt.` });
           load();
         }}
       />

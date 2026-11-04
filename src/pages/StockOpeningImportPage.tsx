@@ -1,17 +1,22 @@
 // src/pages/StockOpeningImportPage.tsx
 import React, { useState } from "react";
 import api from "../api/client";
+import { appConfirm } from "../components/AppDialog";
 
 type ImportSummary = {
   createdItems?: number;
   updatedItems?: number;
   affectedStocks?: number;
   mode?: string;
+  skippedRows?: number;
+  totalBefore?: number;
+  totalAfter?: number;
 };
 
 const StockOpeningImportPage: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
   const [mode, setMode] = useState<"replace" | "add">("replace");
+  const [warnings, setWarnings] = useState<Array<{ row: number; message: string }>>([]);
   const [loading, setLoading] = useState(false);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,23 +39,50 @@ const StockOpeningImportPage: React.FC = () => {
       setLoading(true);
       setError(null);
       setSummary(null);
+      setWarnings([]);
 
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("mode", mode); // replace | add
+      const post = (extra: Record<string, string>) => {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("mode", mode); // replace | add
+        Object.entries(extra).forEach(([k, v]) => formData.append(k, v));
+        return api.post("/imports/stocks/opening-onefile", formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+      };
 
-      const res = await api.post(
-        "/imports/stocks/opening-onefile",
-        formData,
-        {
-          headers: {
-            "Content-Type": "multipart/form-data",
-          },
-        },
+      // ✅ tính trước kết quả, hỏi xác nhận rồi mới ghi
+      const pre = await post({ dryRun: "1" });
+      const p = pre.data?.summary as ImportSummary;
+      const dup = pre.data?.duplicateOf;
+      const preWarn: Array<{ row: number; message: string }> = pre.data?.warningRows || [];
+      const ok = await appConfirm(
+        <div className="space-y-1 text-left">
+          <div>
+            Chế độ: <b>{mode === "replace" ? "Ghi đè tồn theo file" : "Cộng thêm vào tồn hiện có"}</b>
+          </div>
+          <div>Số dòng tồn thay đổi: <b>{p.affectedStocks ?? 0}</b> (mã mới: {p.createdItems ?? 0}, mã đã có: {p.updatedItems ?? 0})</div>
+          <div>
+            Tổng số lượng các mã này: <b>{Number(p.totalBefore ?? 0).toLocaleString("vi-VN")}</b> →{" "}
+            <b>{Number(p.totalAfter ?? 0).toLocaleString("vi-VN")}</b>
+          </div>
+          {dup && <div className="font-semibold text-red-600">File này đã từng được nhập cộng thêm. Nhập lại sẽ cộng trùng tồn kho.</div>}
+          {preWarn.length > 0 && (
+            <ul className="max-h-40 list-disc overflow-auto pl-4 text-xs text-amber-700">
+              {preWarn.slice(0, 30).map((w, i) => (
+                <li key={i}>Dòng {w.row}: {w.message}</li>
+              ))}
+            </ul>
+          )}
+        </div>,
+        { title: "Xác nhận nhập tồn", tone: mode === "replace" || dup ? "danger" : "info", confirmLabel: "Nhập tồn" }
       );
+      if (!ok) return;
 
+      const res = await post(dup ? { allowDuplicate: "1" } : {});
       const sum = (res.data?.summary as ImportSummary) || null;
       setSummary(sum);
+      setWarnings(res.data?.warningRows || []);
     } catch (err: any) {
       console.error("Import opening stocks error", err);
       const msg =
@@ -91,11 +123,10 @@ const StockOpeningImportPage: React.FC = () => {
       <h2 style={{ marginBottom: 12 }}>Nhập tồn đầu từ Excel</h2>
 
       <p style={{ fontSize: 13, color: "#4a5568", marginBottom: 12 }}>
-        File Excel nên có header:{" "}
-        <code>sku, name, kind, qty, sellPrice, note</code>. <br />
-        Cột <code>kind</code>: <b>MACHINE</b> cho máy, <b>PART</b> cho linh
-        kiện. <br />
-        Chọn chế độ <b>Ghi đè (replace)</b> để set lại toàn bộ tồn theo file.
+        File Excel cần có cột tên hàng (<code>name</code>) hoặc mã (<code>sku</code>) và cột tồn (<code>ton_dau</code> hoặc <code>qty</code>).
+        Không chắc thì tải file mẫu. <br />
+        Cột <code>kind</code>: <b>MACHINE</b> cho máy, <b>PART</b> cho linh kiện; để trống thì giữ nguyên. Ô tồn để trống thì mã đó giữ nguyên. <br />
+        <b>Ghi đè</b> chỉ đổi các mã có trong file. Trước khi ghi, hệ thống sẽ hiện kết quả để bạn xác nhận.
       </p>
 
       {/* 🔹 Nút tải file mẫu Excel */}
@@ -233,6 +264,13 @@ const StockOpeningImportPage: React.FC = () => {
           <div>Item cập nhật: {summary.updatedItems ?? 0}</div>
           <div>Dòng tồn cập nhật: {summary.affectedStocks ?? 0}</div>
           <div>Chế độ: {summary.mode}</div>
+          {warnings.length > 0 && (
+            <ul style={{ marginTop: 6, paddingLeft: 16, color: "#975a16", maxHeight: 200, overflow: "auto" }}>
+              {warnings.map((w, i) => (
+                <li key={i}>Dòng {w.row}: {w.message}</li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
     </div>

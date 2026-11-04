@@ -94,16 +94,6 @@ const Layout: React.FC = () => {
 
   const location = useLocation();
 
-  // ✅ chặn route "Doanh số cá nhân" nếu không phải staff
-  if (!isStaff && location.pathname.startsWith("/me/sales")) {
-    return <Navigate to="/" replace />;
-  }
-
-  // ✅ chặn route "Phiếu kho" nếu không phải admin/accountant
-  if (!canSeeMovements && location.pathname.startsWith("/movements")) {
-    return <Navigate to="/" replace />;
-  }
-
   const navCls = ({ isActive }: { isActive: boolean }) =>
     `block rounded px-3 py-2 ${isActive ? "bg-slate-700" : "hover:bg-slate-800"
     }`;
@@ -144,6 +134,24 @@ const Layout: React.FC = () => {
     };
   }, [role, location.pathname]);
 
+  // ✅ hàng chờ bù: số dòng còn mở, để người quản lý kho không quên
+  const [boBadge, setBoBadge] = useState(0);
+  useEffect(() => {
+    if (!isAdmin && !isAccountant) return;
+    let alive = true;
+    const pull = () =>
+      api
+        .get("/stock-backorders/count")
+        .then((r) => alive && setBoBadge(Number(r.data?.open) || 0))
+        .catch(() => {});
+    pull();
+    window.addEventListener("backorder:changed", pull);
+    return () => {
+      alive = false;
+      window.removeEventListener("backorder:changed", pull);
+    };
+  }, [isAdmin, isAccountant, location.pathname]);
+
   // ===== MENU (admin / kế toán) — chia theo việc hằng ngày =====
   const groups: NavGroup[] = useMemo(() => {
     const AA = isAdmin || isAccountant;
@@ -166,6 +174,7 @@ const Layout: React.FC = () => {
         links: [
           { to: "/machine-stocks", label: "Tồn máy móc" },
           { to: "/part-stocks", label: "Tồn linh kiện" },
+          ...(AA ? [{ to: "/stock-backorders", label: "Hàng chờ bù", badge: boBadge, hint: boBadge ? `${boBadge} dòng linh kiện đang chờ bù` : undefined }] : []),
           ...(canSeeMovements ? [{ to: "/movements", label: "Điều chỉnh tồn / giá vốn" }] : []),
           ...(AA ? [{ to: "/stock-counts", label: "Kiểm kê kho" }] : []),
           ...(AA ? [{ to: "/reports/ledger", label: "Sổ kho (thẻ kho)" }] : []),
@@ -219,7 +228,7 @@ const Layout: React.FC = () => {
       },
     ];
     return g.filter((x) => x.links.length > 0);
-  }, [isAdmin, isAccountant, canSeeMovements, canSeeAuditLogs, prBadge.pending]);
+  }, [isAdmin, isAccountant, canSeeMovements, canSeeAuditLogs, prBadge.pending, boBadge]);
 
   // ===== MENU nhân viên bán hàng: ít trang -> liệt kê thẳng, chia mục có tiêu đề nhỏ =====
   const staffSections: Array<{ title: string; icon: IconName; links: NavItem[] }> = useMemo(
@@ -480,6 +489,18 @@ const Layout: React.FC = () => {
     </>
   );
 
+
+  // ✅ để SAU mọi Hook: return sớm phía trên làm đổi thứ tự Hook khi bị điều hướng
+  // chặn route "Doanh số cá nhân" nếu không phải staff
+  if (!isStaff && location.pathname.startsWith("/me/sales")) {
+    return <Navigate to="/" replace />;
+  }
+
+  // ✅ chặn route "Phiếu kho" nếu không phải admin/accountant
+  if (!canSeeMovements && location.pathname.startsWith("/movements")) {
+    return <Navigate to="/" replace />;
+  }
+
   return (
     <div className="h-screen flex bg-slate-100 overflow-hidden">
       {/* MOBILE overlay */}
@@ -544,7 +565,7 @@ const Layout: React.FC = () => {
             — kéo theo cả trang bị giãn/tràn ngang. min-w-0 buộc nó chịu ép đúng
             kích thước khung, để overflow-auto ở đây (và overflow-x-auto trong
             từng bảng) hoạt động đúng như mong đợi. */}
-        <div className="flex-1 min-w-0 w-full p-4 pb-20 md:pb-4 overflow-auto">
+        <div className="app-content flex-1 min-w-0 w-full p-2 pb-20 md:p-4 md:pb-4 overflow-auto">
           <Outlet />
           {/* ✅ ngày chứng từ đã chốt sổ / quá hạn: báo giữa màn hình ở mọi trang */}
           <DateLockedAlert isAdmin={isAdmin} />

@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useIsMobile } from "../hooks/uselsMobile";
 import { useNavigate } from "react-router-dom";
 import api from "../api/client";
+import { postOnce } from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
 import { CurrencyInput } from "../components/CurrencyInput";
 
@@ -940,7 +941,7 @@ export default function SalesReturnsPage() {
         : "";
 
     try {
-      await api.post("/payments", {
+      await postOnce("/payments", {
         date: new Date().toISOString().slice(0, 10),
         partnerId: pid,
         type: "PAYMENT",
@@ -952,7 +953,7 @@ export default function SalesReturnsPage() {
         allocations: built.allocations,
       });
 
-      toast.push({ type: "success", title: "Thành công", message: "Đã tạo phiếu chi hoàn tiền." });
+      toast.push({ type: "success", title: "Đã gửi chờ duyệt", message: "Phiếu chi hoàn tiền đang chờ duyệt, duyệt rồi mới vào sổ thu chi. Mã phiếu tạo khi duyệt." });
       closeRefund();
       await load();
     } catch (e: any) {

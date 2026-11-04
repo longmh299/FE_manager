@@ -862,11 +862,11 @@ const SalesLedgerReportPage: React.FC = () => {
           <div className="text-lg font-semibold">{fmtQty(kpi.qtySum)}</div>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <div className="text-xs text-slate-500">Đã thu</div>
+          <div className="text-xs text-slate-500">Đã thu (gồm VAT)</div>
           <div className="text-lg font-semibold">{fmtMoney(kpi.paid)}</div>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <div className="text-xs text-slate-500">Còn nợ</div>
+          <div className="text-xs text-slate-500">Còn nợ (gồm VAT)</div>
           <div className="text-lg font-semibold">{fmtMoney(kpi.debt)}</div>
         </div>
       </div>
@@ -896,8 +896,8 @@ const SalesLedgerReportPage: React.FC = () => {
 
                 <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Thành tiền vốn</th>
 
-                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đã thanh toán</th>
-                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Còn nợ</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Đã thanh toán (chưa VAT)</th>
+                <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 text-right whitespace-nowrap">Còn nợ (chưa VAT)</th>
                 <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 whitespace-nowrap">NV sale</th>
                 <th className="sticky top-0 z-10 bg-slate-50 px-4 py-3 border-b border-slate-200 whitespace-nowrap">Kỹ thuật</th>
 

@@ -14,6 +14,10 @@ export type PaymentRequestRow = {
   id: string;
   status: PRStatus;
   amount: number;
+  type?: "RECEIPT" | "PAYMENT";
+  kind?: string;
+  source?: "STAFF" | "INVOICE" | "MANUAL" | string;
+  canDecide?: boolean;
   method: "CASH" | "BANK" | string;
   paidDate: string;
   note: string | null;
@@ -26,7 +30,7 @@ export type PaymentRequestRow = {
   requestedBy: { id: string; username: string };
   decidedBy: { id: string; username: string } | null;
   payment: { id: string; code: string | null; date: string; voided: boolean } | null;
-  invoice: { id: string; code: string; issueDate: string; customerName: string; customerPhone: string | null };
+  invoice: { id: string; code: string; issueDate: string; customerName: string; customerPhone: string | null; approved?: boolean; returned?: boolean };
   debt?: { remaining: number; otherPending: number };
 };
 
@@ -82,9 +86,11 @@ export const StatusChip: React.FC<{ status: PRStatus }> = ({ status }) => {
 
 export const statusLabel = (s: PRStatus) => STATUS[s]?.label || s;
 
-export const methodLabel = (r: Pick<PaymentRequestRow, "method" | "account">) =>
+export const methodLabel = (r: Pick<PaymentRequestRow, "method" | "account" | "source">) =>
   r.method === "CASH"
-    ? "Tiền mặt — nhân viên cầm, nộp quỹ"
+    ? r.source && r.source !== "STAFF"
+      ? `Tiền mặt${r.account ? ` — ${r.account.name}` : ""}`
+      : "Tiền mặt — nhân viên cầm, nộp quỹ"
     : `Chuyển khoản${r.account ? ` vào ${r.account.name}` : ""}`;
 
 export const Ico = {

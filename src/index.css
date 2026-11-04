@@ -61,6 +61,32 @@ body {
   }
 }
 
+/* ✅ Trên điện thoại: khung layout đã có lề, trang không thêm lề nữa. Trước đây lề của khung,
+   của trang và của thẻ cộng lại làm nội dung lọt thỏm, mất khoảng 1/4 bề ngang màn hình. */
+@media (max-width: 767px) {
+  .app-content > .p-3,
+  .app-content > .p-4,
+  .app-content > .p-5,
+  .app-content > .p-6,
+  .app-content > .page-container {
+    padding-left: 0;
+    padding-right: 0;
+    padding-top: 0;
+  }
+  /* trang đặt lề bằng style={{ padding: 16 }} */
+  .app-content > [style*="padding: 16px"] {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    padding-top: 0 !important;
+  }
+  /* ô chọn file, ô ngày không được đẩy tràn màn hình hẹp */
+  input[type="file"],
+  input[type="date"] {
+    max-width: 100%;
+    min-width: 0;
+  }
+}
+
 /* ============================================================
    ✅ Nút bấm/ô nhập to hơn trên màn hình cảm ứng — chuẩn khuyến nghị
    của Apple/Google là tối thiểu 44x44px để bấm bằng ngón tay không

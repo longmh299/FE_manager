@@ -156,6 +156,9 @@ const LedgerPage: React.FC = () => {
 
       setRows(r);
       setSummary(s);
+      if ((data as any)?.truncated) {
+        toast.push({ type: "warning", title: "Chỉ hiện 5.000 chứng từ mới nhất", message: "Hãy thu hẹp khoảng ngày, hoặc xuất Excel để có đủ dữ liệu. Số tổng phía trên chỉ tính phần đang hiện." });
+      }
     } catch (err: any) {
       const msg =
         err?.response?.data?.message || err?.message || "Không tải được sổ kho.";
