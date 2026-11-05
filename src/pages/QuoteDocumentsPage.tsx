@@ -1,5 +1,5 @@
 // src/pages/QuoteDocumentsPage.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { saveAs } from "file-saver";
 import * as mammoth from "mammoth";
 import DOMPurify from "dompurify";
@@ -34,6 +34,80 @@ function formatDate(iso?: string) {
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleDateString("vi-VN") + " " + d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
 }
+
+function fileKind(doc: QuoteDoc) {
+  const name = doc.fileName.toLowerCase();
+  if (doc.mimeType === "application/pdf" || name.endsWith(".pdf")) return { label: "PDF", className: "bg-rose-50 text-rose-700" };
+  return { label: name.endsWith(".docx") || doc.mimeType === DOCX_MIME ? "Word" : "Word cũ", className: "bg-sky-50 text-sky-700" };
+}
+
+/** Ảnh trong thẻ: chỉ tải khi thẻ cuộn tới. File không có ảnh thì hiện loại file. */
+const QuoteThumb: React.FC<{ doc: QuoteDoc; onOpen: () => void }> = ({ doc, onOpen }) => {
+  const box = useRef<HTMLButtonElement>(null);
+  const [url, setUrl] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+  const kind = fileKind(doc);
+  const canHaveImage = kind.label === "Word";
+
+  useEffect(() => {
+    setUrl(null);
+    setDone(false);
+    if (!canHaveImage || !box.current) {
+      setDone(true);
+      return;
+    }
+    let dead = false;
+    let made: string | null = null;
+    const load = async () => {
+      try {
+        const res = await api.get(`/quote-documents/${doc.id}/thumbnail`, { params: { v: doc.updatedAt }, responseType: "blob" });
+        if (dead) return;
+        if (res.status === 200 && res.data?.size > 0) {
+          made = URL.createObjectURL(res.data);
+          setUrl(made);
+        }
+      } catch {
+        // không có ảnh thì hiện ô loại file, thẻ vẫn dùng được
+      } finally {
+        if (!dead) setDone(true);
+      }
+    };
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          io.disconnect();
+          load();
+        }
+      },
+      { rootMargin: "200px" }
+    );
+    io.observe(box.current);
+    return () => {
+      dead = true;
+      io.disconnect();
+      if (made) URL.revokeObjectURL(made);
+    };
+  }, [doc.id, doc.updatedAt, canHaveImage]);
+
+  return (
+    <button
+      ref={box}
+      type="button"
+      onClick={onOpen}
+      aria-label={`Xem trước ${doc.title}`}
+      data-testid="quote-thumb"
+      className="flex h-40 w-full items-center justify-center overflow-hidden rounded-t-xl border-b border-slate-100 bg-white"
+    >
+      {url ? (
+        <img src={url} alt="" className="h-full w-full object-contain p-2" />
+      ) : !done ? (
+        <span className="h-full w-full animate-pulse bg-slate-100" />
+      ) : (
+        <span className={`rounded-lg px-3 py-2 text-lg font-semibold ${kind.className}`}>{kind.label}</span>
+      )}
+    </button>
+  );
+};
 
 const QuoteDocumentsPage: React.FC = () => {
   const { user } = useAuth();
@@ -339,173 +413,80 @@ const QuoteDocumentsPage: React.FC = () => {
         </button>
       </form>
 
-      {/* ===== Desktop: bảng đầy đủ (giữ nguyên như cũ) ===== */}
-      <div className="hidden md:block overflow-x-auto rounded border">
-        <table className="min-w-full text-sm">
-          <thead className="bg-slate-50">
-            <tr>
-              <th className="px-3 py-2 text-left">Tên báo giá</th>
-              <th className="px-3 py-2 text-left">Mã máy</th>
-              <th className="px-3 py-2 text-left">File</th>
-              <th className="px-3 py-2 text-left">Dung lượng</th>
-              <th className="px-3 py-2 text-left">Người tải lên</th>
-              <th className="px-3 py-2 text-left">Ngày tải lên</th>
-              <th className="px-3 py-2 text-left">Cập nhật lần cuối</th>
-              <th className="px-3 py-2 text-right">Thao tác</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td colSpan={8} className="px-3 py-6 text-center text-slate-500">
-                  Đang tải...
-                </td>
-              </tr>
-            ) : rows.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="px-3 py-6 text-center text-slate-500">
-                  Chưa có báo giá nào được tải lên
-                </td>
-              </tr>
-            ) : (
-              rows.map((doc) => (
-                <tr key={doc.id} className="border-t hover:bg-slate-50">
-                  <td className="px-3 py-2">
-                    <div className="font-medium">{doc.title}</div>
-                    {doc.note && <div className="text-xs text-slate-400">{doc.note}</div>}
-                  </td>
-                  <td className="px-3 py-2">{doc.machineCode || "—"}</td>
-                  <td className="px-3 py-2 text-slate-500">{doc.fileName}</td>
-                  <td className="px-3 py-2">{formatBytes(doc.fileSize)}</td>
-                  <td className="px-3 py-2">{doc.uploadedBy?.username || "—"}</td>
-                  <td className="px-3 py-2">{formatDate(doc.createdAt)}</td>
-                  <td className="px-3 py-2">
-                    {/* ✅ chỉ hiện badge "Đã cập nhật" nếu thực sự có sửa sau khi tạo (lệch > 1 phút) */}
-                    {new Date(doc.updatedAt).getTime() - new Date(doc.createdAt).getTime() > 60_000 ? (
-                      <span>
-                        {formatDate(doc.updatedAt)}{" "}
-                        <span className="ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
-                          Đã cập nhật
-                        </span>
-                      </span>
-                    ) : (
-                      <span className="text-slate-400">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-right whitespace-nowrap">
-                    {canEdit(doc) && (
-                      <button
-                        className="rounded border px-3 py-1 mr-2 hover:bg-slate-100"
-                        onClick={() => openEdit(doc)}
-                      >
-                        Cập nhật
-                      </button>
-                    )}
-                    <button
-                      className="rounded border px-3 py-1 mr-2 hover:bg-slate-100"
-                      onClick={() => onPreview(doc)}
-                    >
-                      Xem trước
-                    </button>
-                    <button
-                      className="rounded border px-3 py-1 mr-2 hover:bg-slate-100 disabled:opacity-50"
-                      disabled={downloadingId === doc.id}
-                      onClick={() => onDownload(doc)}
-                    >
-                      {downloadingId === doc.id ? "Đang tải..." : "Tải xuống"}
-                    </button>
-                    {isAdmin && (
-                      <button
-                        className="rounded border px-3 py-1 text-red-600 hover:bg-red-50"
-                        onClick={() => onDelete(doc)}
-                      >
-                        Xoá
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* ===== Mobile: dạng thẻ xếp dọc, bỏ cột "File" (tên file thô không cần thiết
-          với người dùng cuối) — chỉ giữ thông tin thật sự cần dùng. ===== */}
-      <div className="md:hidden space-y-3">
-        {loading ? (
-          <div className="rounded border bg-white px-4 py-6 text-center text-slate-500">Đang tải...</div>
-        ) : rows.length === 0 ? (
-          <div className="rounded border bg-white px-4 py-6 text-center text-slate-500">
-            Chưa có báo giá nào được tải lên
-          </div>
-        ) : (
-          rows.map((doc) => {
-            const wasUpdated =
-              new Date(doc.updatedAt).getTime() - new Date(doc.createdAt).getTime() > 60_000;
+      {/* ✅ Dạng thẻ cho cả máy tính và điện thoại, nút thao tác nằm dưới cùng mỗi thẻ */}
+      {loading ? (
+        <div className="rounded-xl border bg-white px-4 py-10 text-center text-slate-500">Đang tải...</div>
+      ) : rows.length === 0 ? (
+        <div className="rounded-xl border border-dashed bg-white px-4 py-10 text-center text-slate-500">
+          {q.trim() ? "Không tìm thấy báo giá nào khớp" : "Chưa có báo giá nào được tải lên"}
+        </div>
+      ) : (
+        <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          {rows.map((doc) => {
+            const wasUpdated = new Date(doc.updatedAt).getTime() - new Date(doc.createdAt).getTime() > 60_000;
+            const kind = fileKind(doc);
             return (
-              <div key={doc.id} className="rounded border bg-white p-3 shadow-sm">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="font-medium break-words">{doc.title}</div>
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      {doc.machineCode && (
-                        <span className="inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-                          Mã máy: {doc.machineCode}
-                        </span>
-                      )}
-                      {wasUpdated && (
-                        <span className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
-                          Đã cập nhật
-                        </span>
-                      )}
-                    </div>
+              <li key={doc.id} data-testid="quote-card" className="flex min-w-0 flex-col rounded-xl border border-slate-200 bg-white shadow-sm">
+                <QuoteThumb doc={doc} onOpen={() => onPreview(doc)} />
+                <div className="flex-1 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <h2 className="min-w-0 break-words font-semibold leading-snug text-slate-900">{doc.title}</h2>
+                    <span className={`shrink-0 rounded px-2 py-0.5 text-xs font-semibold ${kind.className}`}>{kind.label}</span>
                   </div>
-                  <span className="shrink-0 whitespace-nowrap text-xs text-slate-400">{formatBytes(doc.fileSize)}</span>
-                </div>
-
-                {doc.note && <div className="mt-1 text-xs text-slate-400 break-words">{doc.note}</div>}
-
-                <div className="mt-2 text-xs text-slate-400">
-                  {doc.uploadedBy?.username || "—"} · {formatDate(doc.createdAt)}
-                </div>
-
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  {canEdit(doc) && (
-                    <button
-                      className="rounded border px-2 py-2 text-sm hover:bg-slate-100"
-                      onClick={() => openEdit(doc)}
-                    >
-                      Cập nhật
-                    </button>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {doc.machineCode && (
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{doc.machineCode}</span>
+                    )}
+                    {doc.category && (
+                      <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700">{doc.category}</span>
+                    )}
+                    {wasUpdated && (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Đã cập nhật</span>
+                    )}
+                  </div>
+                  {doc.note && (
+                    <p className="mt-2 line-clamp-2 break-words text-sm text-slate-600" title={doc.note}>
+                      {doc.note}
+                    </p>
                   )}
+                  <dl className="mt-3 space-y-0.5 text-xs text-slate-500">
+                    <div className="truncate" title={doc.fileName}>
+                      {doc.fileName} · {formatBytes(doc.fileSize)}
+                    </div>
+                    <div>
+                      {doc.uploadedBy?.username || "—"} · {formatDate(doc.createdAt)}
+                    </div>
+                    {wasUpdated && <div>Sửa lần cuối: {formatDate(doc.updatedAt)}</div>}
+                  </dl>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 rounded-b-xl border-t border-slate-100 bg-slate-50 p-3 sm:flex-nowrap">
                   <button
-                    className="rounded border px-2 py-2 text-sm hover:bg-slate-100"
-                    onClick={() => onPreview(doc)}
-                  >
-                    Xem trước
-                  </button>
-                  <button
-                    className="rounded border px-2 py-2 text-sm hover:bg-slate-100 disabled:opacity-50"
+                    className="whitespace-nowrap rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
                     disabled={downloadingId === doc.id}
                     onClick={() => onDownload(doc)}
                   >
                     {downloadingId === doc.id ? "Đang tải..." : "Tải xuống"}
                   </button>
+                  <button className="whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100" aria-label="Xem trước" title="Xem trước" onClick={() => onPreview(doc)}>
+                    Xem
+                  </button>
+                  {canEdit(doc) && (
+                    <button className="whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100" onClick={() => openEdit(doc)}>
+                      Cập nhật
+                    </button>
+                  )}
                   {isAdmin && (
-                    <button
-                      className="col-span-2 rounded border px-2 py-2 text-sm text-red-600 hover:bg-red-50"
-                      onClick={() => onDelete(doc)}
-                    >
+                    <button className="ml-auto whitespace-nowrap rounded-lg px-2 py-1.5 text-sm text-red-700 hover:bg-red-50" onClick={() => onDelete(doc)}>
                       Xoá
                     </button>
                   )}
                 </div>
-              </div>
+              </li>
             );
-          })
-        )}
-      </div>
+          })}
+        </ul>
+      )}
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm">
         <span>Tổng: {total} báo giá</span>

@@ -19,6 +19,7 @@ import PartStocksPage from "./pages/PartStocksPage";
 import UserManagementPage from "./pages/UserManagementPage";
 // ✅ tải riêng khi mở trang (thư viện PDF/Word khá nặng, không làm chậm các trang khác)
 const TranslatePage = React.lazy(() => import("./pages/TranslatePage"));
+const AiWriterPage = React.lazy(() => import("./pages/AiWriterPage"));
 const MktPage = React.lazy(() => import("./pages/MktPage")); // ✅ Hàng chờ MKT (clip AI từ video thô)
 import CustomerDetailPage from "./pages/CustomerDetailPage";
 import InvoicePrintPage from "./pages/InvoicePrintPage";
@@ -94,6 +95,14 @@ const App: React.FC = () => {
           <Route path="quote-documents" element={<QuoteDocumentsPage />} />
           <Route path="machine-videos" element={<MachineVideosPage />} />
           <Route path="machine-images" element={<MachineImagesPage />} />
+          <Route
+            path="ai-writer"
+            element={
+              <React.Suspense fallback={<div className="p-4 text-slate-500">Đang tải…</div>}>
+                <AiWriterPage />
+              </React.Suspense>
+            }
+          />
           <Route
             path="translate"
             element={
