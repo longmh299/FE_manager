@@ -412,6 +412,8 @@ const MyDebtsPage: React.FC = () => {
   const reqCounts = useMemo(() => {
     const c: Record<string, number> = { "": reqs?.length || 0 };
     for (const r of reqs || []) c[r.status] = (c[r.status] || 0) + 1;
+    // ✅ chỉ đếm phiếu bị từ chối mà hoá đơn còn nợ: hoá đơn đã thu đủ thì không còn việc phải làm
+    c.REJECTED_TODO = (reqs || []).filter((r) => r.status === "REJECTED" && !r.invoice?.settled).length;
     return c;
   }, [reqs]);
   const shownReqs = useMemo(() => (reqs || []).filter((r) => !stFilter || r.status === stFilter), [reqs, stFilter]);
@@ -466,7 +468,7 @@ const MyDebtsPage: React.FC = () => {
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
           <div className="text-xs text-slate-500">Bị từ chối</div>
-          <div className={`mt-1 text-xl font-semibold tabular-nums sm:text-2xl ${(reqCounts.REJECTED || 0) > 0 ? "text-rose-700" : "text-slate-900"}`}>{reqCounts.REJECTED || 0}</div>
+          <div className={`mt-1 text-xl font-semibold tabular-nums sm:text-2xl ${(reqCounts.REJECTED_TODO || 0) > 0 ? "text-rose-700" : "text-slate-900"}`}>{reqCounts.REJECTED_TODO || 0}</div>
           <button type="button" onClick={() => { setView("requests"); setStFilter("REJECTED"); }} className="mt-0.5 text-xs font-medium text-sky-700 hover:underline">
             Xem lý do
           </button>
@@ -637,9 +639,10 @@ const MyDebtsPage: React.FC = () => {
                   </div>
                   {r.note && <div className="mt-2 text-sm text-slate-700">“{r.note}”</div>}
                   {r.status === "REJECTED" && (
-                    <div className="mt-2 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">
+                    <div className={`mt-2 rounded-lg px-3 py-2 text-sm ${r.invoice?.settled ? "bg-slate-100 text-slate-700" : "bg-rose-50 text-rose-800"}`}>
+                      {r.invoice?.settled && <div className="mb-0.5 font-medium">Hoá đơn đã thu đủ, không cần làm gì thêm.</div>}
                       <b>Lý do từ chối:</b> {r.rejectReason}
-                      <span className="text-rose-600"> — {r.decidedBy?.username}, {viDateTime(r.decidedAt)}</span>
+                      <span className={r.invoice?.settled ? "text-slate-500" : "text-rose-600"}> — {r.decidedBy?.username}, {viDateTime(r.decidedAt)}</span>
                     </div>
                   )}
                   {r.status === "APPROVED" && (

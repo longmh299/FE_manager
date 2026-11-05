@@ -5,6 +5,7 @@ import api from "../api/client";
 import { postOnce } from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
 import BackorderCostDialog, { NEED_BACKORDER_COST, type BackorderCostItem } from "../components/BackorderCostDialog";
+import DuplicatePartnerDialog, { type DupInfo } from "../components/DuplicatePartnerDialog";
 import { VoidPaymentDialog, PinActionDialog, type VoidTarget } from "../components/SecondPassword";
 
 type InvoiceType = "SALES" | "PURCHASE";
@@ -1499,6 +1500,7 @@ const InvoiceDetailPage: React.FC = () => {
   const [techSaving, setTechSaving] = useState(false);
   const [savedFees, setSavedFees] = useState({ shipFee: 0, laborFee: 0 }); // phí đang lưu trên server
   const [feeReason, setFeeReason] = useState("");
+  const [dupInfo, setDupInfo] = useState<DupInfo | null>(null);
   const [costAskItems, setCostAskItems] = useState<BackorderCostItem[] | null>(null);
   const [feeBusy, setFeeBusy] = useState(false);
   const [accounts, setAccounts] = useState<PaymentAccount[]>([]);
@@ -2389,7 +2391,7 @@ const InvoiceDetailPage: React.FC = () => {
     toastSuccess(`Đã cập nhật thông tin ${partnerWord.toLowerCase()}.`);
   }
 
-  async function handleSavePartner() {
+  async function handleSavePartner(opts?: { skipDupCheck?: boolean }) {
     if (!invoice) return;
     if (!invoice.partnerName.trim()) {
       toastError(`Vui lòng nhập tên ${partnerWord.toLowerCase()} trước.`, "Thiếu thông tin");
@@ -2420,9 +2422,10 @@ const InvoiceDetailPage: React.FC = () => {
     const name = norm(invoice.partnerName);
     const same =
       partners.find((p) => !!code && norm(p.code) === code) ||
-      partners.find((p) => !!tax && norm(p.taxCode) === tax) ||
       partners.find((p) => norm(p.name) === name);
-    if (same) {
+    // trùng MST với tên khác: không ghi đè khách cũ, để hộp "Dùng khách này" bên dưới xử lý
+    const sameTaxOtherName = !!same && !!tax && !!same.taxCode && norm(same.taxCode) !== tax;
+    if (same && !sameTaxOtherName) {
       const snapshot = invoice;
       openConfirm({
         title: `${partnerWord} đã có trong danh sách`,
@@ -2444,6 +2447,22 @@ const InvoiceDetailPage: React.FC = () => {
       return;
     }
 
+    // ✅ hỏi trước khi tạo: trùng MST thì chặn, trùng SĐT hoặc tên gần giống thì báo
+    if (!opts?.skipDupCheck) {
+      try {
+        const dup = await api.get("/partners/check-duplicate", {
+          params: { name: invoice.partnerName, taxCode: invoice.partnerTaxCode, phone: invoice.partnerPhone },
+        });
+        const d = dup.data?.data;
+        if (d && d.taxMatches.length + d.phoneMatches.length + d.nameMatches.length > 0) {
+          setDupInfo(d);
+          return;
+        }
+      } catch {
+        // kiểm tra lỗi thì vẫn cho tạo, BE còn chặn trùng MST
+      }
+    }
+
     try {
       const res = await api.post("/partners", partnerPayload(invoice));
       const body = (res as any).data || {};
@@ -2452,7 +2471,11 @@ const InvoiceDetailPage: React.FC = () => {
       markDirty();
       updateInvoice({ partnerId: p.id, partnerCode: p.code });
       toastSuccess(`Đã lưu ${partnerWord.toLowerCase()} vào danh sách.`);
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.response?.data?.code === "DUP_TAX") {
+        setDupInfo({ taxMatches: err.response.data.existing || [], phoneMatches: [], nameMatches: [] });
+        return;
+      }
       partnerError(err, `Lưu ${partnerWord.toLowerCase()} thất bại.`);
     }
   }
@@ -3444,7 +3467,7 @@ const InvoiceDetailPage: React.FC = () => {
                   style={styles.secondarySmallBtn}
                   disabled={locked || status !== "DRAFT" || (!!linkedPartner && !partnerChanged)}
                   title={linkedPartner && !partnerChanged ? "Thông tin chưa thay đổi" : undefined}
-                  onClick={handleSavePartner}
+                  onClick={() => void handleSavePartner()}
                 >
                   {linkedPartner ? `Cập nhật thông tin ${partnerWord.toLowerCase()}` : `+ Lưu vào danh sách ${partnerWord.toLowerCase()}`}
                 </button>
@@ -4264,7 +4287,7 @@ const InvoiceDetailPage: React.FC = () => {
                 )}
                 {status !== "APPROVED" && Number(invoice.paidAmount || 0) > 0 && (
                   <div style={{ fontSize: 12.5, color: "#92400e", marginTop: 4 }}>
-                    Số này chưa vào sổ. Khi gửi duyệt, phiếu sẽ sang “Chờ duyệt thu chi”. Duyệt phiếu rồi mới vào sổ và trừ công nợ, không cần chờ duyệt hoá đơn.
+                    Số này chưa vào sổ. Hoá đơn được duyệt thì phiếu mới sang “Chờ duyệt thu chi”. Duyệt phiếu rồi mới vào sổ và trừ công nợ.
                   </div>
                 )}
 
@@ -4365,7 +4388,7 @@ const InvoiceDetailPage: React.FC = () => {
                       )}
                     </div>
                     <div style={{ fontSize: 12, color: "#92400e" }}>
-                      Gửi duyệt hoá đơn sẽ tạo 2 phiếu chờ duyệt: tiền mặt do kế toán hoặc quản trị duyệt, chuyển khoản do quản trị duyệt.
+                      Duyệt hoá đơn sẽ tạo 2 phiếu chờ duyệt, kế toán hoặc quản trị duyệt từng phiếu.
                     </div>
                   </div>
                 ) : (
@@ -4694,6 +4717,20 @@ const InvoiceDetailPage: React.FC = () => {
         onSubmit={doReopenWithPin}
       />
 
+
+      <DuplicatePartnerDialog
+        info={dupInfo}
+        onClose={() => setDupInfo(null)}
+        onUse={(p) => {
+          setDupInfo(null);
+          setPartners((prev) => (prev.some((x) => x.id === String(p.id)) ? prev : [...prev, toPartner(p)]));
+          selectPartner(toPartner(p));
+        }}
+        onCreateAnyway={() => {
+          setDupInfo(null);
+          void handleSavePartner({ skipDupCheck: true });
+        }}
+      />
 
       <BackorderCostDialog
         items={costAskItems}

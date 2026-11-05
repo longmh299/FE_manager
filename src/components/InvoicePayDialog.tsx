@@ -310,7 +310,7 @@ const InvoicePayDialog: React.FC<Props> = (p) => {
                 <div className="mt-1 text-xs text-slate-500">Tự tính: số tiền lần này trừ tiền mặt.</div>
               </div>
               {cashAmt >= p.amount && p.amount > 0 && <div className="text-sm text-rose-700">Tiền mặt phải nhỏ hơn số tiền lần này.</div>}
-              <div className="text-xs text-amber-700">Sẽ tạo 2 phiếu: tiền mặt do kế toán hoặc quản trị duyệt, chuyển khoản do quản trị duyệt.</div>
+              <div className="text-xs text-amber-700">Sẽ tạo 2 phiếu chờ duyệt, kế toán hoặc quản trị duyệt từng phiếu.</div>
             </div>
           )}
 
@@ -414,7 +414,9 @@ const InvoicePayDialog: React.FC<Props> = (p) => {
         </div>
 
         <p className="border-t border-slate-100 px-5 pt-2 text-xs text-amber-700">
-          Phiếu sẽ sang “Chờ duyệt thu chi”. Duyệt rồi mới vào sổ thu chi và trừ công nợ.
+          {p.isPurchase
+            ? "Phiếu sẽ sang “Chờ duyệt thu chi”. Duyệt rồi mới vào sổ thu chi và trừ công nợ."
+            : "Phiếu thu vào sổ ngay và trừ công nợ, không qua bước duyệt. Thu nhầm phải nhờ quản trị huỷ phiếu."}
         </p>
         {/* chân */}
         <div className="flex items-center gap-2 border-t border-slate-100 px-5 py-3">
@@ -442,7 +444,7 @@ const InvoicePayDialog: React.FC<Props> = (p) => {
               "Chọn tài khoản"
             ) : (
               <>
-                Gửi duyệt {split ? "2 phiếu " : ""}{zero ? "" : `${money(p.amount)} đ`}
+                {p.isPurchase ? "Gửi duyệt" : "Thu"} {split ? "2 phiếu " : ""}{zero ? "" : `${money(p.amount)} đ`}
               </>
             )}
           </button>

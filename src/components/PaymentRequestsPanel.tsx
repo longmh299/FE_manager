@@ -1,12 +1,11 @@
 // src/components/PaymentRequestsPanel.tsx
 // ✅ Trang Thu chi > tab "Chờ duyệt thu chi"
 //   - Phiếu từ hoá đơn, nút thu tiền, hoàn tiền, nhân viên báo thu nợ đều vào đây
-//   - Tiền mặt: kế toán hoặc quản trị duyệt. Ngân hàng: chỉ quản trị (server trả canDecide).
+//   - Kế toán và quản trị duyệt được cả tiền mặt lẫn chuyển khoản (server trả canDecide).
 //   - Duyệt = lập phiếu PT/PC thật (vào sổ quỹ / tài khoản, đổi công nợ hoá đơn)
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import api from "../api/client";
-import { useAuth } from "../context/AuthContext";
 import { DialogShell } from "./SecondPassword";
 import { ToastHost, useToast } from "./Toast";
 import {
@@ -46,8 +45,6 @@ const vnYmdOf = (raw: string) => new Date(new Date(raw).getTime() + 7 * 3600 * 1
 const QUICK_REASONS = ["Chưa thấy tiền về tài khoản", "Chưa nộp tiền mặt cho quỹ", "Sai số tiền", "Nhầm hoá đơn / nhầm khách"];
 
 const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged }) => {
-  const { user } = useAuth();
-  const isAdmin = String(user?.role || "") === "admin";
   const toast = useToast();
 
   const [status, setStatus] = useState("PENDING");
@@ -154,7 +151,7 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
     }
   };
 
-  const accOf = (r: PaymentRequestRow) => (!isAdmin || r.method === "CASH" ? accounts.filter((a) => a.type === "CASH") : accounts.filter((a) => a.type !== "CASH"));
+  const accOf = (r: PaymentRequestRow) => (r.method === "CASH" ? accounts.filter((a) => a.type === "CASH") : accounts.filter((a) => a.type !== "CASH"));
 
   return (
     <div className="space-y-4">
@@ -163,7 +160,6 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Chờ duyệt thu chi</h1>
           <p className="mt-0.5 text-sm text-slate-500">
             Phiếu thu, phiếu chi gắn hoá đơn. Duyệt rồi mới vào sổ thu chi và đổi công nợ.
-            {isAdmin ? "" : " Bạn duyệt phiếu tiền mặt, phiếu ngân hàng do quản trị duyệt."}
           </p>
         </div>
         <input className={`${inputCls} sm:max-w-xs`} placeholder="Tìm HĐ, khách, nhân viên…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Tìm phiếu thu nợ" />

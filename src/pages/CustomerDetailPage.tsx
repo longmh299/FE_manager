@@ -29,6 +29,11 @@ const CustomerDetailPage: React.FC = () => {
     setLoadError("");
     try {
       const res = await api.get(`/customers/${id}`);
+      // ✅ khách đã gộp: chuyển sang mã giữ lại
+      if (res.data?.data?.mergedIntoId || res.data?.mergedIntoId) {
+        window.location.replace(`/partners/${res.data?.data?.mergedIntoId || res.data?.mergedIntoId}`);
+        return;
+      }
       setData(res.data.data);
     } catch (err: any) {
       console.error(err);

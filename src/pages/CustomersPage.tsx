@@ -107,6 +107,11 @@ const CustomersPage: React.FC = () => {
     <div className="p-4 space-y-4">
       <div className="flex items-baseline gap-2">
         <h1 className="text-xl font-semibold">Khách hàng</h1>
+        {user?.role === "admin" && (
+          <Link to="/partners/merge" className="ml-auto text-sm font-medium text-sky-700 hover:underline">
+            Gộp khách trùng
+          </Link>
+        )}
         {!loading && !error && (
           <span className="text-sm tabular-nums text-slate-500">{rows.length} khách</span>
         )}

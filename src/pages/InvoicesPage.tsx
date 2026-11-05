@@ -275,6 +275,8 @@ function invoiceCodeToSortParts(code: string) {
   return { prefix: s, num: Number.POSITIVE_INFINITY, raw: s };
 }
 
+const LIST_PAGE_SIZE = 300;
+
 /* ========================= map 1 dòng từ API ========================= */
 function mapInvoiceRow(x: any): InvoiceListItem {
         const total = toNum(x.total ?? x.totalAmount ?? x.grandTotal ?? x.subtotal ?? 0);
@@ -450,6 +452,12 @@ const InvoicesPage: React.FC = () => {
   const [debtRows, setDebtRows] = useState<InvoiceListItem[]>([]);
   const [debtLoading, setDebtLoading] = useState(false);
   const [invoices, setInvoices] = useState<InvoiceListItem[]>([]);
+  const invoicesRef = useRef<InvoiceListItem[]>([]);
+  const lastListQuery = useRef<{ q: string; from: string; to: string; type: InvoiceTypeFilter } | null>(null);
+  const [expandedNameId, setExpandedNameId] = useState<InvoiceListItem["id"] | null>(null);
+  const [listTotal, setListTotal] = useState(0);
+  const [listPage, setListPage] = useState(1);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const [role, setRole] = useState<string>("");
   const isStaff = role === "staff";
@@ -540,15 +548,21 @@ const InvoicesPage: React.FC = () => {
     }
   };
 
-  const fetchInvoices = async (q: string, fromVal: string, toVal: string, typeVal: InvoiceTypeFilter) => {
+  // ✅ tải 300 hoá đơn mới tạo nhất, còn lại bấm "Tải thêm" để không sót hoá đơn nào
+  const fetchInvoices = async (q: string, fromVal: string, toVal: string, typeVal: InvoiceTypeFilter, nextPage = 1) => {
     try {
-      setLoading(true);
+      if (nextPage > 1) setLoadingMore(true);
+      else {
+        setLoading(true);
+        lastListQuery.current = { q, from: fromVal, to: toVal, type: typeVal };
+      }
 
       const res = await api.get("/invoices", {
         params: {
           q,
-          page: 1,
-          pageSize: 300,
+          page: nextPage,
+          pageSize: LIST_PAGE_SIZE,
+          sort: "created",
           type: typeVal || "",
           from: fromVal || undefined,
           to: toVal || undefined,
@@ -567,6 +581,11 @@ const InvoicesPage: React.FC = () => {
       });
 
       const mapped: InvoiceListItem[] = filtered.map(mapInvoiceRow);
+      setListTotal(Number(res.data?.total ?? mapped.length) || 0);
+      setListPage(nextPage);
+      if (nextPage > 1) {
+        mapped.push(...invoicesRef.current);
+      }
 
       mapped.sort((a, b) => {
         const pa = invoiceCodeToSortParts(a.code);
@@ -580,7 +599,10 @@ const InvoicesPage: React.FC = () => {
         return pb.raw.localeCompare(pa.raw, "vi", { numeric: true, sensitivity: "base" });
       });
 
-      setInvoices(mapped);
+      const byId = new Map(mapped.map((x) => [x.id, x]));
+      const unique = Array.from(byId.values());
+      invoicesRef.current = unique;
+      setInvoices(unique);
     } catch (err: any) {
       console.error("load invoices error", err);
       toast.push({
@@ -588,9 +610,14 @@ const InvoicesPage: React.FC = () => {
         title: "Lỗi",
         message: err?.response?.data?.message || err?.message || "Không tải được danh sách hóa đơn.",
       });
-      setInvoices([]);
+      if (nextPage === 1) {
+        invoicesRef.current = [];
+        setInvoices([]);
+        setListTotal(0);
+      }
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   };
 
@@ -969,6 +996,7 @@ const InvoicesPage: React.FC = () => {
   };
 
   const submitPayment = async (splitLines?: Array<{ accountId: string; amount: number }>) => {
+    let payRes: any = null;
     if (paySubmitting) return;
     if (!payTarget) return;
 
@@ -1019,7 +1047,8 @@ const InvoicesPage: React.FC = () => {
 
       if (splitLines) {
         // ✅ thanh toán gộp: 2 phiếu cùng được tạo hoặc cùng không
-        await postOnce("/payments/split", {
+        payRes = await postOnce("/payments/split", {
+          direct: payTarget.type !== "PURCHASE",
           date: payDate,
           partnerId: String(payTarget.partnerId),
           type: payTarget.type === "PURCHASE" ? "PAYMENT" : "RECEIPT",
@@ -1027,7 +1056,8 @@ const InvoicesPage: React.FC = () => {
           lines: splitLines,
           note: payNote.trim() ? `HĐ ${payTarget.code}: ${payNote.trim()}` : `Thanh toán HĐ ${payTarget.code}`,
         });
-      } else await postOnce("/payments", {
+      } else payRes = await postOnce("/payments", {
+        direct: payTarget.type !== "PURCHASE",
         date: payDate,
         partnerId: String(payTarget.partnerId),
         type: payTarget.type === "PURCHASE" ? "PAYMENT" : "RECEIPT",
@@ -1038,13 +1068,28 @@ const InvoicesPage: React.FC = () => {
         allocations: [{ invoiceId: String(payTarget.id), amount, kind: "NORMAL" }],
       });
 
-      const isCashAcc = String(accounts.find((a) => String(a.id) === String(payAccountId))?.type || "") === "CASH";
-      toast.push({
+      const direct = payRes?.data?.direct;
+      if (direct?.error) {
+        // phiếu chưa vào sổ được thì vẫn nằm ở chờ duyệt, không để người bấm tưởng đã thu xong
+        toast.push({
+          type: "error",
+          title: direct.booked > 0 ? `Mới vào sổ ${direct.booked}/${direct.total} phiếu` : "Chưa vào sổ được",
+          message: `${direct.error} Phiếu còn lại đang ở Chờ duyệt thu chi.`,
+        });
+      } else if (direct) {
+        toast.push({
+          type: "success",
+          title: "Đã thu tiền",
+          message: splitLines
+            ? `Đã vào sổ 2 phiếu thu: tiền mặt ${formatMoney(splitLines[0].amount)} đ, chuyển khoản ${formatMoney(splitLines[1].amount)} đ.`
+            : `Đã vào sổ phiếu thu ${formatMoney(amount)} đ và trừ công nợ.`,
+        });
+      } else toast.push({
         type: "success",
         title: "Đã gửi chờ duyệt",
         message: splitLines
-          ? `2 phiếu: tiền mặt ${formatMoney(splitLines[0].amount)} đ chờ kế toán duyệt, chuyển khoản ${formatMoney(splitLines[1].amount)} đ chờ quản trị duyệt.`
-          : `Phiếu ${formatMoney(amount)} đ đang chờ ${isCashAcc ? "kế toán" : "quản trị"} duyệt. Duyệt rồi mới vào sổ thu chi và trừ công nợ.`,
+          ? `2 phiếu chờ duyệt: tiền mặt ${formatMoney(splitLines[0].amount)} đ, chuyển khoản ${formatMoney(splitLines[1].amount)} đ.`
+          : `Phiếu ${formatMoney(amount)} đ đang chờ duyệt. Duyệt rồi mới vào sổ thu chi và trừ công nợ.`,
       });
 
       setPayOpen(false);
@@ -1077,6 +1122,18 @@ const InvoicesPage: React.FC = () => {
       );
     }
 
+    // ✅ hoá đơn chưa duyệt: số nhập trên hoá đơn mới là số báo, chưa có phiếu nên không ghi "Đã thanh toán"
+    if ((inv.status === "DRAFT" || inv.status === "SUBMITTED") && clamp0(inv.paidAmount) > 0 && clamp0(inv.bookedPayAmount) < 0.5) {
+      return (
+        <span
+          className="inline-flex items-center whitespace-nowrap rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700"
+          title="Số báo trên hoá đơn, chưa vào sổ. Hoá đơn được duyệt thì phiếu mới sang Chờ duyệt thu chi."
+        >
+          Báo {inv.type === "PURCHASE" ? "chi" : "thu"} {formatMoney(clamp0(inv.paidAmount))} đ
+        </span>
+      );
+    }
+
     const st = resolvePaymentStatus(inv);
     let label = "";
     let className = "inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border whitespace-nowrap ";
@@ -1091,27 +1148,29 @@ const InvoicesPage: React.FC = () => {
       label = "Chưa thanh toán";
       className += "bg-red-100 text-red-700 border-red-200";
     }
-    // ✅ đã có phiếu chờ duyệt đủ số còn lại: không ghi "Chưa thanh toán", tránh hiểu nhầm là chưa thu
+    // ✅ có phiếu chờ duyệt mà chưa thu đồng nào: không ghi "Chưa thanh toán" kẻo tưởng chưa báo thu
     const waiting = clamp0(inv.pendingPayAmount);
-    if (waiting > 0) {
-      const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal: getCollectibleTotal(inv), paidNormal: clamp0(inv.paidAmount) });
-      if (waiting + 0.5 >= remainingNormal) {
-        return (
-          <span
-            className="inline-flex items-center rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800"
-            title={`Đã ghi nhận ${formatMoney(waiting)} đ, đang chờ duyệt thu chi. Duyệt rồi mới vào sổ.`}
-          >
-            Chờ duyệt {inv.type === "PURCHASE" ? "chi" : "thu"} {formatMoney(waiting)} đ
+    const waitWord = inv.type === "PURCHASE" ? "chi" : "thu";
+    const waitTitle = `Đã ghi nhận ${formatMoney(waiting)} đ, đang chờ duyệt thu chi. Duyệt rồi mới vào sổ.`;
+    const waitCls = "inline-flex items-center whitespace-nowrap rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800";
+    if (waiting > 0 && clamp0(inv.paidAmount) < 0.5) {
+      const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal: getCollectibleTotal(inv), paidNormal: 0 });
+      const rest = remainingNormal - waiting;
+      return (
+        <span className="inline-flex flex-col items-center gap-0.5">
+          <span className={waitCls} title={waitTitle}>
+            Chờ duyệt {waitWord} {formatMoney(waiting)} đ
           </span>
-        );
-      }
+          {rest > 0.5 && <span className="whitespace-nowrap text-xs text-slate-500">Còn lại {formatMoney(rest)} đ</span>}
+        </span>
+      );
     }
     return (
       <span className="inline-flex flex-col items-center gap-0.5">
         <span className={className}>{label}</span>
-        {clamp0(inv.pendingPayAmount) > 0 && (
-          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800" title="Đang chờ duyệt thu chi, chưa tính vào đã thu">
-            Chờ duyệt {formatMoney(clamp0(inv.pendingPayAmount))} đ
+        {waiting > 0 && (
+          <span className={waitCls} title={waitTitle}>
+            Chờ duyệt {formatMoney(waiting)} đ
           </span>
         )}
       </span>
@@ -1589,49 +1648,49 @@ const InvoicesPage: React.FC = () => {
             <table className="min-w-full table-fixed text-sm">
               <thead className="bg-gray-100">
                 <tr>
-                  <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[130px]">
+                  <th className="px-2 py-2 text-left text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[130px]">
                     Số HĐ
                   </th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[104px]">
+                  <th className="px-2 py-2 text-left text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[104px]">
                     Ngày
                   </th>
-                  <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                  <th className="px-2 py-2 text-left text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
                     Khách hàng
                   </th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[124px]">
+                  <th className="px-2 py-2 text-right text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[124px]">
                     Tổng tiền
                   </th>
-                  <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[140px]">
+                  <th className="px-2 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[140px]">
                     Thanh toán
                   </th>
-                  <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[100px]">
+                  <th className="px-2 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[100px]">
                     Trạng thái
                   </th>
-                  <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[96px]">
+                  <th className="px-2 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[96px]">
                     Vận chuyển
                   </th>
 
                   {showStaffWorkflowColumns && (
                     <>
-                      <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                      <th className="px-2 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
                         Xem
                       </th>
-                      <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                      <th className="px-2 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
                         Gửi duyệt
                       </th>
-                      <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                      <th className="px-2 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
                         Hủy gửi
                       </th>
                     </>
                   )}
 
                   {showApprovalColumn && (
-                    <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[150px]">
+                    <th className="px-2 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[150px]">
                       Duyệt
                     </th>
                   )}
 
-                  <th className="px-3 py-2 text-right text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[212px]">
+                  <th className={`px-2 py-2 text-right text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 ${showStaffWorkflowColumns ? "w-[120px]" : "w-[192px]"}`}>
                     Thao tác
                   </th>
                 </tr>
@@ -1640,7 +1699,7 @@ const InvoicesPage: React.FC = () => {
               <tbody>
                 {loading && (
                   <tr>
-                    <td className="px-3 py-2 text-sm text-gray-600 border-t border-gray-200" colSpan={colCount}>
+                    <td className="px-2 py-2 text-sm text-gray-600 border-t border-gray-200" colSpan={colCount}>
                       Đang tải dữ liệu...
                     </td>
                   </tr>
@@ -1648,7 +1707,7 @@ const InvoicesPage: React.FC = () => {
 
                 {!loading && rowsShown.length === 0 && (
                   <tr>
-                    <td className="px-3 py-2 text-sm text-gray-600 border-t border-gray-200" colSpan={colCount}>
+                    <td className="px-2 py-2 text-sm text-gray-600 border-t border-gray-200" colSpan={colCount}>
                       {isDebtView ? `Không còn hoá đơn nào chưa ${debtWord} đủ.` : "Không tìm thấy dữ liệu."}
                     </td>
                   </tr>
@@ -1693,14 +1752,14 @@ const InvoicesPage: React.FC = () => {
                           (isHighlighted ? "ring-2 ring-indigo-500 bg-indigo-50" : "")
                         }
                       >
-                        <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap">
+                        <td className="px-2 py-2 border-t border-gray-200 whitespace-nowrap">
                           <div className="flex items-center gap-2 min-w-0">
                             <div className="truncate font-medium">{inv.code}</div>
                             {returnedBadge}
                           </div>
                         </td>
 
-                        <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap">
+                        <td className="px-2 py-2 border-t border-gray-200 whitespace-nowrap">
                           {formatDateDisplay(inv.date)}
                           {isDebtView && (() => {
                             const dd = daysSince(inv.date);
@@ -1714,9 +1773,23 @@ const InvoicesPage: React.FC = () => {
                           })()}
                         </td>
 
-                        <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap truncate" title={inv.partnerName}>{inv.partnerName}</td>
+                        <td className="px-2 py-2 border-t border-gray-200 align-middle">
+                          {/* ✅ tên dài thu gọn cho vừa màn hình nhỏ, bấm vào mới hiện đủ */}
+                          <button
+                            type="button"
+                            title={expandedNameId === inv.id ? "Bấm để thu gọn" : inv.partnerName}
+                            aria-expanded={expandedNameId === inv.id}
+                            onClick={() => setExpandedNameId((cur) => (cur === inv.id ? null : inv.id))}
+                            className={
+                              "block w-[96px] rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 " +
+                              (expandedNameId === inv.id ? "whitespace-normal break-words" : "truncate")
+                            }
+                          >
+                            {inv.partnerName}
+                          </button>
+                        </td>
 
-                        <td className="px-3 py-2 border-t border-gray-200 text-right whitespace-nowrap">
+                        <td className="px-2 py-2 border-t border-gray-200 text-right whitespace-nowrap">
                           <div className="flex flex-col items-end leading-tight gap-0.5">
                             <div className="font-medium">{formatMoney(grossTotal)} đ</div>
                             {isDebtView && (
@@ -1725,15 +1798,15 @@ const InvoicesPage: React.FC = () => {
                           </div>
                         </td>
 
-                        <td className="px-3 py-2 border-t border-gray-200 text-center">{renderPaymentBadge(inv)}</td>
-                        <td className="px-3 py-2 border-t border-gray-200 text-center">{renderStatusBadge(inv.status, inv)}</td>
-                        <td className="px-3 py-2 border-t border-gray-200 text-center">
+                        <td className="px-2 py-2 border-t border-gray-200 text-center">{renderPaymentBadge(inv)}</td>
+                        <td className="px-2 py-2 border-t border-gray-200 text-center">{renderStatusBadge(inv.status, inv)}</td>
+                        <td className="px-2 py-2 border-t border-gray-200 text-center">
                           <CarrierTag note={inv.note} />
                         </td>
 
                         {showStaffWorkflowColumns && (
                           <>
-                            <td className="px-3 py-2 border-t border-gray-200 text-center">
+                            <td className="px-2 py-2 border-t border-gray-200 text-center">
                               <button
                                 type="button"
                                 className="px-2 py-1 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-xs"
@@ -1743,7 +1816,7 @@ const InvoicesPage: React.FC = () => {
                               </button>
                             </td>
 
-                            <td className="px-3 py-2 border-t border-gray-200 text-center">
+                            <td className="px-2 py-2 border-t border-gray-200 text-center">
                               <button
                                 type="button"
                                 disabled={!showSubmitBtn}
@@ -1759,7 +1832,7 @@ const InvoicesPage: React.FC = () => {
                               </button>
                             </td>
 
-                            <td className="px-3 py-2 border-t border-gray-200 text-center">
+                            <td className="px-2 py-2 border-t border-gray-200 text-center">
                               <button
                                 type="button"
                                 disabled={!showRecallBtn}
@@ -1778,7 +1851,7 @@ const InvoicesPage: React.FC = () => {
                         )}
 
                         {showApprovalColumn && (
-                          <td className="px-3 py-2 border-t border-gray-200 text-center">
+                          <td className="px-2 py-2 border-t border-gray-200 text-center">
                             <div className="flex items-center justify-center gap-1.5">
                               <button
                                 type="button"
@@ -1818,7 +1891,7 @@ const InvoicesPage: React.FC = () => {
                           </td>
                         )}
 
-                        <td className="px-3 py-2 border-t border-gray-200">
+                        <td className="px-2 py-2 border-t border-gray-200">
                           <div className="flex items-center justify-end gap-0.5">
                             {/* thu / trả tiền: nút chính, cố định chỗ để các icon thẳng hàng */}
                             <div className="mr-1 flex w-[88px] justify-end">
@@ -1922,6 +1995,27 @@ const InvoicesPage: React.FC = () => {
             </table>
           </div>
         </div>
+
+        {!isDebtView && sourceFilter !== "ADJUST" && listTotal > 0 && !loading && (
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-3 text-sm text-slate-600">
+            <span>
+              Đang hiện {invoices.length.toLocaleString("vi-VN")} / {listTotal.toLocaleString("vi-VN")} hoá đơn
+            </span>
+            {listPage * LIST_PAGE_SIZE < listTotal && (
+              <button
+                type="button"
+                disabled={loadingMore}
+                onClick={() => {
+                  const f = lastListQuery.current;
+                  if (f) fetchInvoices(f.q, f.from, f.to, f.type, listPage + 1);
+                }}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                {loadingMore ? "Đang tải…" : `Tải thêm ${Math.min(LIST_PAGE_SIZE, listTotal - listPage * LIST_PAGE_SIZE).toLocaleString("vi-VN")} hoá đơn`}
+              </button>
+            )}
+          </div>
+        )}
 
         {showRoleWarning && (
           <div className="mt-3 text-xs text-orange-600">

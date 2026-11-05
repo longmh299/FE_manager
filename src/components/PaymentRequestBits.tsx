@@ -30,7 +30,7 @@ export type PaymentRequestRow = {
   requestedBy: { id: string; username: string };
   decidedBy: { id: string; username: string } | null;
   payment: { id: string; code: string | null; date: string; voided: boolean } | null;
-  invoice: { id: string; code: string; issueDate: string; customerName: string; customerPhone: string | null; approved?: boolean; returned?: boolean };
+  invoice: { id: string; code: string; issueDate: string; customerName: string; customerPhone: string | null; approved?: boolean; returned?: boolean; settled?: boolean };
   debt?: { remaining: number; otherPending: number };
 };
 

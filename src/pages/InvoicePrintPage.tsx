@@ -1,1012 +1,2140 @@
-// src/pages/InvoicePrintPage.tsx
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+// src/pages/InvoicesPage.tsx
+import BackorderCostDialog, { NEED_BACKORDER_COST, type BackorderCostItem } from "../components/BackorderCostDialog";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import api from "../api/client";
+import { postOnce } from "../api/client";
+import { useAuth } from "../context/AuthContext";
+import { ToastHost, useToast } from "../components/Toast";
+import InvoicePayDialog, { type PayAccount } from "../components/InvoicePayDialog";
+import { PinActionDialog } from "../components/SecondPassword"; // ✅ mở lại HĐ đã duyệt cần mật khẩu cấp 2
 
-// ================= helpers =================
-function unwrap<T = any>(res: any): T {
-  if (res && typeof res === "object" && "data" in res) {
-    const body = (res as any).data;
-    if (body && typeof body === "object" && "data" in body) return body.data as T;
-    return body as T;
+type InvoiceType = "SALES" | "PURCHASE";
+type AnyInvoiceType = "SALES" | "PURCHASE" | "SALES_RETURN" | "PURCHASE_RETURN";
+type PaymentStatus = "UNPAID" | "PARTIAL" | "PAID";
+
+// ✅ đồng bộ với BE hiện tại (không có CANCELLED)
+type InvoiceStatus = "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
+
+type PaymentAccount = PayAccount;
+
+type ReturnMetaLite = {
+  state?: "NONE" | "PARTIAL" | "FULL";
+  debtIgnore?: boolean;
+  returnedTotal?: number;
+  netTotal?: number; // after return, before hold
+  holdAmount?: number;
+  collectible?: number; // after return & hold
+};
+
+type InvoiceListItem = {
+  id: string | number;
+  code: string;
+  date?: string;
+  type: InvoiceType;
+
+  partnerId?: string;
+  partnerName: string;
+  note?: string | null;
+  pendingPayAmount?: number; // đang chờ duyệt thu chi, chưa tính vào đã thu
+  bookedPayAmount?: number; // đã vào sổ qua phiếu chưa huỷ
+
+  totalAmount: number; // ✅ Gross total (subtotal + tax)
+
+  // ✅ (tuỳ BE) nếu có trả hàng
+  netTotal?: number; // gross after return
+  returnedTotal?: number; // gross returned
+
+  // ✅ nếu BE trả returnMeta thì ưu tiên dùng
+  returnMeta?: ReturnMetaLite;
+
+  paymentStatus?: PaymentStatus;
+  paidAmount?: number; // ✅ NORMAL collected net (đã sync từ allocations NORMAL)
+
+  hasWarrantyHold?: boolean;
+  warrantyHoldAmount?: number;
+
+  status?: InvoiceStatus;
+  rejectInfo?: { reason: string | null; at: string; by: string | null } | null; // ✅ nháp bị trả về
+};
+
+type InvoiceTypeFilter = "" | "SALES" | "PURCHASE";
+
+/**
+ * Lấy đơn vị vận chuyển từ ghi chú dạng "COD - X" (X là chữ viết tắt, ví dụ COD - VTP).
+ * Không phân biệt hoa thường; "COD-VTP" hoặc "COD – VTP" cũng nhận. Ghi chú không có COD - X thì trả null.
+ */
+function codCarrier(note?: string | null): string | null {
+  const m = String(note ?? "").match(/(?:^|[^\p{L}\p{N}])COD\s*[-–—]\s*([\p{L}\p{N}&]+)/iu);
+  return m ? m[1].toUpperCase() : null;
+}
+
+function CarrierTag({ note }: { note?: string | null }) {
+  const carrier = codCarrier(note);
+  if (!carrier) return null;
+  return (
+    <span
+      title={`COD qua ${carrier}`}
+      className="inline-block max-w-full truncate rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-800"
+    >
+      {carrier}
+    </span>
+  );
+}
+type SourceFilter = "INVOICE" | "ADJUST"; // ✅ NEW: hóa đơn / chứng từ điều chỉnh (adjust move)
+
+const LS_LAST_PAY_ACCOUNT = "lastPayAccountId";
+
+/* ========================= helpers ========================= */
+
+function formatDateDisplay(raw?: string) {
+  if (!raw) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [y, m, d] = raw.split("-");
+    return `${d}/${m}/${y}`;
   }
-  return res as T;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  const day = String(d.getDate()).padStart(2, "0");
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const year = d.getFullYear();
+  return `${day}/${month}/${year}`;
 }
 
-function formatDate(iso?: string | null) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  return `${dd}/${mm}/${yyyy}`;
+function unwrapList(res: any): any[] {
+  const body = res?.data ?? {};
+  if (body && typeof body === "object" && "data" in body) return body.data || [];
+  return Array.isArray(body) ? body : [];
 }
 
-function toNum(v: any): number {
+function unwrapUser(res: any): any {
+  const body = res?.data;
+  return body?.data ?? body;
+}
+
+// ngày hôm nay theo giờ VN (toISOString là giờ UTC, trước 7h sáng sẽ ra ngày hôm qua)
+function vnTodayYmd() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh" }).format(new Date());
+}
+
+function formatMoney(n: number) {
+  return Number(n || 0).toLocaleString("vi-VN");
+}
+
+function normalizeRole(me: any) {
+  return String(me?.role ?? me?.user?.role ?? me?.data?.role ?? "");
+}
+
+function toNum(v: any) {
   if (v == null) return 0;
-  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
-  const n = Number(v);
+  const n = typeof v === "number" ? v : Number(String(v));
   return Number.isFinite(n) ? n : 0;
 }
 
-function formatMoney(n: number): string {
-  return (Number.isFinite(n) ? n : 0).toLocaleString("vi-VN");
+function clamp0(n: any) {
+  return Math.max(0, toNum(n));
 }
 
-function stripBracketPart(name: string): string {
-  if (!name) return "";
-  return name.replace(/\s*\[[^\]]*]/g, "");
+function parseMoneyInputToNumber(raw: string): number {
+  const digits = String(raw || "").replace(/[^\d]/g, "");
+  if (!digits) return 0;
+  const n = Number(digits);
+  return Number.isFinite(n) ? n : 0;
 }
 
-// ✅ NEW: lấy mã trong [...] (lấy cái [] đầu tiên)
-function extractBracketCode(name: string): string {
-  if (!name) return "";
-  const m = name.match(/\[([^\]]+)\]/);
-  return m ? String(m[1]).trim() : "";
+function normalizePaymentStatus(v: any): PaymentStatus | undefined {
+  if (v == null) return undefined;
+  const s = String(v).trim().toUpperCase();
+  if (s === "PAID" || s === "UNPAID" || s === "PARTIAL") return s as PaymentStatus;
+  return undefined;
 }
 
-function numberToVietnamese(amount: number): string {
-  if (isNaN(amount as any)) return "";
-  const n = Math.round(amount);
-  if (n === 0) return "Không đồng";
+function getReturnState(inv: InvoiceListItem): "NONE" | "PARTIAL" | "FULL" {
+  if (inv.type !== "SALES") return "NONE";
+  const st = inv.returnMeta?.state;
+  if (st === "FULL" || st === "PARTIAL" || st === "NONE") return st;
+  return "NONE";
+}
 
-  const digits = ["không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"];
-  const units = ["", " nghìn", " triệu", " tỷ", " nghìn tỷ", " triệu tỷ"];
+function getReturnedTotal(inv: InvoiceListItem) {
+  if (inv.type !== "SALES") return 0;
+  if (inv.returnMeta?.returnedTotal != null) return clamp0(inv.returnMeta.returnedTotal);
+  if (inv.returnedTotal != null) return clamp0(inv.returnedTotal);
+  return 0;
+}
 
-  function read3(num: number, full: boolean): string {
-    const hundred = Math.floor(num / 100);
-    const ten = Math.floor((num % 100) / 10);
-    const one = num % 10;
-    const parts: string[] = [];
+function calcSalesNetTotal(inv: InvoiceListItem) {
+  const total = clamp0(inv.totalAmount);
 
-    if (hundred > 0) parts.push(digits[hundred], "trăm");
-    else if (full && (ten > 0 || one > 0)) parts.push("không", "trăm");
+  if (inv.type !== "SALES") return total;
 
-    if (ten > 1) {
-      parts.push(digits[ten], "mươi");
-      if (one === 1) parts.push("mốt");
-      else if (one === 5) parts.push("lăm");
-      else if (one > 0) parts.push(digits[one]);
-    } else if (ten === 1) {
-      parts.push("mười");
-      if (one === 1) parts.push("một");
-      else if (one === 5) parts.push("lăm");
-      else if (one > 0) parts.push(digits[one]);
-    } else if (ten === 0 && one > 0) {
-      if (parts.length) parts.push("lẻ");
-      parts.push(digits[one]);
-    }
+  if (inv.returnMeta?.netTotal != null) return clamp0(inv.returnMeta.netTotal);
+  if (inv.netTotal != null) return clamp0(inv.netTotal);
 
-    return parts.join(" ");
+  const returned = getReturnedTotal(inv);
+  if (returned > 0) return clamp0(total - returned);
+
+  return total;
+}
+
+function getHoldAmount(inv: InvoiceListItem) {
+  if (inv.type === "SALES" && inv.returnMeta?.holdAmount != null) return clamp0(inv.returnMeta.holdAmount);
+  if (inv.hasWarrantyHold === true) return clamp0(inv.warrantyHoldAmount);
+  return 0;
+}
+
+function getCollectibleTotal(inv: InvoiceListItem) {
+  if (inv.type === "SALES" && inv.returnMeta?.collectible != null) return clamp0(inv.returnMeta.collectible);
+
+  const baseNet = inv.type === "SALES" ? calcSalesNetTotal(inv) : clamp0(inv.totalAmount);
+  const hold = getHoldAmount(inv);
+  return Math.max(0, baseNet - hold);
+}
+
+function isFullyReturned(inv: InvoiceListItem) {
+  if (inv.type !== "SALES") return false;
+
+  const st = getReturnState(inv);
+  if (st === "FULL") return true;
+
+  const returned = getReturnedTotal(inv);
+  const collectible = getCollectibleTotal(inv);
+  if (returned > 0 && collectible <= 0.0001) return true;
+
+  const total = clamp0(inv.totalAmount);
+  if (returned > 0 && total > 0) return returned + 0.0001 >= total;
+
+  return false;
+}
+
+function isPartialReturned(inv: InvoiceListItem) {
+  if (inv.type !== "SALES") return false;
+  const st = getReturnState(inv);
+  if (st === "PARTIAL") return true;
+
+  const returned = getReturnedTotal(inv);
+  return returned > 0.0001 && !isFullyReturned(inv);
+}
+
+function calcCollectibleRemaining(params: { collectibleTotal: number; paidNormal: number }) {
+  const collectibleTotal = clamp0(params.collectibleTotal);
+  const paidNormal = clamp0(params.paidNormal);
+  const remainingNormal = Math.max(0, collectibleTotal - paidNormal);
+  return { collectibleTotal, remainingNormal };
+}
+
+function derivePaymentStatus(inv: InvoiceListItem): PaymentStatus {
+  if (isFullyReturned(inv)) return "PAID";
+
+  const collectibleTotal = getCollectibleTotal(inv);
+  if (collectibleTotal <= 0.0001) return "PAID";
+
+  const paid = clamp0(inv.paidAmount);
+
+  if (paid <= 0.0001) return "UNPAID";
+  if (paid + 0.0001 >= collectibleTotal) return "PAID";
+  return "PARTIAL";
+}
+
+function resolvePaymentStatus(inv: InvoiceListItem): PaymentStatus {
+  if (isFullyReturned(inv)) return "PAID";
+
+  const collectibleTotal = getCollectibleTotal(inv);
+  if (collectibleTotal <= 0.0001) return "PAID";
+
+  const be = inv.paymentStatus;
+  if (be === "PAID" || be === "UNPAID" || be === "PARTIAL") {
+    const paid = clamp0(inv.paidAmount);
+    if (be === "UNPAID" && paid > 0.0001) return "PARTIAL";
+    if (be === "PARTIAL" && paid + 0.0001 >= collectibleTotal) return "PAID";
+    return be;
   }
 
-  let value = n;
-  const groups: number[] = [];
-  while (value > 0) {
-    groups.push(value % 1000);
-    value = Math.floor(value / 1000);
+  return derivePaymentStatus(inv);
+}
+
+/** ✅ Sort key for invoice code: numeric trailing digits if possible */
+function invoiceCodeToSortParts(code: string) {
+  const s = String(code ?? "").trim();
+
+  const m1 = s.match(/^(.*?)(\d+)\s*$/);
+  if (m1) {
+    const prefix = (m1[1] || "").trim();
+    const num = Number(m1[2]);
+    return { prefix, num: Number.isFinite(num) ? num : Number.POSITIVE_INFINITY, raw: s };
   }
 
-  const chunks: string[] = [];
-  let hadNonZero = false;
-
-  for (let idx = groups.length - 1; idx >= 0; idx--) {
-    const g = groups[idx];
-    if (g !== 0) {
-      const prefix = read3(g, hadNonZero);
-      const unit = units[idx] || "";
-      chunks.push(prefix + unit);
-      hadNonZero = true;
-    }
+  const m2 = s.match(/(\d+)(?!.*\d)/);
+  if (m2) {
+    const num = Number(m2[1]);
+    const idx = s.lastIndexOf(m2[1]);
+    const prefix = idx >= 0 ? s.slice(0, idx).trim() : s;
+    return { prefix, num: Number.isFinite(num) ? num : Number.POSITIVE_INFINITY, raw: s };
   }
 
-  let result = chunks.join(" ").replace(/\s+/g, " ").trim();
-  result = result.charAt(0).toUpperCase() + result.slice(1) + " đồng";
-  return result;
+  return { prefix: s, num: Number.POSITIVE_INFINITY, raw: s };
 }
 
-function pickUnitLabel(item: any): string {
-  if (!item) return "";
-  const u =
-    item?.unit?.name ??
-    item?.unit?.code ??
-    item?.unit?.symbol ??
-    item?.unitName ??
-    item?.unitLabel ??
-    item?.uom ??
-    item?.unit ??
-    "";
-  return u ? String(u) : "";
-}
+/* ========================= map 1 dòng từ API ========================= */
+function mapInvoiceRow(x: any): InvoiceListItem {
+        const total = toNum(x.total ?? x.totalAmount ?? x.grandTotal ?? x.subtotal ?? 0);
+        const rawDate = x.issueDate ?? x.date ?? x.createdAt ?? "";
 
-function extractArray(body: any): any[] {
-  const b = body;
-  if (!b) return [];
-  if (Array.isArray(b)) return b;
-  if (Array.isArray(b.items)) return b.items;
-  if (Array.isArray(b.data)) return b.data;
-  if (b.data && Array.isArray(b.data.items)) return b.data.items;
-  return [];
-}
+        const rm: ReturnMetaLite | undefined = x.returnMeta
+          ? {
+              state: x.returnMeta.state,
+              debtIgnore: !!x.returnMeta.debtIgnore,
+              returnedTotal: x.returnMeta.returnedTotal != null ? toNum(x.returnMeta.returnedTotal) : undefined,
+              netTotal: x.returnMeta.netTotal != null ? toNum(x.returnMeta.netTotal) : undefined,
+              holdAmount: x.returnMeta.holdAmount != null ? toNum(x.returnMeta.holdAmount) : undefined,
+              collectible: x.returnMeta.collectible != null ? toNum(x.returnMeta.collectible) : undefined,
+            }
+          : undefined;
 
-async function fetchItemLoose(itemId: string): Promise<any | null> {
-  if (!itemId) return null;
+        return {
+          id: x.id,
+          code: x.code ?? "",
+          date: rawDate,
+          type: (x.type === "PURCHASE" ? "PURCHASE" : "SALES") as InvoiceType,
 
-  try {
-    const r1 = await api.get(`/items/${itemId}`);
-    const b1 = unwrap<any>(r1);
-    if (b1 && (b1.id || b1.data?.id)) return b1.id ? b1 : b1.data;
-  } catch {}
+          partnerId: x.partnerId ?? x.partner?.id ?? undefined,
+          partnerName: x.partner?.name ?? x.partnerName ?? "",
+          note: x.note ?? null,
+          pendingPayAmount: toNum(x.pendingPayAmount ?? 0),
+          bookedPayAmount: toNum(x.bookedPayAmount ?? 0),
 
-  try {
-    const r2 = await api.get(`/items`, { params: { ids: itemId } });
-    const b2 = unwrap<any>(r2);
-    const arr = extractArray(b2);
-    const found = arr.find((x: any) => String(x?.id || "") === String(itemId));
-    if (found) return found;
-  } catch {}
+          totalAmount: total,
 
-  try {
-    const r3 = await api.get(`/items`, { params: { id: itemId } });
-    const b3 = unwrap<any>(r3);
-    const arr = extractArray(b3);
-    const found = arr.find((x: any) => String(x?.id || "") === String(itemId));
-    if (found) return found;
-  } catch {}
+          netTotal: x.netTotal != null ? toNum(x.netTotal) : undefined,
+          returnedTotal: x.returnedTotal != null ? toNum(x.returnedTotal) : undefined,
 
-  return null;
-}
+          returnMeta: rm,
 
-// ================= print modes =================
-// ✅ 4 khổ in, người in tự chọn (nhớ lựa chọn lần trước):
-//   A4      : giấy A4 dọc 210×297
-//   A5L     : giấy A5 THẬT, khổ ngang 210×148 (hoá đơn bán lẻ thường dùng)
-//   A5P     : giấy A5 THẬT, khổ dọc 148×210
-//   HALF_A4 : in khung A5 lên NỬA TRÊN tờ A4 (máy in chỉ có giấy A4, in xong cắt đôi)
-type PrintMode = "A4" | "A5L" | "A5P" | "HALF_A4";
+          paidAmount: x.paidAmount != null ? toNum(x.paidAmount) : 0,
 
-type PaperCfg = {
-  label: string;
-  hint: string;
-  page: string; // @page size
-  w: number; // mm
-  h: number; // mm
-  inset: number; // khung viền cách mép giấy (mm)
-  pad: { top: number; right: number; bottom: number; left: number };
-  compact: boolean;
-};
+          hasWarrantyHold: x.hasWarrantyHold === true,
+          warrantyHoldAmount: x.warrantyHoldAmount != null ? toNum(x.warrantyHoldAmount) : 0,
 
-const PAPERS: Record<PrintMode, PaperCfg> = {
-  A4: { label: "A4", hint: "Giấy A4 dọc", page: "A4 portrait", w: 210, h: 297, inset: 8, pad: { top: 14, right: 16, bottom: 14, left: 16 }, compact: false },
-  A5L: { label: "A5 ngang", hint: "Giấy A5 khổ ngang 210×148mm", page: "A5 landscape", w: 210, h: 148, inset: 5, pad: { top: 7, right: 10, bottom: 6, left: 10 }, compact: true },
-  A5P: { label: "A5 dọc", hint: "Giấy A5 khổ dọc 148×210mm", page: "A5 portrait", w: 148, h: 210, inset: 5, pad: { top: 7, right: 7, bottom: 6, left: 7 }, compact: true },
-  HALF_A4: { label: "Nửa tờ A4", hint: "In khổ A5 lên nửa trên tờ A4 rồi cắt đôi", page: "A4 portrait", w: 210, h: 297, inset: 5, pad: { top: 7, right: 10, bottom: 6, left: 10 }, compact: true },
-};
-const MODES: PrintMode[] = ["A4", "A5L", "A5P", "HALF_A4"];
-const LS_PAPER = "invoice_print_paper_v1";
-
-const A5_PREFER_MAX_LINES = 2;
-
-// khung A5 ngang đặt trên nửa trên tờ A4 (chế độ Nửa tờ A4)
-const A5_SLOT = { w: 200, h: 140 }; // mm
-const A5_SLOT_POS = { top: 10, left: (210 - A5_SLOT.w) / 2 };
-
-const SAFE_PX = 3;
-
-function ensurePrintStyleTag() {
-  let el = document.getElementById("print-page-style") as HTMLStyleElement | null;
-  if (!el) {
-    el = document.createElement("style");
-    el.id = "print-page-style";
-    document.head.appendChild(el);
-  }
-  return el;
-}
-
-function applyPrintMode(mode: PrintMode) {
-  const styleEl = ensurePrintStyleTag();
-  const cfg = PAPERS[mode];
-  const isSlot = mode === "HALF_A4";
-
-  styleEl.textContent = `
-/* print-mode: ${mode} */
-@page { size: ${cfg.page}; margin: 8mm 0; }
-@page :first { margin: 0; } /* trang 1 có khung viền sát mép; trang 2 trở đi chừa lề trên / dưới */
-
-html, body {
-  margin: 0;
-  padding: 0;
-  -webkit-print-color-adjust: exact;
-  print-color-adjust: exact;
-}
-
-.mm-ruler{ position: fixed; left: -1000mm; top: 0; width: 1mm; height: 1mm; pointer-events: none; opacity: 0; }
-
-@media screen {
-  body { background: #e2e8f0; }
-  .print-root{
-    width: ${cfg.w}mm;
-    min-height: ${cfg.h}mm;
-    margin: 16px auto 32px;
-    background: #fff;
-    box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 8px 30px rgba(0,0,0,.08);
-    position: relative;
-    box-sizing: border-box;
-    overflow: visible;
-  }
-  /* vạch báo hết trang 1 (chỉ hiện trên màn hình) */
-  .page-end{
-    position: absolute; left: 0; right: 0; top: ${isSlot ? A5_SLOT_POS.top + A5_SLOT.h : cfg.h}mm;
-    border-top: 1px dashed #ef4444; pointer-events: none; z-index: 5;
-  }
-  .page-end span{
-    position: absolute; right: 4px; top: 2px; font: 11px Arial, sans-serif; color: #ef4444; background: #fff; padding: 0 4px;
-  }
-}
-
-@media print {
-  /* CSS chung của app đặt chiều cao tối thiểu = cả màn hình -> dư 1 trang trắng khi in */
-  html, body, #root { height: auto !important; min-height: 0 !important; background: #fff !important; }
-  .no-print, .page-end { display: none !important; }
-  .print-root{
-    width: ${cfg.w}mm;
-    height: ${cfg.h}mm;
-    background: transparent;
-    position: relative;
-    overflow: visible !important;
-  }
-}
-
-table.invoice-table thead { display: table-header-group; }
-table.invoice-table tr { page-break-inside: avoid; break-inside: avoid; }
-.signatures-wrapper { page-break-inside: avoid; break-inside: avoid; }
-
-/* ====== khung viền cả trang (A4 / A5 thật) ====== */
-.a4-frame{
-  position: absolute;
-  inset: ${cfg.inset}mm;
-  border: 1px solid #000;
-  pointer-events: none;
-  z-index: 0;
-  display: ${isSlot ? "none" : "block"};
-}
-.print-root{ display: flow-root; } /* chặn lề của khung con "dồn" ra ngoài làm tụt cả trang 19px -> dư trang 2 */
-.page-box{
-  position: relative;
-  z-index: 1;
-  margin: ${cfg.inset}mm;
-  min-height: ${cfg.h - 2 * cfg.inset}mm;
-}
-.border-box{ border: none !important; box-shadow: none !important; }
-
-/* ====== Nửa tờ A4 ====== */
-.a5-slot{
-  position: absolute;
-  top: ${A5_SLOT_POS.top}mm;
-  left: ${A5_SLOT_POS.left}mm;
-  width: ${A5_SLOT.w}mm;
-  height: ${A5_SLOT.h}mm;
-  box-sizing: border-box;
-  display: ${isSlot ? "block" : "none"};
-}
-.a5-frame{ position: absolute; inset: ${cfg.inset}mm; border: 1px solid #000; pointer-events: none; z-index: 0; }
-.a5-slot .border-box{
-  position: absolute;
-  inset: ${cfg.inset}mm;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-`;
-}
-
-
-// ================= types =================
-type ApiPartner = {
-  id: string;
-  name?: string | null;
-  phone?: string | null;
-  email?: string | null;
-  address?: string | null;
-  addr?: string | null;
-  taxCode?: string | null;
-  tax?: string | null;
-  mst?: string | null;
-};
-
-type ApiInvoiceLine = {
-  id: string;
-  itemId: string;
-  itemName?: string | null;
-  itemSku?: string | null;
-  unit?: string | null;
-  qty: any;
-  price: any;
-  amount: any;
-  item?: { name: string; sku?: string | null; unit?: string | null } | null;
-};
-
-type ApiInvoice = {
-  id: string;
-  code: string;
-  issueDate: string;
-  type: "SALES" | "PURCHASE" | "SALES_RETURN" | "PURCHASE_RETURN";
-  partnerId?: string | null;
-  partner?: ApiPartner | null;
-  partnerName?: string | null;
-  partnerPhone?: string | null;
-  partnerAddr?: string | null;
-  partnerTax?: string | null;
-  subtotal?: any;
-  tax?: any;
-  total?: any;
-  shipFee?: any;
-  shipTax?: any;
-  laborFee?: any;
-  lines: ApiInvoiceLine[];
-};
-
-type Line = {
-  id: string;
-  code?: string; // ✅ NEW
-  name: string;
-  unit?: string;
-  qty: number;
-  price: number;
-  amount: number;
-};
-
-// ================= styles =================
-const styles: Record<string, React.CSSProperties> = {
-  borderBox: {
-    boxSizing: "border-box",
-    padding: "8mm 10mm 10mm",
-    display: "flex",
-    flexDirection: "column",
-    justifyContent: "flex-start",
-    fontFamily: "'Times New Roman', Arial, sans-serif",
-    fontSize: 13,
-    color: "#000",
-    background: "transparent",
-  },
-  topSection: { flexShrink: 0 },
-
-  headerRow: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 6,
-  },
-  logoBox: {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "flex-start",
-    gap: 10,
-    width: "auto",
-    maxWidth: "100%",
-  },
-  logoImg: { width: 85, height: 85, objectFit: "contain" },
-  companyInfo: { fontSize: 12, lineHeight: 1.4, textAlign: "left" },
-  companyName: { fontWeight: 700, fontSize: 14, textTransform: "uppercase" },
-
-  invoiceTitle: { textAlign: "center", fontWeight: 700, fontSize: 18, margin: "3mm 0 1.5mm" },
-
-  // ✅ meta luôn căn giữa và nằm đúng dưới title
-  invoiceMeta: {
-    width: "100%",
-    textAlign: "center",
-    fontSize: 12,
-    marginBottom: 6,
-    display: "flex",
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 18,
-    lineHeight: 1.2,
-  },
-
-  customerBox: {
-    borderTop: "1px solid #000",
-    borderBottom: "1px solid #000",
-    padding: "4px 0",
-    marginBottom: 6,
-    fontSize: 13,
-  },
-  customerRow: { display: "flex", gap: 12, marginBottom: 3 },
-  customerLabel: { width: 85, fontWeight: 600 },
-  customerValue: {
-    flex: 1,
-    borderBottom: "1px dotted #000",
-    wordBreak: "break-word",
-    whiteSpace: "normal",
-  },
-
-  table: { width: "100%", borderCollapse: "collapse", marginTop: 6, fontSize: 12.5 },
-  th: { border: "1px solid #000", padding: "3px 4px", textAlign: "center", fontWeight: 600 },
-  td: {
-    border: "1px solid #000",
-    padding: "3px 4px",
-    verticalAlign: "top",
-    wordBreak: "break-word",
-    whiteSpace: "normal",
-  },
-  tdCenter: { textAlign: "center" },
-  tdRight: { textAlign: "right" },
-
-  moneyRowLabel: { padding: "3px 6px", border: "1px solid #000" },
-  moneyRowValue: { padding: "3px 6px", border: "1px solid #000", textAlign: "right" },
-
-  textAmountRow: { fontSize: 12.5, marginTop: 6 },
-  bold: { fontWeight: 600 },
-
-  signaturesWrapper: { marginTop: "auto", marginBottom: "10mm" },
-  signaturesRow: { display: "flex", justifyContent: "space-between", fontSize: 12 },
-  signatureCol: { textAlign: "center", width: "33%" },
-  signatureLabel: { fontWeight: 600, marginBottom: 2 },
-  signatureNote: { fontStyle: "italic", fontSize: 11 },
-};
-
-// ================= component =================
-const InvoicePrintPage: React.FC = () => {
-  const { id } = useParams<{ id: string }>();
-  const [invoice, setInvoice] = useState<ApiInvoice | null>(null);
-  const [partner, setPartner] = useState<ApiPartner | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const [unitByItemId, setUnitByItemId] = useState<Record<string, string>>({});
-  // ✅ khổ in: lấy lựa chọn lần trước; chưa chọn bao giờ thì tự đoán theo số dòng (như cũ)
-  const savedPaper = (() => {
-    try {
-      const v = localStorage.getItem(LS_PAPER) as PrintMode | null;
-      return v && MODES.includes(v) ? v : null;
-    } catch {
-      return null;
-    }
-  })();
-  const [printMode, setPrintMode] = useState<PrintMode>(savedPaper || "A4");
-  const userPicked = useRef<boolean>(!!savedPaper);
-  const [overflow, setOverflow] = useState(false);
-
-  const printModeRef = useRef<PrintMode>(printMode);
-  useEffect(() => {
-    printModeRef.current = printMode;
-  }, [printMode]);
-
-  const borderBoxRef = useRef<HTMLDivElement>(null);
-  const mmRef = useRef<HTMLDivElement>(null);
-  const [layoutTick, setLayoutTick] = useState(0);
-
-  const pickPaper = (m: PrintMode) => {
-    userPicked.current = true;
-    setPrintMode(m);
-    try {
-      localStorage.setItem(LS_PAPER, m);
-    } catch {}
-  };
-
-  useEffect(() => {
-    applyPrintMode(printMode);
-  }, [printMode]);
-
-  useEffect(() => {
-    if (!id) return;
-    let alive = true;
-
-    (async () => {
-      try {
-        setLoading(true);
-        setUnitByItemId({});
-
-        const res = await api.get(`/invoices/${id}`);
-        const inv = unwrap<ApiInvoice>(res);
-        if (!alive) return;
-
-        setInvoice(inv);
-
-        let p: ApiPartner | null = inv.partner ?? null;
-        if (!p && inv.partnerId) {
-          try {
-            const pres = await api.get(`/partners/${inv.partnerId}`);
-            p = unwrap<ApiPartner>(pres);
-          } catch (e) {
-            console.warn("load partner for print failed, fallback invoice snapshot", e);
-          }
-        }
-        if (alive) setPartner(p);
-
-        const invLines = Array.isArray(inv?.lines) ? inv.lines : [];
-        const itemIds = Array.from(new Set(invLines.map((l) => String(l?.itemId || "").trim()).filter(Boolean)));
-
-        const needFetch = itemIds.filter((itemId) => {
-          const l = invLines.find((x) => String(x?.itemId || "") === itemId);
-          const u = String(l?.item?.unit ?? l?.unit ?? "").trim();
-          return !u;
-        });
-
-        if (needFetch.length > 0) {
-          let unitIdToLabel: Record<string, string> = {};
-          try {
-            const ures = await api.get(`/items/units`);
-            const ub = unwrap<any>(ures);
-            const arr = extractArray(ub);
-            unitIdToLabel = (arr || []).reduce((m: any, u: any) => {
-              const uid = String(u?.id || "");
-              const label = String(u?.name || u?.code || "").trim();
-              if (uid && label) m[uid] = label;
-              return m;
-            }, {});
-          } catch (e) {
-            console.warn("load units failed (print)", e);
-          }
-
-          const map: Record<string, string> = {};
-          await Promise.all(
-            needFetch.map(async (itemId) => {
-              try {
-                const item = await fetchItemLoose(itemId);
-                if (!item) return;
-
-                let label = String(pickUnitLabel(item) || "").trim();
-                if (!label) {
-                  const unitId = String(item?.unitId ?? item?.unit?.id ?? "").trim();
-                  if (unitId && unitIdToLabel[unitId]) label = unitIdToLabel[unitId];
-                }
-                if (label) map[itemId] = label;
-              } catch (e) {
-                console.warn("load item for unit failed", itemId, e);
-              }
-            })
-          );
-
-          if (alive) setUnitByItemId(map);
-        }
-      } catch (err) {
-        console.error("load invoice print error", err);
-        if (alive) {
-          const st = (err as any)?.response?.status;
-          setLoadError(st === 403 ? "Bạn không có quyền xem phiếu này." : st === 404 ? "Không tìm thấy phiếu." : "Không tải được phiếu. Vui lòng thử lại.");
-        }
-      } finally {
-        if (alive) setLoading(false);
+          paymentStatus: normalizePaymentStatus(x.paymentStatus),
+          status: (x.status as InvoiceStatus) ?? "DRAFT",
+          rejectInfo: x.rejectInfo ?? null,
+        };
       }
-    })();
 
-    return () => {
-      alive = false;
-    };
-  }, [id]);
+/** ✅ số ngày kể từ ngày hoá đơn (để nhắc thu nợ) */
+function daysSince(raw?: string) {
+  if (!raw) return 0;
+  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T00:00:00` : raw);
+  if (Number.isNaN(d.getTime())) return 0;
+  const today = new Date(`${vnTodayYmd()}T00:00:00`);
+  const dd = new Date(`${new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh" }).format(d)}T00:00:00`);
+  return Math.max(0, Math.round((today.getTime() - dd.getTime()) / 86400000));
+}
 
-  const issueDate = useMemo(() => formatDate(invoice?.issueDate), [invoice?.issueDate]);
+/* ========================= UI: Modal ========================= */
 
-  const lines: Line[] = useMemo(() => {
-    if (!invoice?.lines) return [];
-    return invoice.lines.map((l) => {
-      const qty = toNum(l.qty);
-      const price = toNum(l.price);
-      const amount = l.amount != null ? toNum(l.amount) : qty * price;
-
-      const unitFromInvoice = String(l.item?.unit ?? l.unit ?? "").trim();
-      const unitFromItem = String(unitByItemId[String(l.itemId || "")] ?? "").trim();
-
-      const rawName = String(l.item?.name ?? l.itemName ?? "");
-      const code = extractBracketCode(rawName);
-      const cleanName = stripBracketPart(rawName);
-
-      return {
-        id: l.id,
-        code,
-        name: cleanName,
-        unit: unitFromInvoice || unitFromItem || "",
-        qty,
-        price,
-        amount,
-      };
-    });
-  }, [invoice, unitByItemId]);
-
-  const linesKey = useMemo(() => lines.map((x) => `${x.id}|${x.qty}|${x.price}|${x.amount}|${x.code}`).join("||"), [lines]);
-
-  // ✅ chưa chọn khổ bao giờ: ít dòng thì nửa tờ A4 (giống trước), nhiều dòng thì A4
-  useEffect(() => {
-    if (!invoice || userPicked.current) return;
-    setPrintMode(lines.length <= A5_PREFER_MAX_LINES ? "HALF_A4" : "A4");
-  }, [invoice?.id, lines.length]);
-
-  // ✅ đo xem nội dung có dài quá 1 trang của khổ đang chọn không -> cảnh báo (không tự đổi khổ)
-  useLayoutEffect(() => {
-    if (!invoice) return;
-    let cancelled = false;
-    const check = () => {
-      if (cancelled) return;
-      const box = borderBoxRef.current;
-      const mm = 96 / 25.4; // 1mm = 3.7795px (CSS chuẩn); đo bằng thước bị làm tròn nên lệch
-      if (!box) return;
-      const cfg = PAPERS[printModeRef.current];
-      const over =
-        printModeRef.current === "HALF_A4"
-          ? box.scrollHeight > box.clientHeight + SAFE_PX
-          : box.offsetHeight > (cfg.h - 2 * cfg.inset) * mm + SAFE_PX;
-      setOverflow(over);
-    };
-    const raf = requestAnimationFrame(() => requestAnimationFrame(check));
-    const t = window.setTimeout(check, 200);
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(raf);
-      window.clearTimeout(t);
-    };
-  }, [invoice?.id, linesKey, layoutTick, printMode]);
-
-  useEffect(() => {
-    const onBeforePrint = () => applyPrintMode(printModeRef.current);
-    window.addEventListener("beforeprint", onBeforePrint);
-    return () => window.removeEventListener("beforeprint", onBeforePrint);
-  }, []);
-
-  const computedSubtotal = useMemo(() => lines.reduce((sum, l) => sum + toNum(l.amount), 0), [lines]);
-
-  if (loadError) return <div style={{ padding: 20, color: "#b91c1c" }}>{loadError}</div>;
-  if (loading || !invoice) return <div style={{ padding: 20 }}>Đang tải hóa đơn...</div>;
-
-  const subtotal = invoice.subtotal != null ? toNum(invoice.subtotal) : computedSubtotal;
-  const tax = invoice.tax != null ? toNum(invoice.tax) : 0;
-  const total = invoice.total != null ? toNum(invoice.total) : subtotal + tax;
-  const shipFee = toNum(invoice.shipFee);
-  const shipTax = toNum(invoice.shipTax);
-  const laborFee = toNum(invoice.laborFee);
-
-  const hasTax = tax > 0.0001;
-  const taxPercent = subtotal > 0 ? (tax / subtotal) * 100 : 0;
-  const taxPercentStr = hasTax ? taxPercent.toFixed(0) : "";
-  const totalText = numberToVietnamese(total);
-
-  const customerName = partner?.name ?? invoice.partnerName ?? "";
-  const customerAddr = partner?.address ?? partner?.addr ?? invoice.partnerAddr ?? "";
-  const customerPhone = partner?.phone ?? invoice.partnerPhone ?? "";
-  const customerTax = partner?.taxCode ?? partner?.mst ?? partner?.tax ?? invoice.partnerTax ?? "";
-
-  const title = (() => {
-    // ✅ phiếu in nội bộ, không phải hoá đơn điện tử (VAT) -> gọi là "Phiếu" để khỏi nhầm
-    if (invoice.type === "PURCHASE") return "PHIẾU NHẬP HÀNG";
-    if (invoice.type === "SALES") return "PHIẾU BÁN HÀNG";
-    if (invoice.type === "SALES_RETURN") return "PHIẾU TRẢ HÀNG (BÁN)";
-    if (invoice.type === "PURCHASE_RETURN") return "PHIẾU TRẢ HÀNG (NHẬP)";
-    return "HÓA ĐƠN";
-  })();
-
-  const cfg = PAPERS[printMode];
-  const isSlot = printMode === "HALF_A4";
-  // compact = mọi khổ A5 (chữ nhỏ, khoảng cách hẹp); A5 dọc còn hẹp hơn nữa
-  const narrow = printMode === "A5P";
-  const pad = cfg.pad;
-
-  const borderBoxStyle: React.CSSProperties = {
-    ...styles.borderBox,
-    padding: `${pad.top}mm ${pad.right}mm ${pad.bottom}mm ${pad.left}mm`,
-    fontSize: narrow ? 11.5 : cfg.compact ? 12.5 : 13,
-    ...(isSlot ? {} : { minHeight: `${cfg.h - 2 * cfg.inset}mm` }),
-  };
-
-  const logoImgStyle: React.CSSProperties = {
-    ...styles.logoImg,
-    width: narrow ? 52 : cfg.compact ? 64 : 85,
-    height: narrow ? 52 : cfg.compact ? 64 : 85,
-  };
-
-  const companyInfoStyle: React.CSSProperties = {
-    ...styles.companyInfo,
-    fontSize: narrow ? 9.6 : cfg.compact ? 11 : 12,
-    lineHeight: cfg.compact ? 1.25 : 1.4,
-  };
-
-  const companyNameStyle: React.CSSProperties = {
-    ...styles.companyName,
-    fontSize: narrow ? 11 : cfg.compact ? 12.5 : 14,
-  };
-
-  const invoiceTitleStyle: React.CSSProperties = {
-    ...styles.invoiceTitle,
-    fontSize: cfg.compact ? 16.5 : 18,
-    margin: cfg.compact ? "2mm 0 1mm" : "3mm 0 1.5mm",
-  };
-
-  const customerBoxStyle: React.CSSProperties = {
-    ...styles.customerBox,
-    padding: cfg.compact ? "2px 0" : styles.customerBox.padding,
-    marginBottom: cfg.compact ? 4 : 6,
-    fontSize: cfg.compact ? 12.3 : 13,
-  };
-
-  const customerLabelStyle: React.CSSProperties = {
-    ...styles.customerLabel,
-    width: cfg.compact ? 78 : 85,
-  };
-
-  const customerRowStyle: React.CSSProperties = {
-    ...styles.customerRow,
-    marginBottom: cfg.compact ? 2 : 3,
-  };
-
-  const tableStyle: React.CSSProperties = {
-    ...styles.table,
-    marginTop: cfg.compact ? 4 : 6,
-    fontSize: narrow ? 10.2 : cfg.compact ? 11.5 : 12.5,
-  };
-
-  const thStyle: React.CSSProperties = { ...styles.th, padding: cfg.compact ? "2px 3px" : styles.th.padding };
-  const tdStyle: React.CSSProperties = { ...styles.td, padding: cfg.compact ? "2px 3px" : styles.td.padding };
-
-  const moneyRowLabelStyle: React.CSSProperties = {
-    ...styles.moneyRowLabel,
-    padding: cfg.compact ? "2px 5px" : styles.moneyRowLabel.padding,
-  };
-  const moneyRowValueStyle: React.CSSProperties = {
-    ...styles.moneyRowValue,
-    padding: cfg.compact ? "2px 5px" : styles.moneyRowValue.padding,
-  };
-
-  const signaturesWrapperStyle: React.CSSProperties = cfg.compact
-    ? { ...styles.signaturesWrapper, marginTop: "auto", marginBottom: "2mm" }
-    : { ...styles.signaturesWrapper, marginTop: "auto", marginBottom: "10mm" };
-
-  const signaturesRowStyle: React.CSSProperties = {
-    ...styles.signaturesRow,
-    fontSize: cfg.compact ? 11 : 12,
-  };
-
-  const signatureNoteStyle: React.CSSProperties = {
-    ...styles.signatureNote,
-    fontSize: cfg.compact ? 10 : 11,
-  };
-
-  const InvoiceContent = (
-    <>
-      <div style={styles.topSection}>
-        <div style={{ ...styles.headerRow, marginBottom: cfg.compact ? 4 : 6 }}>
-          <div style={{ ...styles.logoBox, gap: cfg.compact ? 8 : 10 }}>
-            <img
-              src="/logo-mcbrother.png"
-              alt="MCBROTHER logo"
-              style={logoImgStyle}
-              onLoad={() => setLayoutTick((t) => t + 1)}
-              onError={() => setLayoutTick((t) => t + 1)}
-            />
-            <div style={companyInfoStyle}>
-              <div style={companyNameStyle}>CÔNG TY CỔ PHẦN THIẾT BỊ MCBROTHER</div>
-              <div>Địa chỉ: 33 Đường số 5, Khu dân cư Vĩnh Lộc, Phường Bình Tân, TP. Hồ Chí Minh</div>
-              <div>
-                Điện thoại: 028.6273.2018 &nbsp;–&nbsp; Mã số thuế: 0312229437
-              </div>
-              <div>Email: mcbrother2013@gmail.com</div>
-            </div>
-          </div>
+function Modal(props: {
+  open: boolean;
+  title: string;
+  children: React.ReactNode;
+  onClose: () => void;
+  footer?: React.ReactNode;
+}) {
+  if (!props.open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40" onClick={props.onClose} />
+      <div className="relative w-[560px] max-w-[92vw] bg-white rounded-xl shadow-xl border border-gray-200">
+        <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+          <div className="text-base font-semibold">{props.title}</div>
+          <button
+            className="text-gray-500 hover:text-gray-800"
+            onClick={props.onClose}
+            aria-label="Đóng"
+            type="button"
+          >
+            ✕
+          </button>
         </div>
-
-        <div style={invoiceTitleStyle}>{title}</div>
-
-        <div style={{ ...styles.invoiceMeta, marginBottom: cfg.compact ? 4 : 6 }}>
-          <div>
-            Số: <span style={styles.bold}>{invoice.code}</span>
-          </div>
-          <div>
-            Ngày lập: <span style={styles.bold}>{issueDate}</span>
-          </div>
-        </div>
-
-        <div style={customerBoxStyle}>
-          <div style={customerRowStyle}>
-            <div style={customerLabelStyle}>Khách hàng:</div>
-            <div style={styles.customerValue}>{customerName}</div>
-          </div>
-          <div style={customerRowStyle}>
-            <div style={customerLabelStyle}>Địa chỉ:</div>
-            <div style={styles.customerValue}>{customerAddr}</div>
-          </div>
-          <div style={customerRowStyle}>
-            <div style={customerLabelStyle}>Điện thoại:</div>
-            <div style={styles.customerValue}>{customerPhone}</div>
-          </div>
-          {/* ✅ khách không có mã số thuế (khách lẻ) thì ẩn dòng này cho gọn */}
-          {String(customerTax || "").trim() && (
-            <div style={customerRowStyle}>
-              <div style={customerLabelStyle}>Mã số thuế:</div>
-              <div style={styles.customerValue}>{customerTax}</div>
-            </div>
-          )}
-        </div>
-
-        <table style={tableStyle} className="invoice-table">
-          <thead>
-            <tr>
-              <th style={{ ...thStyle, width: "6%" }}>STT</th>
-              <th style={{ ...thStyle, width: "14%" }}>Mã hàng</th>
-              <th style={{ ...thStyle, width: "32%" }}>Tên hàng hóa</th>
-              <th style={{ ...thStyle, width: "8%" }}>ĐVT</th>
-              <th style={{ ...thStyle, width: "8%" }}>Số lượng</th>
-              <th style={{ ...thStyle, width: "16%" }}>Đơn giá</th>
-              <th style={{ ...thStyle, width: "16%" }}>Thành tiền</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lines.map((l, idx) => (
-              <tr key={l.id}>
-                <td style={{ ...tdStyle, ...styles.tdCenter }}>{idx + 1}</td>
-                <td style={{ ...tdStyle, ...styles.tdCenter }}>{l.code || "-"}</td>
-                <td style={tdStyle}>{l.name}</td>
-                <td style={{ ...tdStyle, ...styles.tdCenter }}>{l.unit}</td>
-                <td style={{ ...tdStyle, ...styles.tdCenter }}>{l.qty}</td>
-                <td style={{ ...tdStyle, ...styles.tdRight }}>{formatMoney(l.price)}</td>
-                <td style={{ ...tdStyle, ...styles.tdRight }}>{formatMoney(l.amount)}</td>
-              </tr>
-            ))}
-
-            <tr>
-              <td colSpan={6} style={moneyRowLabelStyle}>
-                Tạm tính
-              </td>
-              <td colSpan={1} style={moneyRowValueStyle}>
-                {formatMoney(subtotal)} đ
-              </td>
-            </tr>
-
-            {shipFee > 0 && (
-              <tr>
-                <td colSpan={6} style={moneyRowLabelStyle}>
-                  Phí vận chuyển
-                </td>
-                <td colSpan={1} style={moneyRowValueStyle}>
-                  {formatMoney(shipFee)} đ
-                </td>
-              </tr>
-            )}
-
-            {hasTax && (
-              <tr>
-                <td colSpan={6} style={moneyRowLabelStyle}>
-                  Thuế GTGT ({taxPercentStr}%)
-                </td>
-                <td colSpan={1} style={moneyRowValueStyle}>
-                  {formatMoney(tax + shipTax)} đ
-                </td>
-              </tr>
-            )}
-
-            {laborFee > 0 && (
-              <tr>
-                <td colSpan={6} style={moneyRowLabelStyle}>
-                  Công kỹ thuật (không VAT)
-                </td>
-                <td colSpan={1} style={moneyRowValueStyle}>
-                  {formatMoney(laborFee)} đ
-                </td>
-              </tr>
-            )}
-
-            <tr>
-              <td colSpan={6} style={moneyRowLabelStyle}>
-                Tổng cộng
-              </td>
-              <td colSpan={1} style={moneyRowValueStyle}>
-                {formatMoney(total)} đ
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        <div style={{ ...styles.textAmountRow, marginTop: cfg.compact ? 4 : 6, fontSize: cfg.compact ? 11.7 : 12.5 }}>
-          Số tiền bằng chữ: <span style={styles.bold}>{totalText}</span>
-        </div>
-      </div>
-
-      <div style={signaturesWrapperStyle} className="signatures-wrapper">
-        <div style={signaturesRowStyle}>
-          <div style={styles.signatureCol}>
-            <div style={styles.signatureLabel}>Người lập phiếu</div>
-            <div style={signatureNoteStyle}>(Ký, ghi rõ họ tên)</div>
-          </div>
-          <div style={styles.signatureCol}>
-            <div style={styles.signatureLabel}>Người giao hàng</div>
-            <div style={signatureNoteStyle}>(Ký, ghi rõ họ tên)</div>
-          </div>
-          <div style={styles.signatureCol}>
-            <div style={styles.signatureLabel}>Khách hàng</div>
-            <div style={signatureNoteStyle}>(Ký, ghi rõ họ tên)</div>
-          </div>
-        </div>
-      </div>
-    </>
-  );
-
-  const toolbar = (
-    <div className="no-print sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
-      <div className="mx-auto flex max-w-[1100px] flex-wrap items-center gap-2 px-4 py-2.5">
-        <div className="mr-auto min-w-0">
-          <div className="truncate text-sm font-semibold text-slate-900">
-            In {title.toLowerCase()} số {invoice.code}
-          </div>
-          <div className="text-xs text-slate-500">{cfg.hint}</div>
-        </div>
-        <div className="inline-flex flex-wrap rounded-lg border border-slate-200 bg-slate-50 p-0.5" role="radiogroup" aria-label="Khổ giấy">
-          {MODES.map((m) => (
-            <button
-              key={m}
-              type="button"
-              role="radio"
-              aria-checked={printMode === m}
-              title={PAPERS[m].hint}
-              onClick={() => pickPaper(m)}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-                printMode === m ? "bg-slate-900 text-white" : "text-slate-600 hover:text-slate-900"
-              }`}
-            >
-              {PAPERS[m].label}
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          onClick={() => window.print()}
-          className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
-        >
-          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.9} aria-hidden="true">
-            <path d="M7 8V3h10v5M7 17H5a2 2 0 01-2-2v-5a2 2 0 012-2h14a2 2 0 012 2v5a2 2 0 01-2 2h-2" strokeLinejoin="round" />
-            <rect x="7" y="13" width="10" height="8" rx="1" />
-          </svg>
-          In (Ctrl+P)
-        </button>
-      </div>
-      {overflow && (
-        <div className="border-t border-amber-200 bg-amber-50">
-          <div className="mx-auto max-w-[1100px] px-4 py-2 text-sm text-amber-900">
-            {isSlot
-              ? "Hoá đơn dài hơn nửa tờ A4 nên sẽ bị cắt mất phần dưới. Chọn A4 hoặc A5 để in đủ."
-              : printMode === "A4"
-                ? "Hoá đơn dài, có thể in sang trang 2 (đầu bảng tự lặp lại)."
-                : `Hoá đơn dài, có thể in sang trang 2 khổ ${cfg.label}. Muốn chắc chắn gọn 1 tờ thì chọn A4.`}
-          </div>
-        </div>
-      )}
-      <div className="mx-auto max-w-[1100px] px-4 pb-2 text-xs text-slate-500">
-        Trong hộp in của trình duyệt: chọn đúng khổ giấy {isSlot ? "A4" : cfg.label.split(" ")[0]}
-        {printMode === "A5L" ? " ngang (Landscape)" : ""}, Lề = Không có (None), Tỷ lệ = 100%, tắt Đầu trang và chân trang.
+        <div className="px-5 py-4">{props.children}</div>
+        {props.footer ? <div className="px-5 py-4 border-t border-gray-200">{props.footer}</div> : null}
       </div>
     </div>
   );
+}
+
+// nút icon ở cột thao tác
+const ACT_BTN =
+  "grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 " +
+  "disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent disabled:hover:text-slate-300";
+
+/* ========================= Page ========================= */
+
+const InvoicesPage: React.FC = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const toast = useToast();
+
+  // ✅ sync filter to URL
+  const [sp, setSp] = useSearchParams();
+
+  const containerTopRef = useRef<HTMLDivElement | null>(null);
+
+  const scrollToTop = (smooth = true) => {
+    const el = containerTopRef.current;
+    if (el && "scrollIntoView" in el) {
+      el.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+      return;
+    }
+    window.scrollTo({ top: 0, behavior: smooth ? "smooth" : "auto" });
+  };
+
+  // ✅ staff: danh sách luôn là hoá đơn bán, bộ lọc chỉ còn ngày (kể cả khi mở link có ?type=PURCHASE)
+  const { user: authUser } = useAuth();
+  const staffSalesOnly = authUser?.role === "staff";
+
+  const readQuery = () => {
+    const q = sp.get("q") ?? "";
+    const from = sp.get("from") ?? "";
+    const to = sp.get("to") ?? "";
+    const type = (sp.get("type") ?? "SALES") as InvoiceTypeFilter;
+    const src = (sp.get("src") ?? "INVOICE") as SourceFilter;
+
+    const safeType: InvoiceTypeFilter = staffSalesOnly
+      ? "SALES"
+      : type === "PURCHASE" || type === "SALES" || type === ""
+        ? type
+        : "SALES";
+    const safeSrc: SourceFilter = !staffSalesOnly && src === "ADJUST" ? "ADJUST" : "INVOICE";
+
+    const view: "all" | "debt" = sp.get("view") === "debt" ? "debt" : "all";
+    return { q, from, to, type: safeType, src: safeSrc, view, cod: sp.get("cod") ?? "" };
+  };
+
+  const writeQuery = (next: { q: string; from: string; to: string; type: InvoiceTypeFilter; src: SourceFilter; view?: "all" | "debt" }) => {
+    const params: any = {};
+    if (next.q.trim()) params.q = next.q.trim();
+    if (next.from) params.from = next.from;
+    if (next.to) params.to = next.to;
+    if (next.type) params.type = next.type;
+    if (next.src && next.src !== "INVOICE") params.src = next.src; // mặc định INVOICE thì không cần ghi
+    const v = next.view ?? viewRef.current;
+    if (v === "debt") params.view = "debt";
+    if (codRef.current) params.cod = codRef.current;
+    setSp(params, { replace: true });
+  };
+
+  const initial = useMemo(() => readQuery(), [location.key]); // key đổi khi back/forward
+
+  const [search, setSearch] = useState(initial.q);
+  const [from, setFrom] = useState(initial.from);
+  const [to, setTo] = useState(initial.to);
+
+  // ✅ mặc định theo URL (nếu không có thì SALES)
+  const [typeFilter, setTypeFilter] = useState<InvoiceTypeFilter>(initial.type || "SALES");
+
+  // ✅ lọc đơn COD: "" = tất cả, "all" = mọi đơn COD, còn lại là đơn vị vận chuyển
+  const [codFilter, setCodFilter] = useState(initial.cod);
+  const [codCarriers, setCodCarriers] = useState<string[]>([]);
+
+  // ✅ NEW: hóa đơn / điều chỉnh
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>(initial.src || "INVOICE");
+
+  const [loading, setLoading] = useState(false);
+
+  // ✅ tab "Chưa thu đủ": hoá đơn đã duyệt còn nợ (không theo khoảng ngày, cũ nhất lên đầu)
+  const [view, setView] = useState<"all" | "debt">(initial.view);
+  const viewRef = useRef(view);
+  const codRef = useRef("");
+  viewRef.current = view;
+  const [debtRows, setDebtRows] = useState<InvoiceListItem[]>([]);
+  const [debtLoading, setDebtLoading] = useState(false);
+  const [invoices, setInvoices] = useState<InvoiceListItem[]>([]);
+
+  const [role, setRole] = useState<string>("");
+  const isStaff = role === "staff";
+  const isAdmin = role === "admin";
+  const isAccountant = role === "accountant";
+  const canApprove = role === "admin" || role === "accountant";
+
+  const [costAsk, setCostAsk] = useState<null | { items: BackorderCostItem[]; submit: (costs: Record<string, number>) => Promise<void> }>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmTitle, setConfirmTitle] = useState("Xác nhận");
+  const [confirmMessage, setConfirmMessage] = useState<React.ReactNode>(null);
+  const [confirmAction, setConfirmAction] = useState<null | (() => Promise<void>)>(null);
+  const [confirmLoading, setConfirmLoading] = useState(false);
+
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+  const [rejectTarget, setRejectTarget] = useState<InvoiceListItem | null>(null);
+  const [rejectLoading, setRejectLoading] = useState(false);
+
+  const [accounts, setAccounts] = useState<PaymentAccount[]>([]);
+  const [accountsLoading, setAccountsLoading] = useState(false);
+
+  const [payOpen, setPayOpen] = useState(false);
+  const [payTarget, setPayTarget] = useState<InvoiceListItem | null>(null);
+  const [payAccountId, setPayAccountId] = useState<string>("");
+  const [payAmount, setPayAmount] = useState<number>(0);
+  const [payAmountText, setPayAmountText] = useState<string>("0");
+  const [payDate, setPayDate] = useState<string>(() => vnTodayYmd());
+  const [paySubmitting, setPaySubmitting] = useState(false);
+  const [payNote, setPayNote] = useState<string>("");
+  const [reopenTarget, setReopenTarget] = useState<InvoiceListItem | null>(null);
+
+  const payAmountInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [highlightInvoiceId, setHighlightInvoiceId] = useState<string>("");
+
+  useEffect(() => {
+    api
+      .get("/auth/me", { params: { t: Date.now() } })
+      .then((res) => {
+        const u = unwrapUser(res);
+        setRole(normalizeRole(u));
+      })
+      .catch((err) => {
+        console.error("load auth/me error", err);
+        setRole("");
+      });
+  }, []);
+
+  const openConfirm = (opts: { title: string; message: React.ReactNode; action: () => Promise<void> }) => {
+    setConfirmTitle(opts.title);
+    setConfirmMessage(opts.message);
+    setConfirmAction(() => opts.action);
+    setConfirmOpen(true);
+  };
+
+  const loadAccounts = async () => {
+    try {
+      setAccountsLoading(true);
+
+      const res = await api.get("/payment-accounts", {
+        params: { active: 1, _ts: Date.now() },
+      });
+
+      const arr: any[] = Array.isArray(res?.data)
+        ? res.data
+        : Array.isArray(res?.data?.data)
+        ? res.data.data
+        : [];
+
+      const mapped: PaymentAccount[] = arr
+        .map((a: any) => ({
+          id: String(a.id),
+          code: String(a.code || ""),
+          name: String(a.name || ""),
+          type: a.type ? String(a.type) : undefined,
+          bankName: a.bankName ?? null,
+          accountNo: a.accountNo ?? null,
+        }))
+        .filter((a) => a.id && a.id !== "undefined" && a.id !== "null");
+
+      setAccounts(mapped);
+    } catch (err) {
+      console.error("load payment accounts error", err);
+      setAccounts([]);
+    } finally {
+      setAccountsLoading(false);
+    }
+  };
+
+  const fetchInvoices = async (q: string, fromVal: string, toVal: string, typeVal: InvoiceTypeFilter) => {
+    try {
+      setLoading(true);
+
+      const res = await api.get("/invoices", {
+        params: {
+          q,
+          page: 1,
+          pageSize: 300,
+          type: typeVal || "",
+          from: fromVal || undefined,
+          to: toVal || undefined,
+          cod: codRef.current || undefined,
+          _ts: Date.now(),
+        },
+      });
+
+      const data: any[] = unwrapList(res);
+
+      const filtered = (Array.isArray(data) ? data : []).filter((x: any) => {
+        const t = String(x.type || "") as AnyInvoiceType;
+        if (!(t === "SALES" || t === "PURCHASE")) return false;
+        if (typeVal && t !== typeVal) return false;
+        return true;
+      });
+
+      const mapped: InvoiceListItem[] = filtered.map(mapInvoiceRow);
+
+      mapped.sort((a, b) => {
+        const pa = invoiceCodeToSortParts(a.code);
+        const pb = invoiceCodeToSortParts(b.code);
+
+        const pfx = pa.prefix.localeCompare(pb.prefix, "vi", { sensitivity: "base" });
+        if (pfx !== 0) return pfx;
+
+        if (pa.num !== pb.num) return pb.num - pa.num; // ✅ DESC
+
+        return pb.raw.localeCompare(pa.raw, "vi", { numeric: true, sensitivity: "base" });
+      });
+
+      setInvoices(mapped);
+    } catch (err: any) {
+      console.error("load invoices error", err);
+      toast.push({
+        type: "error",
+        title: "Lỗi",
+        message: err?.response?.data?.message || err?.message || "Không tải được danh sách hóa đơn.",
+      });
+      setInvoices([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ✅ NEW: fetch adjustments (adjust move) — m gửi endpoint thật tao sẽ thay đúng
+  const fetchAdjustments = async (q: string, fromVal: string, toVal: string) => {
+    try {
+      setLoading(true);
+
+      // TODO: thay bằng endpoint adjust move thật của m
+      // Ví dụ (placeholder): /movements?kind=ADJUST&page=1&pageSize=300&q=...
+      const res = await api.get("/movements", {
+        params: {
+          page: 1,
+          pageSize: 300,
+          q: q || undefined,
+          from: fromVal || undefined,
+          to: toVal || undefined,
+          // kind: "ADJUST",
+          _ts: Date.now(),
+        },
+      });
+
+      const data: any[] = unwrapList(res);
+
+      // Map tạm sang InvoiceListItem để reuse UI (m gửi schema tao map đúng 100%)
+      const mapped: InvoiceListItem[] = (Array.isArray(data) ? data : []).map((x: any) => {
+        const total = toNum(x.total ?? x.totalAmount ?? x.amount ?? 0);
+        const rawDate = x.issueDate ?? x.date ?? x.createdAt ?? "";
+
+        return {
+          id: x.id,
+          code: x.code ?? x.refCode ?? x.movementCode ?? "(ADJ)",
+          date: rawDate,
+          type: "SALES", // chỉ để pass type, UI badge/logic sẽ hơi lệch nếu không map đúng => chờ endpoint thật
+          partnerId: x.partnerId ?? undefined,
+          partnerName: x.partnerName ?? x.note ?? "Điều chỉnh",
+          totalAmount: total,
+          paidAmount: 0,
+          paymentStatus: "PAID",
+          status: "APPROVED",
+        };
+      });
+
+      setInvoices(mapped);
+    } catch (err: any) {
+      console.error("load adjustments error", err);
+      toast.push({
+        type: "error",
+        title: "Lỗi",
+        message: err?.response?.data?.message || err?.message || "Không tải được chứng từ điều chỉnh.",
+      });
+      setInvoices([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchDebts = async (q: string, typeVal: InvoiceTypeFilter) => {
+    try {
+      setDebtLoading(true);
+      const res = await api.get("/invoices", {
+        params: { q, page: 1, pageSize: 1000, type: typeVal || "", status: "APPROVED", paymentStatus: "UNPAID,PARTIAL", cod: codRef.current || undefined, _ts: Date.now() },
+      });
+      const data: any[] = unwrapList(res);
+      const rows = (Array.isArray(data) ? data : [])
+        .filter((x: any) => x.type === "SALES" || x.type === "PURCHASE")
+        .filter((x: any) => !typeVal || x.type === typeVal)
+        .map(mapInvoiceRow)
+        .filter((inv) => {
+          if (inv.status !== "APPROVED" || isFullyReturned(inv)) return false;
+          const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal: getCollectibleTotal(inv), paidNormal: clamp0(inv.paidAmount) });
+          return remainingNormal > 0.5;
+        })
+        .sort((a, b) => String(a.date || "").localeCompare(String(b.date || ""))); // cũ nhất lên đầu
+      setDebtRows(rows);
+    } catch (err: any) {
+      console.error("load debts error", err);
+      setDebtRows([]);
+    } finally {
+      setDebtLoading(false);
+    }
+  };
+
+  const runFetchBySource = async (opts: { q: string; from: string; to: string; type: InvoiceTypeFilter; src: SourceFilter }) => {
+    if (opts.src === "ADJUST") {
+      await fetchAdjustments(opts.q, opts.from, opts.to);
+      return;
+    }
+    await Promise.all([fetchInvoices(opts.q, opts.from, opts.to, opts.type), fetchDebts(opts.q, opts.type)]);
+  };
+
+  const switchView = (v: "all" | "debt") => {
+    setView(v);
+    viewRef.current = v;
+    writeQuery({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter, view: v });
+  };
+
+  const debtSummary = useMemo(() => {
+    let total = 0, over30 = 0, over30Amt = 0;
+    for (const inv of debtRows) {
+      const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal: getCollectibleTotal(inv), paidNormal: clamp0(inv.paidAmount) });
+      total += remainingNormal;
+      if (daysSince(inv.date) > 30) {
+        over30++;
+        over30Amt += remainingNormal;
+      }
+    }
+    return { count: debtRows.length, total, over30, over30Amt };
+  }, [debtRows]);
+  const isDebtView = view === "debt" && sourceFilter === "INVOICE";
+  const rowsShown = isDebtView ? debtRows : invoices;
+  const debtWord = typeFilter === "PURCHASE" ? "trả" : typeFilter === "SALES" ? "thu" : "thu / trả";
+
+  // ✅ initial load based on URL query (fix back button reset)
+  useEffect(() => {
+    const q0 = readQuery();
+
+    // sync state -> query
+    setSearch(q0.q);
+    setFrom(q0.from);
+    setTo(q0.to);
+    setTypeFilter(q0.type || "SALES");
+    setSourceFilter(q0.src || "INVOICE");
+    setView(q0.view);
+    setCodFilter(q0.cod);
+    codRef.current = q0.cod;
+    api.get("/invoices/cod-carriers").then((r) => setCodCarriers(r.data?.data || [])).catch(() => setCodCarriers([]));
+
+    runFetchBySource({ q: q0.q, from: q0.from, to: q0.to, type: q0.type || "SALES", src: q0.src || "INVOICE" });
+    loadAccounts();
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.key]);
+
+  useEffect(() => {
+    if (!payOpen) return;
+    const t = setTimeout(() => {
+      const el = payAmountInputRef.current;
+      if (el) {
+        el.focus();
+        el.select();
+      }
+    }, 30);
+    return () => clearTimeout(t);
+  }, [payOpen]);
+
+  useEffect(() => {
+    if (!highlightInvoiceId) return;
+    const t = setTimeout(() => {
+      const el = document.getElementById(`${window.innerWidth < 768 ? "inv-card" : "inv-row"}-${highlightInvoiceId}`);
+      if (el && "scrollIntoView" in el) {
+        // @ts-ignore
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }, 80);
+    return () => clearTimeout(t);
+  }, [highlightInvoiceId, invoices.length]);
+
+  const handleApplyFilter = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+
+    const next = {
+      q: search.trim(),
+      from,
+      to,
+      type: typeFilter,
+      src: sourceFilter,
+    };
+
+    writeQuery(next);
+    await runFetchBySource(next);
+    scrollToTop(true);
+  };
+
+  const handleClearFilter = async () => {
+    const next = { q: search.trim(), from: "", to: "", type: "SALES" as InvoiceTypeFilter, src: "INVOICE" as SourceFilter };
+
+    setFrom("");
+    setTo("");
+    setTypeFilter("SALES");
+    setSourceFilter("INVOICE");
+    setCodFilter("");
+    codRef.current = "";
+
+    writeQuery(next);
+    await runFetchBySource(next);
+    scrollToTop(true);
+  };
+
+  const handleDelete = async (inv: InvoiceListItem) => {
+    if (!inv.id) return;
+
+    if (isStaff && inv.status !== "DRAFT") {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Chỉ được xóa hóa đơn ở trạng thái NHÁP." });
+      return;
+    }
+    if (!isStaff && inv.status === "APPROVED") {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Hóa đơn đã duyệt, không thể xóa." });
+      return;
+    }
+
+    openConfirm({
+      title: "Xóa hóa đơn",
+      message: (
+        <div className="text-sm text-gray-700">
+          Bạn có chắc muốn xóa hóa đơn <b>{inv.code}</b> không?
+        </div>
+      ),
+      action: async () => {
+        await api.delete(`/invoices/${inv.id}`);
+        toast.push({ type: "success", title: "Thành công", message: "Đã xóa hóa đơn." });
+        await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
+      },
+    });
+  };
+
+  const handleSubmit = async (inv: InvoiceListItem) => {
+    if (!inv.id) return;
+    if (inv.status !== "DRAFT") {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Chỉ hóa đơn NHÁP mới gửi duyệt được." });
+      return;
+    }
+
+    openConfirm({
+      title: "Gửi duyệt",
+      message: (
+        <div className="text-sm text-gray-700">
+          Gửi duyệt hóa đơn <b>{inv.code}</b>?
+        </div>
+      ),
+      action: async () => {
+        await api.post(`/invoices/${inv.id}/submit`);
+        toast.push({ type: "success", title: "Thành công", message: "Đã gửi duyệt." });
+        await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
+      },
+    });
+  };
+
+  const handleRecall = async (inv: InvoiceListItem) => {
+    if (!inv.id) return;
+    if (inv.status !== "SUBMITTED") {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Chỉ hóa đơn CHỜ DUYỆT mới hủy gửi duyệt được." });
+      return;
+    }
+
+    openConfirm({
+      title: "Hủy gửi duyệt",
+      message: (
+        <div className="text-sm text-gray-700">
+          Hủy gửi duyệt hóa đơn <b>{inv.code}</b> (quay về NHÁP)?
+        </div>
+      ),
+      action: async () => {
+        await api.post(`/invoices/${inv.id}/recall`);
+        toast.push({ type: "success", title: "Thành công", message: "Đã hủy gửi duyệt." });
+        await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
+      },
+    });
+  };
+
+  const handleApprove = async (inv: InvoiceListItem) => {
+    if (!inv.id) return;
+    if (inv.status !== "SUBMITTED") {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Chỉ hóa đơn CHỜ DUYỆT mới duyệt được." });
+      return;
+    }
+
+    openConfirm({
+      title: "Duyệt hóa đơn",
+      message: (
+        <div className="text-sm text-gray-700">
+          Duyệt hóa đơn <b>{inv.code}</b> và cập nhật tồn kho?
+        </div>
+      ),
+      action: async () => {
+        const done = async () => {
+          toast.push({ type: "success", title: "Đã duyệt", message: "Hóa đơn đã được duyệt." });
+          await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
+        };
+        try {
+          await api.post(`/invoices/${inv.id}/approve`, {});
+          await done();
+        } catch (e: any) {
+          // ✅ linh kiện xuất âm chưa có giá vốn: hỏi giá ngay tại đây
+          if (e?.response?.data?.code !== NEED_BACKORDER_COST) throw e;
+          setCostAsk({
+            items: e.response.data.items,
+            submit: async (costs) => {
+              await api.post(`/invoices/${inv.id}/approve`, { backorderCosts: costs });
+              setCostAsk(null);
+              await done();
+            },
+          });
+        }
+      },
+    });
+  };
+
+  const handleReject = async (inv: InvoiceListItem) => {
+    if (!inv.id) return;
+    if (inv.status !== "SUBMITTED") {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Chỉ hóa đơn CHỜ DUYỆT mới từ chối được." });
+      return;
+    }
+    setRejectTarget(inv);
+    setRejectReason("");
+    setRejectOpen(true);
+  };
+
+  const handleAdjustApproved = async (inv: InvoiceListItem) => {
+    if (!inv?.id) return;
+
+    if (!isAdmin) {
+      toast.push({ type: "warning", title: "Không có quyền", message: "Chỉ quản trị được mở lại hoá đơn đã duyệt." });
+      return;
+    }
+    if (inv.status !== "APPROVED") {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Chỉ hóa đơn ĐÃ DUYỆT mới cần điều chỉnh." });
+      return;
+    }
+    setReopenTarget(inv); // -> hộp nhập mật khẩu cấp 2 (bên dưới)
+  };
+
+  const openPayModal = (inv: InvoiceListItem) => {
+    if (!(isAdmin || isAccountant)) {
+      toast.push({ type: "warning", title: "Không có quyền", message: "Chỉ quản trị / kế toán được thu / trả tiền hoá đơn." });
+      return;
+    }
+
+    if (inv.status !== "APPROVED") {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Hoá đơn cần được duyệt trước khi thu / trả tiền." });
+      return;
+    }
+
+    if (isFullyReturned(inv)) {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Khách đã trả lại toàn bộ hàng, hoá đơn không còn tiền phải thu." });
+      return;
+    }
+
+    if (!inv.partnerId) {
+      toast.push({
+        type: "warning",
+        title: "Thiếu dữ liệu",
+        message: "Hoá đơn chưa gắn khách hàng / nhà cung cấp nên chưa thu, trả tiền được.",
+      });
+      return;
+    }
+
+    const collectibleTotal = getCollectibleTotal(inv);
+    const paidNormal = clamp0(inv.paidAmount);
+
+    const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal, paidNormal });
+
+    const waitingPay = clamp0(inv.pendingPayAmount);
+    if (remainingNormal > 0 && remainingNormal - waitingPay <= 0.5) {
+      toast.push({ type: "info", title: "Đang chờ duyệt", message: "Toàn bộ số còn lại đã có phiếu đang chờ duyệt thu chi." });
+      return;
+    }
+    if (remainingNormal <= 0) {
+      toast.push({ type: "info", title: "Không còn nợ", message: "Hoá đơn này đã hết nợ." });
+      return;
+    }
+
+    setPayTarget(inv);
+    setPayAmount(remainingNormal - waitingPay);
+    setPayAmountText(formatMoney(remainingNormal - waitingPay));
+    // nhớ tài khoản dùng lần trước (nếu vẫn còn hoạt động)
+    let lastAcc = "";
+    try {
+      lastAcc = localStorage.getItem(LS_LAST_PAY_ACCOUNT) || "";
+    } catch {}
+    setPayAccountId(accounts.some((a) => a.id === lastAcc) ? lastAcc : accounts.length === 1 ? accounts[0].id : "");
+    setPayDate(vnTodayYmd());
+    setPayNote("");
+    setPayOpen(true);
+  };
+
+  const submitPayment = async (splitLines?: Array<{ accountId: string; amount: number }>) => {
+    if (paySubmitting) return;
+    if (!payTarget) return;
+
+    if (!(isAdmin || isAccountant)) {
+      toast.push({ type: "warning", title: "Không có quyền", message: "Chỉ quản trị / kế toán được thu / trả tiền hoá đơn." });
+      return;
+    }
+
+    if (payTarget.status !== "APPROVED") {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Hoá đơn cần được duyệt trước khi thu / trả tiền." });
+      return;
+    }
+
+    if (isFullyReturned(payTarget)) {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Khách đã trả lại toàn bộ hàng, hoá đơn không còn tiền phải thu." });
+      return;
+    }
+
+    const collectibleTotal = getCollectibleTotal(payTarget);
+    const paidNormal = clamp0(payTarget.paidAmount);
+    const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal, paidNormal });
+
+    const amount = clamp0(payAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.push({ type: "warning", title: "Không hợp lệ", message: "Nhập số tiền lớn hơn 0." });
+      return;
+    }
+    const canPayNow = remainingNormal - clamp0(payTarget.pendingPayAmount);
+    if (amount > canPayNow) {
+      toast.push({
+        type: "warning",
+        title: "Không hợp lệ",
+        message: `Số tiền (${formatMoney(amount)} đ) nhiều hơn số còn được thu (${formatMoney(canPayNow)} đ).`,
+      });
+      return;
+    }
+    if (!splitLines && !payAccountId) {
+      toast.push({ type: "warning", title: "Thiếu dữ liệu", message: "Chọn tài khoản nhận / trả tiền." });
+      return;
+    }
+
+    try {
+      if (!splitLines) localStorage.setItem(LS_LAST_PAY_ACCOUNT, String(payAccountId));
+    } catch {}
+
+    try {
+      setPaySubmitting(true);
+
+      if (splitLines) {
+        // ✅ thanh toán gộp: 2 phiếu cùng được tạo hoặc cùng không
+        await postOnce("/payments/split", {
+          date: payDate,
+          partnerId: String(payTarget.partnerId),
+          type: payTarget.type === "PURCHASE" ? "PAYMENT" : "RECEIPT",
+          invoiceId: String(payTarget.id),
+          lines: splitLines,
+          note: payNote.trim() ? `HĐ ${payTarget.code}: ${payNote.trim()}` : `Thanh toán HĐ ${payTarget.code}`,
+        });
+      } else await postOnce("/payments", {
+        date: payDate,
+        partnerId: String(payTarget.partnerId),
+        type: payTarget.type === "PURCHASE" ? "PAYMENT" : "RECEIPT",
+        amount,
+        accountId: payAccountId,
+        // diễn giải: luôn kèm số HĐ để tra ngược từ sổ thu chi
+        note: payNote.trim() ? `HĐ ${payTarget.code}: ${payNote.trim()}` : `Thanh toán HĐ ${payTarget.code}`,
+        allocations: [{ invoiceId: String(payTarget.id), amount, kind: "NORMAL" }],
+      });
+
+      toast.push({
+        type: "success",
+        title: "Đã gửi chờ duyệt",
+        message: splitLines
+          ? `2 phiếu chờ duyệt: tiền mặt ${formatMoney(splitLines[0].amount)} đ, chuyển khoản ${formatMoney(splitLines[1].amount)} đ.`
+          : `Phiếu ${formatMoney(amount)} đ đang chờ duyệt. Duyệt rồi mới vào sổ thu chi và trừ công nợ.`,
+      });
+
+      setPayOpen(false);
+
+      const paidId = String(payTarget.id);
+      setPayTarget(null);
+
+      setHighlightInvoiceId(paidId);
+      setTimeout(() => setHighlightInvoiceId(""), 2800);
+
+      await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
+    } catch (e: any) {
+      await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
+      toast.push({
+        type: "error",
+        title: "Lỗi",
+        message: e?.response?.data?.message || e?.message || "Không lưu được, thử lại.",
+      });
+    } finally {
+      setPaySubmitting(false);
+    }
+  };
+
+  const renderPaymentBadge = (inv: InvoiceListItem) => {
+    if (isFullyReturned(inv)) {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border whitespace-nowrap bg-gray-100 text-gray-700 border-gray-200">
+          Đã trả hàng (Toàn bộ)
+        </span>
+      );
+    }
+
+    const st = resolvePaymentStatus(inv);
+    let label = "";
+    let className = "inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border whitespace-nowrap ";
+
+    if (st === "PAID") {
+      label = "Đã thanh toán";
+      className += "bg-green-100 text-green-700 border-green-200";
+    } else if (st === "PARTIAL") {
+      label = "Thanh toán một phần";
+      className += "bg-yellow-100 text-yellow-800 border-yellow-200";
+    } else {
+      label = "Chưa thanh toán";
+      className += "bg-red-100 text-red-700 border-red-200";
+    }
+    // ✅ đã có phiếu chờ duyệt đủ số còn lại: không ghi "Chưa thanh toán", tránh hiểu nhầm là chưa thu
+    const waiting = clamp0(inv.pendingPayAmount);
+    if (waiting > 0) {
+      const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal: getCollectibleTotal(inv), paidNormal: clamp0(inv.paidAmount) });
+      if (waiting + 0.5 >= remainingNormal) {
+        return (
+          <span
+            className="inline-flex items-center rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800"
+            title={`Đã ghi nhận ${formatMoney(waiting)} đ, đang chờ duyệt thu chi. Duyệt rồi mới vào sổ.`}
+          >
+            Chờ duyệt {inv.type === "PURCHASE" ? "chi" : "thu"} {formatMoney(waiting)} đ
+          </span>
+        );
+      }
+    }
+    return (
+      <span className="inline-flex flex-col items-center gap-0.5">
+        <span className={className}>{label}</span>
+        {clamp0(inv.pendingPayAmount) > 0 && (
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800" title="Đang chờ duyệt thu chi, chưa tính vào đã thu">
+            Chờ duyệt {formatMoney(clamp0(inv.pendingPayAmount))} đ
+          </span>
+        )}
+      </span>
+    );
+  };
+
+  const renderStatusBadge = (status?: InvoiceStatus, inv?: InvoiceListItem) => {
+    const st: InvoiceStatus = status || "DRAFT";
+    let label = "";
+    let cls = "inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border whitespace-nowrap ";
+
+    // ✅ nháp bị kế toán / quản trị trả về -> nhân viên sửa rồi gửi lại
+    if (st === "DRAFT" && inv?.rejectInfo) {
+      const r = inv.rejectInfo;
+      return (
+        <span
+          className={cls + "bg-red-50 text-red-700 border-red-200 cursor-help"}
+          title={`Bị trả về${r.by ? ` bởi ${r.by}` : ""}${r.reason ? `: ${r.reason}` : ""}. Sửa rồi gửi duyệt lại.`}
+        >
+          Bị trả về
+        </span>
+      );
+    }
+
+    if (st === "DRAFT") {
+      label = "Nháp";
+      cls += "bg-gray-100 text-gray-700 border-gray-200";
+    } else if (st === "SUBMITTED") {
+      label = "Chờ duyệt";
+      cls += "bg-orange-100 text-orange-700 border-orange-200";
+    } else if (st === "APPROVED") {
+      label = "Đã duyệt";
+      cls += "bg-green-100 text-green-700 border-green-200";
+    } else {
+      label = "Từ chối";
+      cls += "bg-red-100 text-red-700 border-red-200";
+    }
+    return <span className={cls}>{label}</span>;
+  };
+
+  const renderReturnBadge = (inv: InvoiceListItem) => {
+    if (inv.type !== "SALES") return null;
+
+    if (isFullyReturned(inv)) {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border whitespace-nowrap bg-purple-100 text-purple-700 border-purple-200">
+          Trả hàng toàn bộ
+        </span>
+      );
+    }
+
+    if (isPartialReturned(inv)) {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border whitespace-nowrap bg-purple-50 text-purple-700 border-purple-200">
+          Trả hàng 1 phần
+        </span>
+      );
+    }
+
+    return null;
+  };
+
+  // ✅ nhân viên / kế toán: chỉ xoá nháp (server kiểm tra thêm: kế toán chỉ xoá nháp do mình lập); quản trị: mọi HĐ chưa duyệt
+  // ✅ kỳ đã chốt sổ: không xoá / mở lại hoá đơn có ngày trong kỳ đã chốt (server cũng chặn)
+  const [closedUntil, setClosedUntil] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api
+      .get("/locks/period")
+      .then((r) => alive && setClosedUntil(r?.data?.closedUntil || null))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const inClosedPeriod = (inv: InvoiceListItem) => {
+    if (!closedUntil || !inv.date) return false;
+    const t = new Date(inv.date as any).getTime();
+    if (!Number.isFinite(t)) return false;
+    const ymdVN = new Date(t + 7 * 3600 * 1000).toISOString().slice(0, 10);
+    return ymdVN <= closedUntil;
+  };
+  const closedLabel = closedUntil ? closedUntil.split("-").reverse().join("/") : "";
+  const closedTitle = `Kỳ đã chốt sổ (đến hết ${closedLabel}) — muốn sửa phải lùi mốc chốt sổ trước`;
+
+  const canDelete = (inv: InvoiceListItem) =>
+    !inClosedPeriod(inv) && (isStaff || isAccountant ? inv.status === "DRAFT" : inv.status !== "APPROVED");
+
+  // ✅ mobile: bộ lọc thu gọn + đổi nhanh loại hoá đơn
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const activeFilterCount = (from ? 1 : 0) + (to ? 1 : 0) + (sourceFilter === "ADJUST" ? 1 : 0) + (codFilter ? 1 : 0);
+  const applyCod = async (v: string) => {
+    setCodFilter(v);
+    codRef.current = v;
+    const next = { q: search.trim(), from, to, type: typeFilter, src: sourceFilter };
+    writeQuery(next);
+    await runFetchBySource(next);
+  };
+  const applyType = async (t: InvoiceTypeFilter) => {
+    setTypeFilter(t);
+    const next = { q: search.trim(), from, to, type: t, src: sourceFilter };
+    writeQuery(next);
+    await runFetchBySource(next);
+  };
+
+  /** các cờ dùng chung cho dòng bảng (máy tính) và thẻ (điện thoại) */
+  const rowInfo = (inv: InvoiceListItem) => {
+    const collectibleTotal = getCollectibleTotal(inv);
+    const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal, paidNormal: clamp0(inv.paidAmount) });
+    const paySt = resolvePaymentStatus(inv);
+    const canPay =
+      (isAdmin || isAccountant) &&
+      inv.status === "APPROVED" &&
+      !isFullyReturned(inv) &&
+      (paySt === "UNPAID" || paySt === "PARTIAL") &&
+      remainingNormal - clamp0(inv.pendingPayAmount) > 0.5;
+    return {
+      grossTotal: clamp0(inv.totalAmount),
+      remainingNormal,
+      canPay,
+      canAdjust: isAdmin && inv.status === "APPROVED",
+      adjustLocked: isAdmin && inv.status === "APPROVED" && inClosedPeriod(inv),
+      showSubmitBtn: (isStaff || canApprove) && inv.status === "DRAFT",
+      showRecallBtn: isStaff && inv.status === "SUBMITTED",
+      showApproveBtn: canApprove && inv.status === "SUBMITTED" && (isAdmin || String(inv.type) !== "SALES_RETURN"),
+      showRejectBtn: canApprove && inv.status === "SUBMITTED" && (isAdmin || String(inv.type) !== "SALES_RETURN"),
+    };
+  };
+  const showApprovalColumn = canApprove;
+  const showStaffWorkflowColumns = isStaff;
+
+  const colCount = 8 + (showApprovalColumn ? 1 : 0) + (showStaffWorkflowColumns ? 3 : 0);
+  const showRoleWarning = useMemo(() => !role, [role]);
 
   return (
-    <>
-      {toolbar}
-      <div className="print-root" data-mode={printMode}>
-        <div ref={mmRef} className="mm-ruler" />
-        {!isSlot && overflow && (
-          <div className="page-end" aria-hidden="true">
-            <span>hết trang 1</span>
+    <div className="p-4 space-y-4" ref={containerTopRef}>
+      <ToastHost toasts={toast.toasts} onClose={toast.remove} />
+
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h1 className="text-xl font-semibold">Hóa đơn</h1>
+        <button
+          type="button"
+          onClick={() => navigate("/invoices/new")}
+          className="md:hidden rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+        >
+          + Thêm
+        </button>
+      </div>
+
+      <div className="bg-white shadow-sm rounded-md p-3 md:p-4">
+        <form onSubmit={handleApplyFilter} className="space-y-3">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center">
+            <input
+              className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+              placeholder="Tìm theo số HĐ / tên khách hàng..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <button
+              type="button"
+              onClick={() => navigate("/invoices/new")}
+              className="hidden md:inline-flex items-center justify-center px-3 py-2 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700 whitespace-nowrap"
+            >
+              + Thêm hóa đơn
+            </button>
+          </div>
+
+          {/* ✅ mobile: đổi nhanh loại + mở bộ lọc */}
+          <div className="flex items-center gap-2 md:hidden">
+            {!staffSalesOnly && (
+            <div className="inline-flex flex-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5" role="group" aria-label="Loại hoá đơn">
+              {([["SALES", "Bán"], ["PURCHASE", "Nhập"], ["", "Tất cả"]] as Array<[InvoiceTypeFilter, string]>).map(([v, l]) => (
+                <button
+                  key={l}
+                  type="button"
+                  disabled={sourceFilter === "ADJUST"}
+                  onClick={() => applyType(v)}
+                  className={`!min-h-[36px] flex-1 rounded-md px-2 text-sm font-medium ${
+                    typeFilter === v ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
+                  } disabled:opacity-50`}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setFiltersOpen((v) => !v)}
+              aria-expanded={filtersOpen}
+              className={`!min-h-[40px] ${staffSalesOnly ? "flex-1" : "shrink-0"} rounded-lg border px-3 text-sm font-medium ${
+                filtersOpen || activeFilterCount ? "border-slate-800 text-slate-900" : "border-slate-300 text-slate-600"
+              }`}
+            >
+              Bộ lọc{activeFilterCount ? ` (${activeFilterCount})` : ""} {filtersOpen ? "▴" : "▾"}
+            </button>
+          </div>
+
+          <div className={`${filtersOpen ? "grid" : "hidden"} grid-cols-2 items-end gap-3 text-sm md:flex md:flex-wrap`}>
+            <div className="col-span-2 md:col-span-1">
+              <label className="block text-xs font-semibold mb-1">Vận chuyển</label>
+              <select
+                aria-label="Lọc theo vận chuyển"
+                value={codFilter}
+                disabled={sourceFilter === "ADJUST" || loading}
+                onChange={(e) => applyCod(e.target.value)}
+                className="w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-sm disabled:opacity-50"
+              >
+                <option value="">Tất cả</option>
+                <option value="all">Tất cả đơn COD</option>
+                {codCarriers.map((c) => (
+                  <option key={c} value={c}>COD - {c}</option>
+                ))}
+                {codFilter && codFilter !== "all" && !codCarriers.includes(codFilter) && (
+                  <option value={codFilter}>COD - {codFilter}</option>
+                )}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1">Từ ngày</label>
+              <input
+                type="date"
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+                className="w-full md:w-auto border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold mb-1">Đến ngày</label>
+              <input
+                type="date"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                className="w-full md:w-auto border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+
+            {!staffSalesOnly && (
+              <>
+            {/* ✅ NEW: nguồn dữ liệu */}
+            <div>
+              <label className="block text-xs font-semibold mb-1">Nguồn</label>
+              <select
+                value={sourceFilter}
+                onChange={(e) => setSourceFilter(e.target.value as SourceFilter)}
+                className="w-full md:w-auto border border-gray-300 rounded-md px-2 py-1 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="INVOICE">Hóa đơn</option>
+                <option value="ADJUST">Chứng từ điều chỉnh</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold mb-1">Loại</label>
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value as InvoiceTypeFilter)}
+                disabled={sourceFilter === "ADJUST"} // điều chỉnh không có sales/purchase
+                className={
+                  "w-full md:w-auto border border-gray-300 rounded-md px-2 py-1 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 " +
+                  (sourceFilter === "ADJUST" ? "opacity-60 cursor-not-allowed" : "")
+                }
+              >
+                <option value="">Tất cả</option>
+                <option value="SALES">Hóa đơn bán</option>
+                <option value="PURCHASE">Hóa đơn nhập</option>
+              </select>
+            </div>
+              </>
+            )}
+
+            <div className="col-span-2 flex gap-2">
+              <button
+                type="submit"
+                className="px-3 py-1 rounded-md bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 disabled:opacity-60"
+                disabled={loading}
+              >
+                Áp dụng
+              </button>
+              <button
+                type="button"
+                onClick={handleClearFilter}
+                className="px-3 py-1 rounded-md border border-gray-300 text-xs font-medium text-gray-700 bg-white hover:bg-gray-50"
+              >
+                Xóa lọc
+              </button>
+            </div>
+
+            {loading && <span className="text-xs text-gray-500">Đang tải dữ liệu...</span>}
+          </div>
+        </form>
+
+        {/* ✅ Tab: tất cả / chưa thu đủ */}
+        {sourceFilter === "INVOICE" && (
+          <div className="mt-3 md:mt-4 flex flex-wrap items-end justify-between gap-2 md:gap-3">
+            <div className="flex w-full md:inline-flex md:w-auto rounded-lg border border-slate-200 bg-slate-50 p-0.5" role="tablist" aria-label="Xem hoá đơn">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={!isDebtView}
+                onClick={() => switchView("all")}
+                className={`flex-1 md:flex-none rounded-md px-3 py-1.5 text-sm font-medium ${!isDebtView ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}
+              >
+                Tất cả hoá đơn
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={isDebtView}
+                onClick={() => switchView("debt")}
+                className={`flex-1 md:flex-none inline-flex items-center justify-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium ${isDebtView ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}
+              >
+                Chưa {debtWord} đủ
+                <span
+                  className={`min-w-[22px] rounded-full px-1.5 text-center text-xs font-semibold tabular-nums ${
+                    debtSummary.count ? "bg-rose-600 text-white" : "bg-slate-200 text-slate-600"
+                  }`}
+                >
+                  {debtLoading && !debtRows.length ? "…" : debtSummary.count}
+                </span>
+              </button>
+            </div>
+            {isDebtView && (
+              <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 text-sm">
+                <span className="text-slate-600">
+                  Còn phải {debtWord}: <b className="tabular-nums text-rose-700">{formatMoney(debtSummary.total)} đ</b>
+                </span>
+                {debtSummary.over30 > 0 && (
+                  <span className="text-slate-600">
+                    Quá 30 ngày:{" "}
+                    <b className="tabular-nums text-amber-700">
+                      {debtSummary.over30} HĐ, {formatMoney(debtSummary.over30Amt)} đ
+                    </b>
+                  </span>
+                )}
+                <span className="hidden md:inline text-xs text-slate-400">Không theo khoảng ngày lọc, hoá đơn cũ nhất ở trên</span>
+              </div>
+            )}
           </div>
         )}
 
-        {isSlot ? (
-          <div className="a5-slot" aria-hidden={false}>
-            <div className="a5-frame" aria-hidden="true" />
-            <div style={borderBoxStyle} ref={borderBoxRef} className="border-box">
-              {InvoiceContent}
+        {/* ✅ Sticky header + scroll container (mobile cũng mượt) */}
+        {/* ✅ MOBILE: danh sách thẻ, bấm thẻ để mở hoá đơn */}
+        <div className="mt-3 space-y-2 md:hidden">
+          {loading && <div className="py-6 text-center text-sm text-slate-500">Đang tải…</div>}
+          {!loading && rowsShown.length === 0 && (
+            <div className="py-6 text-center text-sm text-slate-500">
+              {isDebtView ? `Không còn hoá đơn nào chưa ${debtWord} đủ.` : "Không tìm thấy hoá đơn."}
             </div>
+          )}
+          {!loading &&
+            rowsShown.map((inv) => {
+              const f = rowInfo(inv);
+              const dd = daysSince(inv.date);
+              const hi = highlightInvoiceId && String(inv.id) === String(highlightInvoiceId);
+              const stop = (e: React.MouseEvent) => e.stopPropagation();
+              return (
+                <article
+                  key={inv.id}
+                  id={`inv-card-${String(inv.id)}`}
+                  onClick={() => navigate(`/invoices/${inv.id}`)}
+                  className={`rounded-xl border bg-white p-3 active:bg-slate-50 ${hi ? "border-indigo-400 ring-2 ring-indigo-200" : "border-slate-200"}`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-semibold text-slate-900">{inv.code}</span>
+                        {renderReturnBadge(inv)}
+                        <CarrierTag note={inv.note} />
+                      </div>
+                      <div className="truncate text-sm text-slate-700">{inv.partnerName || "—"}</div>
+                    </div>
+                    <div className="shrink-0">{renderStatusBadge(inv.status, inv)}</div>
+                  </div>
+
+                  <div className="mt-2 flex items-end justify-between gap-3">
+                    <div className="text-xs text-slate-500">
+                      <div className="tabular-nums">{formatDateDisplay(inv.date)}</div>
+                      {isDebtView && (
+                        <div className={`tabular-nums ${dd > 60 ? "font-semibold text-rose-700" : dd > 30 ? "font-medium text-amber-700" : ""}`}>
+                          {dd === 0 ? "hôm nay" : `${dd} ngày trước`}
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <div className="font-semibold tabular-nums text-slate-900">{formatMoney(f.grossTotal)} đ</div>
+                      {(isDebtView || (f.canPay && f.remainingNormal < f.grossTotal)) && (
+                        <div className="text-xs font-semibold tabular-nums text-rose-700">còn {formatMoney(f.remainingNormal)} đ</div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-2 flex items-center gap-2" onClick={stop}>
+                    <div className="mr-auto">{renderPaymentBadge(inv)}</div>
+                    {f.canPay && (
+                      <button
+                        type="button"
+                        onClick={() => openPayModal(inv)}
+                        className={`!min-h-[36px] rounded-lg px-3 text-sm font-semibold ring-1 ${
+                          inv.type === "PURCHASE" ? "bg-rose-50 text-rose-700 ring-rose-200" : "bg-teal-50 text-teal-700 ring-teal-200"
+                        }`}
+                      >
+                        {inv.type === "PURCHASE" ? "Trả tiền" : "Thu tiền"}
+                      </button>
+                    )}
+                    {f.showApproveBtn && (
+                      <button type="button" onClick={() => handleApprove(inv)} className="!min-h-[36px] rounded-lg bg-emerald-600 px-3 text-sm font-semibold text-white">
+                        Duyệt
+                      </button>
+                    )}
+                    {f.showRejectBtn && (
+                      <button type="button" onClick={() => handleReject(inv)} className="!min-h-[36px] rounded-lg px-3 text-sm font-medium text-rose-700 ring-1 ring-rose-200">
+                        Từ chối
+                      </button>
+                    )}
+                    {f.showSubmitBtn && (
+                      <button type="button" onClick={() => handleSubmit(inv)} className="!min-h-[36px] rounded-lg bg-orange-600 px-3 text-sm font-semibold text-white">
+                        Gửi duyệt
+                      </button>
+                    )}
+                    {f.showRecallBtn && (
+                      <button type="button" onClick={() => handleRecall(inv)} className="!min-h-[36px] rounded-lg px-3 text-sm font-medium text-slate-700 ring-1 ring-slate-300">
+                        Rút lại
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => window.open(`/invoices/${inv.id}/print`, "_blank", "noopener,noreferrer")}
+                      className={ACT_BTN + " !min-h-[36px] !h-9 !w-9"}
+                      aria-label="In hoá đơn"
+                    >
+                      <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+                        <path d="M7 9V3.5h10V9" strokeLinejoin="round" />
+                        <rect x="3" y="9" width="18" height="8" rx="2" />
+                        <path d="M7 14h10v6.5H7z" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                    {f.canAdjust && (
+                      <button
+                        type="button"
+                        disabled={f.adjustLocked}
+                        title={f.adjustLocked ? closedTitle : "Điều chỉnh hoá đơn"}
+                        onClick={() => handleAdjustApproved(inv)}
+                        className={ACT_BTN + " !min-h-[36px] !h-9 !w-9"}
+                        aria-label="Điều chỉnh hoá đơn"
+                      >
+                        <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+                          <path d="M4 7h9M17 7h3M4 17h3M11 17h9" strokeLinecap="round" />
+                          <circle cx="15" cy="7" r="2" />
+                          <circle cx="9" cy="17" r="2" />
+                        </svg>
+                      </button>
+                    )}
+                    {canDelete(inv) && (
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(inv)}
+                        className={ACT_BTN + " !min-h-[36px] !h-9 !w-9 enabled:hover:bg-rose-50 enabled:hover:text-rose-600"}
+                        aria-label="Xoá hoá đơn"
+                      >
+                        <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+                          <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+        </div>
+
+        <div className={`hidden md:block ${sourceFilter === "INVOICE" ? "mt-2" : "mt-4"} border border-gray-200 rounded-md overflow-hidden`}>
+          <div className="max-h-[70vh] overflow-auto">
+            <table className="min-w-full table-fixed text-sm">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[130px]">
+                    Số HĐ
+                  </th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[104px]">
+                    Ngày
+                  </th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                    Khách hàng
+                  </th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[124px]">
+                    Tổng tiền
+                  </th>
+                  <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[140px]">
+                    Thanh toán
+                  </th>
+                  <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[100px]">
+                    Trạng thái
+                  </th>
+                  <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[96px]">
+                    Vận chuyển
+                  </th>
+
+                  {showStaffWorkflowColumns && (
+                    <>
+                      <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                        Xem
+                      </th>
+                      <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                        Gửi duyệt
+                      </th>
+                      <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100">
+                        Hủy gửi
+                      </th>
+                    </>
+                  )}
+
+                  {showApprovalColumn && (
+                    <th className="px-3 py-2 text-center text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[150px]">
+                      Duyệt
+                    </th>
+                  )}
+
+                  <th className="px-3 py-2 text-right text-xs font-semibold border-b border-gray-200 sticky top-0 z-10 bg-gray-100 w-[212px]">
+                    Thao tác
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {loading && (
+                  <tr>
+                    <td className="px-3 py-2 text-sm text-gray-600 border-t border-gray-200" colSpan={colCount}>
+                      Đang tải dữ liệu...
+                    </td>
+                  </tr>
+                )}
+
+                {!loading && rowsShown.length === 0 && (
+                  <tr>
+                    <td className="px-3 py-2 text-sm text-gray-600 border-t border-gray-200" colSpan={colCount}>
+                      {isDebtView ? `Không còn hoá đơn nào chưa ${debtWord} đủ.` : "Không tìm thấy dữ liệu."}
+                    </td>
+                  </tr>
+                )}
+
+                {!loading &&
+                  rowsShown.map((inv) => {
+                    const showSubmitBtn = (isStaff || canApprove) && inv.status === "DRAFT";
+                    const showRecallBtn = isStaff && inv.status === "SUBMITTED";
+
+                    const showApproveBtn = canApprove && inv.status === "SUBMITTED" && (isAdmin || String(inv.type) !== "SALES_RETURN");
+                    const showRejectBtn = canApprove && inv.status === "SUBMITTED" && (isAdmin || String(inv.type) !== "SALES_RETURN");
+
+                    const grossTotal = clamp0(inv.totalAmount);
+
+                    const collectibleTotal = getCollectibleTotal(inv);
+                    const paidNormal = clamp0(inv.paidAmount);
+                    const { remainingNormal } = calcCollectibleRemaining({ collectibleTotal, paidNormal });
+
+                    const paySt = resolvePaymentStatus(inv);
+
+                    const canPayBase =
+                      inv.status === "APPROVED" &&
+                      !isFullyReturned(inv) &&
+                      (paySt === "UNPAID" || paySt === "PARTIAL") &&
+                      remainingNormal - clamp0(inv.pendingPayAmount) > 0.5;
+
+                    const canPay = (isAdmin || isAccountant) && canPayBase; // ✅ kế toán được ghi tiền
+
+                    const isHighlighted = highlightInvoiceId && String(inv.id) === String(highlightInvoiceId);
+                    const returnedBadge = renderReturnBadge(inv);
+
+                    const adjustLocked = inClosedPeriod(inv);
+                    const canAdjust = isAdmin && inv.status === "APPROVED" && !adjustLocked; // ✅ chỉ quản trị + mật khẩu cấp 2
+
+                    return (
+                      <tr
+                        key={inv.id}
+                        id={`inv-row-${String(inv.id)}`}
+                        className={
+                          "odd:bg-white even:bg-gray-50 hover:bg-blue-50 transition-colors " +
+                          (isHighlighted ? "ring-2 ring-indigo-500 bg-indigo-50" : "")
+                        }
+                      >
+                        <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="truncate font-medium">{inv.code}</div>
+                            {returnedBadge}
+                          </div>
+                        </td>
+
+                        <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap">
+                          {formatDateDisplay(inv.date)}
+                          {isDebtView && (() => {
+                            const dd = daysSince(inv.date);
+                            return (
+                              <div
+                                className={`text-xs tabular-nums ${dd > 60 ? "font-semibold text-rose-700" : dd > 30 ? "font-medium text-amber-700" : "text-slate-500"}`}
+                              >
+                                {dd === 0 ? "hôm nay" : `${dd} ngày trước`}
+                              </div>
+                            );
+                          })()}
+                        </td>
+
+                        <td className="px-3 py-2 border-t border-gray-200 whitespace-nowrap truncate" title={inv.partnerName}>{inv.partnerName}</td>
+
+                        <td className="px-3 py-2 border-t border-gray-200 text-right whitespace-nowrap">
+                          <div className="flex flex-col items-end leading-tight gap-0.5">
+                            <div className="font-medium">{formatMoney(grossTotal)} đ</div>
+                            {isDebtView && (
+                              <div className="text-xs font-semibold tabular-nums text-rose-700">còn {formatMoney(remainingNormal)} đ</div>
+                            )}
+                          </div>
+                        </td>
+
+                        <td className="px-3 py-2 border-t border-gray-200 text-center">{renderPaymentBadge(inv)}</td>
+                        <td className="px-3 py-2 border-t border-gray-200 text-center">{renderStatusBadge(inv.status, inv)}</td>
+                        <td className="px-3 py-2 border-t border-gray-200 text-center">
+                          <CarrierTag note={inv.note} />
+                        </td>
+
+                        {showStaffWorkflowColumns && (
+                          <>
+                            <td className="px-3 py-2 border-t border-gray-200 text-center">
+                              <button
+                                type="button"
+                                className="px-2 py-1 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-xs"
+                                onClick={() => navigate(`/invoices/${inv.id}`)}
+                              >
+                                Xem
+                              </button>
+                            </td>
+
+                            <td className="px-3 py-2 border-t border-gray-200 text-center">
+                              <button
+                                type="button"
+                                disabled={!showSubmitBtn}
+                                className={
+                                  "px-2 py-1 rounded-md text-xs font-medium " +
+                                  (showSubmitBtn
+                                    ? "bg-orange-600 text-white hover:bg-orange-700"
+                                    : "bg-gray-200 text-gray-400 cursor-not-allowed")
+                                }
+                                onClick={() => handleSubmit(inv)}
+                              >
+                                Gửi
+                              </button>
+                            </td>
+
+                            <td className="px-3 py-2 border-t border-gray-200 text-center">
+                              <button
+                                type="button"
+                                disabled={!showRecallBtn}
+                                className={
+                                  "px-2 py-1 rounded-md text-xs font-medium " +
+                                  (showRecallBtn
+                                    ? "bg-gray-700 text-white hover:bg-gray-800"
+                                    : "bg-gray-200 text-gray-400 cursor-not-allowed")
+                                }
+                                onClick={() => handleRecall(inv)}
+                              >
+                                Hủy
+                              </button>
+                            </td>
+                          </>
+                        )}
+
+                        {showApprovalColumn && (
+                          <td className="px-3 py-2 border-t border-gray-200 text-center">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                type="button"
+                                className="rounded-lg px-2 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50 hover:text-slate-900"
+                                onClick={() => navigate(`/invoices/${inv.id}`)}
+                              >
+                                Xem
+                              </button>
+                              {showSubmitBtn && (
+                                <button
+                                  type="button"
+                                  className="rounded-lg bg-orange-600 px-2 py-1 text-xs font-semibold text-white hover:bg-orange-700"
+                                  onClick={() => handleSubmit(inv)}
+                                >
+                                  Gửi duyệt
+                                </button>
+                              )}
+                              {showApproveBtn && (
+                                <button
+                                  type="button"
+                                  className="rounded-lg bg-emerald-600 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-700"
+                                  onClick={() => handleApprove(inv)}
+                                >
+                                  Duyệt
+                                </button>
+                              )}
+                              {showRejectBtn && (
+                                <button
+                                  type="button"
+                                  className="rounded-lg px-2 py-1 text-xs font-medium text-rose-700 ring-1 ring-rose-200 hover:bg-rose-50"
+                                  onClick={() => handleReject(inv)}
+                                >
+                                  Từ chối
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        )}
+
+                        <td className="px-3 py-2 border-t border-gray-200">
+                          <div className="flex items-center justify-end gap-0.5">
+                            {/* thu / trả tiền: nút chính, cố định chỗ để các icon thẳng hàng */}
+                            <div className="mr-1 flex w-[88px] justify-end">
+                              {canPay ? (
+                                <button
+                                  type="button"
+                                  onClick={() => openPayModal(inv)}
+                                  title={`${inv.type === "PURCHASE" ? "Còn phải trả" : "Còn phải thu"}: ${formatMoney(remainingNormal)} đ`}
+                                  className={
+                                    "inline-flex items-center gap-1 whitespace-nowrap rounded-lg px-2.5 py-1 text-xs font-semibold ring-1 transition-colors " +
+                                    (inv.type === "PURCHASE"
+                                      ? "bg-rose-50 text-rose-700 ring-rose-200 hover:bg-rose-100"
+                                      : "bg-teal-50 text-teal-700 ring-teal-200 hover:bg-teal-100")
+                                  }
+                                >
+                                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+                                    <rect x="2.5" y="6" width="19" height="12" rx="2" />
+                                    <circle cx="12" cy="12" r="2.4" />
+                                  </svg>
+                                  {inv.type === "PURCHASE" ? "Trả tiền" : "Thu tiền"}
+                                </button>
+                              ) : null}
+                            </div>
+
+                            <button
+                              type="button"
+                              className={ACT_BTN}
+                              onClick={() => window.open(`/invoices/${inv.id}/print`, "_blank", "noopener,noreferrer")}
+                              title="In hoá đơn"
+                              aria-label="In hoá đơn"
+                            >
+                              <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+                                <path d="M7 9V3.5h10V9" strokeLinejoin="round" />
+                                <rect x="3" y="9" width="18" height="8" rx="2" />
+                                <path d="M7 14h10v6.5H7z" strokeLinejoin="round" />
+                              </svg>
+                            </button>
+
+                            {inv.status === "DRAFT" ? (
+                              <button
+                                type="button"
+                                className={ACT_BTN}
+                                onClick={() => navigate(`/invoices/${inv.id}`)}
+                                title="Sửa hoá đơn nháp"
+                                aria-label="Sửa hoá đơn"
+                              >
+                                <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+                                  <path d="M4 20h4L19 9l-4-4L4 16v4z" strokeLinejoin="round" />
+                                  <path d="M13.5 6.5l4 4" />
+                                </svg>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className={ACT_BTN}
+                                disabled={!canAdjust}
+                                onClick={() => handleAdjustApproved(inv)}
+                                title={
+                                  canAdjust
+                                    ? "Điều chỉnh: mở lại hoá đơn đã duyệt để sửa"
+                                    : adjustLocked && isAdmin
+                                    ? closedTitle
+                                    : !isAdmin
+                                    ? "Chỉ quản trị được điều chỉnh hoá đơn đã duyệt"
+                                    : "Chỉ điều chỉnh được hoá đơn đã duyệt"
+                                }
+                                aria-label="Điều chỉnh hoá đơn"
+                              >
+                                <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+                                  <path d="M4 7h9M17 7h3M4 17h3M11 17h9" strokeLinecap="round" />
+                                  <circle cx="15" cy="7" r="2" />
+                                  <circle cx="9" cy="17" r="2" />
+                                </svg>
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              disabled={!canDelete(inv)}
+                              className={ACT_BTN + " enabled:hover:bg-rose-50 enabled:hover:text-rose-600"}
+                              onClick={() => handleDelete(inv)}
+                              title={
+                                canDelete(inv)
+                                  ? "Xoá hoá đơn"
+                                  : inClosedPeriod(inv)
+                                  ? closedTitle
+                                  : "Hoá đơn đã duyệt, không xoá được"
+                              }
+                              aria-label="Xoá hoá đơn"
+                            >
+                              <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+                                <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
           </div>
-        ) : (
-          <>
-            <div className="a4-frame" aria-hidden="true" />
-            <div className="page-box">
-              <div style={borderBoxStyle} ref={borderBoxRef} className="border-box">
-                {InvoiceContent}
-              </div>
-            </div>
-          </>
+        </div>
+
+        {showRoleWarning && (
+          <div className="mt-3 text-xs text-orange-600">
+            Không đọc được role từ /auth/me. Kiểm tra response /api/auth/me có field role ở đâu (data.role hay role).
+          </div>
         )}
       </div>
-    </>
+
+      {/* Confirm modal */}
+      <Modal
+        open={confirmOpen}
+        title={confirmTitle}
+        onClose={() => {
+          if (confirmLoading) return;
+          setConfirmOpen(false);
+        }}
+        footer={
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              className="px-3 py-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-sm"
+              onClick={() => setConfirmOpen(false)}
+              disabled={confirmLoading}
+            >
+              Hủy
+            </button>
+            <button
+              type="button"
+              className={
+                "px-3 py-2 rounded-md text-sm font-semibold " +
+                (confirmLoading ? "bg-gray-300 text-gray-600" : "bg-blue-600 text-white hover:bg-blue-700")
+              }
+              onClick={async () => {
+                if (!confirmAction) return;
+                try {
+                  setConfirmLoading(true);
+                  await confirmAction();
+                  setConfirmOpen(false);
+                } catch (e: any) {
+                  toast.push({
+                    type: "error",
+                    title: "Lỗi",
+                    message: e?.response?.data?.message || e?.message || "Thao tác thất bại.",
+                  });
+                } finally {
+                  setConfirmLoading(false);
+                }
+              }}
+              disabled={confirmLoading}
+            >
+              Xác nhận
+            </button>
+          </div>
+        }
+      >
+        {confirmMessage}
+      </Modal>
+
+      {/* Reject modal */}
+      <Modal
+        open={rejectOpen}
+        title="Từ chối, trả về nháp"
+        onClose={() => {
+          if (rejectLoading) return;
+          setRejectOpen(false);
+        }}
+        footer={
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              className="px-3 py-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-sm"
+              onClick={() => setRejectOpen(false)}
+              disabled={rejectLoading}
+            >
+              Hủy
+            </button>
+            <button
+              type="button"
+              className={
+                "px-3 py-2 rounded-md text-sm font-semibold " +
+                (rejectLoading ? "bg-gray-300 text-gray-600" : "bg-red-600 text-white hover:bg-red-700")
+              }
+              onClick={async () => {
+                if (!rejectTarget?.id) return;
+                try {
+                  setRejectLoading(true);
+                  await api.post(`/invoices/${rejectTarget.id}/reject`, {
+                    reason: rejectReason.trim() || undefined,
+                  });
+                  toast.push({
+                    type: "success",
+                    title: "Đã trả về",
+                    message: `Hóa đơn ${rejectTarget.code} đã trả về nháp cho nhân viên sửa.`,
+                  });
+                  setRejectOpen(false);
+                  await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
+                } catch (e: any) {
+                  toast.push({
+                    type: "error",
+                    title: "Lỗi",
+                    message: e?.response?.data?.message || e?.message || "Từ chối thất bại.",
+                  });
+                } finally {
+                  setRejectLoading(false);
+                }
+              }}
+              disabled={rejectLoading}
+            >
+              Từ chối
+            </button>
+          </div>
+        }
+      >
+        <div className="space-y-2">
+          <div className="text-sm text-gray-700">
+            Hóa đơn <b>{rejectTarget?.code}</b> sẽ <b>trả về nháp</b> để nhân viên sửa rồi gửi duyệt lại. Ghi lý do để nhân viên biết cần sửa gì:
+          </div>
+          {(clamp0(rejectTarget?.pendingPayAmount) > 0 || clamp0(rejectTarget?.bookedPayAmount) > 0) && (
+            <div role="alert" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              Hoá đơn này có <b>{formatMoney(clamp0(rejectTarget?.pendingPayAmount))} đ</b> phiếu chờ và{" "}
+              <b>{formatMoney(clamp0(rejectTarget?.bookedPayAmount))} đ</b> đã vào sổ. Từ chối hoá đơn không tự huỷ phiếu, cần xử lý ở trang Thu chi.
+            </div>
+          )}
+          <textarea
+            value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value)}
+            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500"
+            rows={3}
+            placeholder="Ví dụ: Sai giá, sai số lượng..."
+          />
+        </div>
+      </Modal>
+
+      <BackorderCostDialog items={costAsk?.items ?? null} onClose={() => setCostAsk(null)} onSubmit={(c) => costAsk!.submit(c)} />
+
+      {/* Mở lại hoá đơn đã duyệt: chỉ quản trị + mật khẩu cấp 2 */}
+      <PinActionDialog
+        open={!!reopenTarget}
+        tone="danger"
+        title={`Điều chỉnh hoá đơn ${reopenTarget?.code ?? ""}`}
+        subtitle="Hoá đơn về lại Nháp để sửa, tồn kho của hoá đơn được hoàn lại cho tới khi duyệt lại."
+        confirmLabel="Mở lại để sửa"
+        busyLabel="Đang mở lại…"
+        onClose={() => setReopenTarget(null)}
+        onSubmit={async (pin) => {
+          const inv = reopenTarget!;
+          await api.post(`/invoices/${inv.id}/reopen`, { pin });
+          setReopenTarget(null);
+          toast.push({ type: "success", title: "Đã mở lại", message: `Hóa đơn ${inv.code} đã mở lại để sửa.` });
+          await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
+          navigate(`/invoices/${inv.id}`, { state: { adminEditApproved: true } });
+        }}
+      >
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          <div>
+            Hoá đơn <b>{reopenTarget?.code}</b>, {reopenTarget?.partnerName}
+          </div>
+          <div className="mt-0.5 text-xs text-slate-500">Server tự kiểm tra khoá kỳ và giới hạn 90 ngày.</div>
+        </div>
+      </PinActionDialog>
+
+      {/* Payment dialog */}
+      {payTarget ? (
+        <InvoicePayDialog
+          open={payOpen}
+          submitting={paySubmitting}
+          isPurchase={payTarget.type === "PURCHASE"}
+          invoiceCode={payTarget.code}
+          partnerName={payTarget.partnerName}
+          invoiceDate={payTarget.date}
+          total={clamp0(payTarget.totalAmount)}
+          returned={payTarget.type === "SALES" ? getReturnedTotal(payTarget) : 0}
+          hold={getHoldAmount(payTarget)}
+          paid={clamp0(payTarget.paidAmount)}
+          remaining={
+            calcCollectibleRemaining({
+              collectibleTotal: getCollectibleTotal(payTarget),
+              paidNormal: clamp0(payTarget.paidAmount),
+            }).remainingNormal - clamp0(payTarget.pendingPayAmount)
+          }
+          accounts={accounts}
+          accountsLoading={accountsLoading}
+          accountId={payAccountId}
+          onAccountChange={(v) => {
+            setPayAccountId(v);
+            try {
+              localStorage.setItem(LS_LAST_PAY_ACCOUNT, String(v));
+            } catch {}
+          }}
+          date={payDate}
+          onDateChange={setPayDate}
+          note={payNote}
+          onNoteChange={setPayNote}
+          amount={payAmount}
+          amountText={payAmountText}
+          onAmountText={(raw) => {
+            const n = parseMoneyInputToNumber(raw);
+            setPayAmount(n);
+            setPayAmountText(raw.trim() === "" ? "" : formatMoney(n));
+          }}
+          onSetAmount={(n) => {
+            setPayAmount(n);
+            setPayAmountText(formatMoney(n));
+          }}
+          amountInputRef={payAmountInputRef}
+          onClose={() => {
+            if (paySubmitting) return;
+            setPayOpen(false);
+          }}
+          onSubmit={submitPayment}
+        />
+      ) : null}
+    </div>
   );
 };
 
-export default InvoicePrintPage;
+export default InvoicesPage;

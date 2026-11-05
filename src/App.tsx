@@ -27,6 +27,7 @@ import ReceivablesReport from "./pages/ReceivablesReportPage";
 import PaymentsMissingAccountPage from "./pages/PaymentsMissingAccountPage";
 import CashbookPage from "./pages/CashbookPage";
 import StockBackordersPage from "./pages/StockBackordersPage";
+import PartnerMergePage from "./pages/PartnerMergePage";
 import SalesReturnsPage from "./pages/SalesReturnsPage";
 import SalesReturnFormPage from "./pages/SalesReturnFormPage";
 import LedgerPage from "./pages/LedgerPage";
@@ -80,6 +81,14 @@ const App: React.FC = () => {
           <Route path="items" element={<ItemsPage />} />
           <Route path="items-master" element={<ItemsMasterPage />} />
           <Route path="partners" element={<CustomersPage />} />
+          <Route
+            path="partners/merge"
+            element={
+              <RequireRole roles={["admin"]}>
+                <PartnerMergePage />
+              </RequireRole>
+            }
+          />
           <Route path="partners/:id" element={<CustomerDetailPage />} />
           <Route path="/customers/:id" element={<CustomerDetailPage />} />
           <Route path="quote-documents" element={<QuoteDocumentsPage />} />
