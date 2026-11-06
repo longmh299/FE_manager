@@ -177,6 +177,7 @@ const Layout: React.FC = () => {
           ...(AA ? [{ to: "/stock-backorders", label: "Hàng chờ bù", badge: boBadge, hint: boBadge ? `${boBadge} dòng linh kiện đang chờ bù` : undefined }] : []),
           ...(canSeeMovements ? [{ to: "/movements", label: "Điều chỉnh tồn / giá vốn" }] : []),
           ...(AA ? [{ to: "/stock-counts", label: "Kiểm kê kho" }] : []),
+          ...(AA ? [{ to: "/stock-reconcile", label: "Đối soát tồn (file Excel)" }] : []),
           ...(AA ? [{ to: "/reports/ledger", label: "Sổ kho (thẻ kho)" }] : []),
           ...(AA ? [{ to: "/reports/stock-inout", label: "Nhập – xuất – tồn" }] : []),
           ...(isAdmin ? [{ to: "/stock-import-opening", label: "Nhập tồn đầu kỳ (file)" }] : []),

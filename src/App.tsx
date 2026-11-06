@@ -39,6 +39,7 @@ import MyDebtsPage from "./pages/MyDebtsPage";
 import PeriodClosePage from "./pages/PeriodClosePage"; // ✅ chốt sổ kế toán (quản trị) // ✅ công nợ của tôi + báo đã thu (nhân viên)
 import AuditLogsPage from "./pages/AuditLogsPage";
 import StockInOutReportPage from "./pages/StockInOutReportPage";
+import StockReconcilePage from "./pages/StockReconcilePage"; // ✅ đối soát tồn thực tế (file Excel) với hệ thống
 import InvoiceStatusAdminPage from "./pages/InvoiceStatusAdminPage";
 import InvoiceTracePage from "./pages/InvoiceTracePage"; // ✅ NEW: truy xuất hóa đơn theo mã sản phẩm
 import QuoteDocumentsPage from "./pages/QuoteDocumentsPage";
@@ -149,6 +150,14 @@ const App: React.FC = () => {
           <Route path="part-stocks" element={<PartStocksPage />} />
           <Route path="stock-counts" element={<StockCountListPage />} />
           <Route path="stock-counts/:id" element={<StockCountDetailPage />} />
+          <Route
+            path="stock-reconcile"
+            element={
+              <RequireRole roles={["admin", "accountant"]}>
+                <StockReconcilePage />
+              </RequireRole>
+            }
+          />
           <Route path="stock-import-opening" element={<StockOpeningImportPage />} />
 
           {/* machines */}
