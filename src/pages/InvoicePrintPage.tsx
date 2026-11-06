@@ -249,14 +249,29 @@ html, body {
   /* CSS chung của app đặt chiều cao tối thiểu = cả màn hình -> dư 1 trang trắng khi in */
   html, body, #root { height: auto !important; min-height: 0 !important; background: #fff !important; }
   .no-print, .page-end { display: none !important; }
+  /* ✅ co theo VÙNG IN THẬT của tờ giấy (100% / 100vh = khổ giấy trừ lề máy in / lề trình duyệt),
+     không cố định đúng ${cfg.w}x${cfg.h}mm nữa: trước đây máy in có lề, hoặc hộp in để Lề = Mặc định,
+     thì trang rộng hơn vùng in -> trình duyệt thu nhỏ cả trang (không đầy tờ) hoặc cắt mất cột bên phải. */
   .print-root{
-    width: ${cfg.w}mm;
-    height: ${cfg.h}mm;
+    width: 100%;
+    max-width: ${cfg.w}mm;
+    height: min(${cfg.h}mm, 100vh);
+    margin: 0 auto;
     background: transparent;
     position: relative;
     overflow: visible !important;
   }
+  .page-box{ min-height: calc(min(${cfg.h}mm, 100vh) - ${2 * cfg.inset}mm) !important; }
+  .page-box > .border-box{ min-height: calc(min(${cfg.h}mm, 100vh) - ${2 * cfg.inset}mm) !important; }
+  /* căn giữa bằng left/right + margin auto; KHÔNG dùng transform (Chrome in ra bị thu nhỏ cả khung) */
+  .a5-slot{ width: min(${A5_SLOT.w}mm, calc(100% - 10mm)) !important; left: 0 !important; right: 0 !important; margin: 0 auto; }
 }
+
+/* ✅ CSS chung của app cho điện thoại (index.css, @media max-width 767px) ép mọi bảng rộng tối thiểu 640px
+   và cho khung bọc bảng cuộn ngang. Khi in, vùng in hẹp (A5 dọc, in từ điện thoại, lề lớn) cũng bị tính là
+   "màn hình nhỏ" -> bảng hoá đơn tràn rồi bị khung cắt mất các cột bên phải. Trang in không dùng các rule đó. */
+.print-root table.invoice-table{ min-width: 0 !important; width: 100% !important; table-layout: fixed; }
+.print-root div:has(> table.invoice-table){ overflow: visible !important; max-width: none !important; }
 
 table.invoice-table thead { display: table-header-group; }
 table.invoice-table tr { page-break-inside: avoid; break-inside: avoid; }
