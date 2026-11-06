@@ -779,10 +779,10 @@ const CashbookLedger: React.FC = () => {
 
             <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 px-5 py-3">
               <Btn variant="in" icon={Icon.in} onClick={() => openVoucher("RECEIPT")}>
-                Phiếu thu
+                Tạo Phiếu thu
               </Btn>
               <Btn variant="out" icon={Icon.out} onClick={() => openVoucher("PAYMENT")}>
-                Phiếu chi
+                Tạo Phiếu chi
               </Btn>
               <Btn icon={Icon.transfer} onClick={openTransfer}>
                 Chuyển quỹ

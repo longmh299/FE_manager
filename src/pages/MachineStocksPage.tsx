@@ -5,6 +5,7 @@ import api, { extractList } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import DeleteItemDialog, { type DeleteItemTarget } from "../components/DeleteItemDialog"; // ✅ xoá mặt hàng (admin + mật khẩu cấp 2)
 import { roundCostDisplay } from "../utils/costDisplay"; // ✅ giá vốn hiển thị số chẵn
+import SellPriceCell from "../components/SellPriceCell"; // ✅ giá bán đề xuất (admin / kế toán sửa)
 
 type MachineStockRow = {
   itemId?: string; // ✅ now provided by BE
@@ -14,6 +15,10 @@ type MachineStockRow = {
   unit?: string; // unitCode (pcs, pair, m...)
   unitName?: string; // unitName (Cái, Cặp, Mét...)
   totalQty: number;
+
+  // ✅ giá bán đề xuất + lần cuối đổi giá
+  sellPrice: number | null;
+  sellPriceUpdatedAt?: string | null;
 
   // ✅ NEW: note của item (từ BE summary-by-item)
   note?: string | null;
@@ -80,6 +85,12 @@ const MachineStocksPage: React.FC = () => {
   const canEditNote = user?.role === "admin" || user?.role === "accountant";
 
   const [rows, setRows] = useState<MachineStockRow[]>([]);
+
+  // ✅ sửa giá bán đề xuất xong: cập nhật ngay dòng đó, không tải lại cả bảng
+  const updateSellPrice = (itemId: string, price: number, at: string | null) => {
+    setRows((prev) => prev.map((r) => (r.itemId === itemId ? { ...r, sellPrice: price, sellPriceUpdatedAt: at } : r)));
+    showToast("success", "Đã lưu giá bán đề xuất.");
+  };
 
   // ✅ bấm 1 dòng tồn -> xổ lịch sử nhập xuất của mặt hàng đó ngay bên dưới (đối soát)
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -190,6 +201,8 @@ const MachineStocksPage: React.FC = () => {
         unit: r.unit ?? "",
         unitName: r.unitName ?? "",
         totalQty: Number(r.totalQty ?? 0),
+        sellPrice: r.sellPrice === null || r.sellPrice === undefined ? null : Number(r.sellPrice),
+        sellPriceUpdatedAt: r.sellPriceUpdatedAt ?? null,
 
         // ✅ NEW: note
         note: r.note ?? null,
@@ -908,7 +921,7 @@ const MachineStocksPage: React.FC = () => {
           <table
             style={{
               width: "100%",
-              minWidth: isPrivileged ? 1120 : 880, // có cột note nên rộng hơn
+              minWidth: isPrivileged ? 1270 : 1030, // có cột note nên rộng hơn
               borderCollapse: "separate",
               borderSpacing: 0,
               fontSize: 14,
@@ -979,6 +992,20 @@ const MachineStocksPage: React.FC = () => {
                   Tồn kho
                 </th>
 
+                {/* ✅ Giá bán đề xuất: ai cũng xem, admin / kế toán sửa trực tiếp */}
+                <th
+                  style={{
+                    ...stickyTh,
+                    textAlign: "right",
+                    padding: "8px 10px",
+                    borderRight: B_HDR,
+                    width: 150,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Giá bán đề xuất
+                </th>
+
                 {isPrivileged && (
                   <>
                     <th
@@ -1025,13 +1052,13 @@ const MachineStocksPage: React.FC = () => {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={isPrivileged ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
+                  <td colSpan={isPrivileged ? 9 : 6} style={{ padding: 12, textAlign: "center" }}>
                     Đang tải dữ liệu...
                   </td>
                 </tr>
               ) : pagedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={isPrivileged ? 8 : 5} style={{ padding: 12, textAlign: "center" }}>
+                  <td colSpan={isPrivileged ? 9 : 6} style={{ padding: 12, textAlign: "center" }}>
                     Không có dòng máy nào thỏa điều kiện.
                   </td>
                 </tr>
@@ -1102,7 +1129,7 @@ const MachineStocksPage: React.FC = () => {
                             }}
                             title={noteText || ""}
                           >
-                            {noteText ? noteText : <span style={{ color: "#94a3b8" }}>—</span>}
+                            {noteText ? <span style={{ color: "#dc2626", fontWeight: 500 }}>{noteText}</span> : <span style={{ color: "#94a3b8" }}>—</span>}
                           </div>
                         ) : isEditing ? (
                           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -1185,7 +1212,7 @@ const MachineStocksPage: React.FC = () => {
                               }}
                               title={noteText || ""}
                             >
-                              {noteText ? noteText : <span style={{ color: "#94a3b8" }}>—</span>}
+                              {noteText ? <span style={{ color: "#dc2626", fontWeight: 500 }}>{noteText}</span> : <span style={{ color: "#94a3b8" }}>—</span>}
                             </div>
 
                             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -1256,6 +1283,24 @@ const MachineStocksPage: React.FC = () => {
                         }}
                       >
                         {fmtQty(row.totalQty)}
+                      </td>
+
+                      <td
+                        style={{
+                          padding: "6px 10px",
+                          borderTop: B_ROW,
+                          borderRight: B_ROW,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        <SellPriceCell
+                          itemId={row.itemId}
+                          value={row.sellPrice}
+                          updatedAt={row.sellPriceUpdatedAt}
+                          canEdit={isPrivileged}
+                          onSaved={(p, at) => updateSellPrice(row.itemId!, p, at)}
+                          onError={(m) => showToast("error", m)}
+                        />
                       </td>
 
                       {isPrivileged && (
@@ -1332,7 +1377,7 @@ const MachineStocksPage: React.FC = () => {
                     </tr>
                     {row.itemId && expandedId === row.itemId && (
                       <tr>
-                        <td colSpan={isPrivileged ? 8 : 5} style={{ padding: 0, borderTop: B_ROW }}>
+                        <td colSpan={isPrivileged ? 9 : 6} style={{ padding: 0, borderTop: B_ROW }}>
                           <ItemStockHistory itemId={row.itemId} unitLabel={(row as any).unitName || (row as any).unit || ""} />
                         </td>
                       </tr>
@@ -1382,11 +1427,24 @@ const MachineStocksPage: React.FC = () => {
                   </div>
                 </div>
 
+                {/* ✅ Giá bán đề xuất */}
+                <div className="mt-2 flex items-start justify-between gap-2 border-t pt-2 text-xs">
+                  <span className="pt-1 text-slate-500">Giá bán đề xuất</span>
+                  <SellPriceCell
+                    itemId={row.itemId}
+                    value={row.sellPrice}
+                    updatedAt={row.sellPriceUpdatedAt}
+                    canEdit={isPrivileged}
+                    onSaved={(p, at) => updateSellPrice(row.itemId!, p, at)}
+                    onError={(m) => showToast("error", m)}
+                  />
+                </div>
+
                 {/* Ghi chú — dùng lại y hệt logic sửa/xem của bảng desktop */}
                 <div className="mt-2 border-t pt-2">
                   {!canEditNote || !row.itemId ? (
                     <div className="text-xs text-slate-600 break-words">
-                      {noteText ? noteText : <span className="text-slate-400">Không có ghi chú</span>}
+                      {noteText ? <span style={{ color: "#dc2626", fontWeight: 500 }}>{noteText}</span> : <span className="text-slate-400">Không có ghi chú</span>}
                     </div>
                   ) : isEditing ? (
                     <div className="flex items-center gap-2">
@@ -1423,7 +1481,7 @@ const MachineStocksPage: React.FC = () => {
                   ) : (
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex-1 text-xs text-slate-600 break-words">
-                        {noteText ? noteText : <span className="text-slate-400">Không có ghi chú</span>}
+                        {noteText ? <span style={{ color: "#dc2626", fontWeight: 500 }}>{noteText}</span> : <span className="text-slate-400">Không có ghi chú</span>}
                       </div>
                       <div className="flex shrink-0 gap-1">
                         {showEye && (
@@ -1887,7 +1945,7 @@ const MachineStocksPage: React.FC = () => {
                   wordBreak: "break-word",
                 }}
               >
-                {viewNote.note ? viewNote.note : <span style={{ color: "#94a3b8" }}>Không có ghi chú.</span>}
+                {viewNote.note ? <span style={{ color: "#dc2626" }}>{viewNote.note}</span> : <span style={{ color: "#94a3b8" }}>Không có ghi chú.</span>}
               </div>
             </div>
 

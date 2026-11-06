@@ -2301,9 +2301,19 @@ const InvoiceDetailPage: React.FC = () => {
     markDirty();
     setInvoice((prev) => {
       if (!prev) return prev;
-      const lines = prev.lines.map((l, idx) =>
-        idx === index ? { ...l, itemId: it.id, itemName: it.name, unit: it.unit, price: l.price || it.price || 0 } : l
-      );
+      const lines = prev.lines.map((l, idx) => {
+        if (idx !== index) return l;
+        // ✅ hoá đơn bán: chọn sản phẩm (hoặc đổi sang sản phẩm khác) là tự điền giá bán đề xuất.
+        //    Ai bán giá khác thì sửa đè lên ô Đơn giá. Chọn lại đúng sản phẩm cũ thì giữ giá đang nhập.
+        const suggested = Number(it.price || 0);
+        const price =
+          prev.type === "SALES"
+            ? l.itemId !== it.id && suggested > 0
+              ? suggested
+              : l.price || suggested || 0
+            : l.price || it.price || 0;
+        return { ...l, itemId: it.id, itemName: it.name, unit: it.unit, price };
+      });
       return recomputeInvoiceCore(prev, { lines });
     });
     setOpenItemSuggestIndex(null);
