@@ -2,9 +2,10 @@ import React, { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 
-type EditField = "phone" | "email" | "address" | "taxCode";
+type EditField = "name" | "phone" | "email" | "address" | "taxCode";
 
 const FIELD_LABEL: Record<EditField, string> = {
+  name: "Tên khách hàng",
   phone: "Số điện thoại",
   email: "Email",
   address: "Địa chỉ",
@@ -54,13 +55,21 @@ const CustomerDetailPage: React.FC = () => {
   const handleUpdateField = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editModal) return;
+    // ✅ tên khách không được để trống
+    if (editModal.field === "name" && !editModal.value.trim()) {
+      setSaveError("Tên khách hàng không được để trống.");
+      return;
+    }
     setSaving(true);
     setSaveError("");
     try {
-      await api.put(`/customers/${id}`, { [editModal.field]: editModal.value });
+      await api.put(`/customers/${id}`, { [editModal.field]: editModal.field === "name" ? editModal.value.trim() : editModal.value });
       setEditModal(null);
       fetchData();
     } catch (err) {
+      const r = (err as { response?: { status?: number; data?: { message?: string } } })?.response;
+      const msg = r?.status === 400 ? r?.data?.message : "";
+      if (msg) return setSaveError(msg);
       setSaveError(`Chưa lưu được ${FIELD_LABEL[editModal.field].toLowerCase()}. Kiểm tra lại rồi bấm Lưu lần nữa.`);
     } finally {
       setSaving(false);
@@ -92,6 +101,7 @@ const CustomerDetailPage: React.FC = () => {
   const approvedTotal = approved.reduce((s, inv) => s + Number(inv.total || 0), 0);
 
   const contactRows: Array<{ field: EditField; label: string; value?: string }> = [
+    { field: "name", label: "Tên khách hàng", value: data.name },
     { field: "phone", label: "Số điện thoại", value: data.phone },
     { field: "email", label: "Email", value: data.email },
     { field: "taxCode", label: "Mã số thuế", value: data.taxCode },

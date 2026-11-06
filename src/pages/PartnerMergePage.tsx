@@ -1,6 +1,6 @@
 // src/pages/PartnerMergePage.tsx
 // ✅ Gộp khách trùng (chỉ quản trị). App chỉ gợi ý, người bấm mới gộp.
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
@@ -42,6 +42,13 @@ const PartnerMergePage: React.FC = () => {
   const [fields, setFields] = useState<Record<string, string>>({}); // ô -> id khách lấy giá trị
   const [reason, setReason] = useState("");
   const [pinOpen, setPinOpen] = useState(false);
+  // ✅ bấm "Xem và gộp": tự cuộn lên khung so sánh ở đầu trang, không phải lăn chuột lên
+  const mergeBoxRef = useRef<HTMLElement | null>(null);
+  const [scrollTick, setScrollTick] = useState(0);
+  useEffect(() => {
+    if (!scrollTick) return;
+    requestAnimationFrame(() => mergeBoxRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }, [scrollTick]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -68,6 +75,7 @@ const PartnerMergePage: React.FC = () => {
     setKeepId(best?.id || "");
     setFields({});
     setReason("");
+    if (rows.length) setScrollTick((t) => t + 1);
   };
 
   useEffect(() => {
@@ -129,7 +137,7 @@ const PartnerMergePage: React.FC = () => {
       </div>
 
       {picked.length > 0 && (
-        <section className="rounded-xl border border-sky-200 bg-white p-4" aria-label="So sánh trước khi gộp">
+        <section ref={mergeBoxRef} className="scroll-mt-4 rounded-xl border border-sky-200 bg-white p-4" aria-label="So sánh trước khi gộp">
           <h2 className="font-semibold text-slate-900">So sánh trước khi gộp</h2>
           <div className="mt-3 overflow-x-auto">
             <table className="w-full min-w-[640px] text-sm">
