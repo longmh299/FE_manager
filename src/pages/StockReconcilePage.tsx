@@ -27,6 +27,7 @@ type View = "ALL" | "MATCHED" | "FUZZY" | "UNMATCHED" | "DIFF";
 
 const STATUS_LABEL: Record<MatchStatus, string> = {
   MANUAL: "Ghép tay",
+  EXACT_BOTH: "Khớp tên + mã",
   EXACT_CODE: "Khớp mã",
   EXACT_NAME: "Khớp tên",
   FUZZY: "Gần giống",
@@ -35,6 +36,7 @@ const STATUS_LABEL: Record<MatchStatus, string> = {
 };
 const ROW_BG: Record<MatchStatus, string> = {
   MANUAL: "",
+  EXACT_BOTH: "",
   EXACT_CODE: "",
   EXACT_NAME: "",
   FUZZY: "bg-amber-50",
@@ -43,6 +45,7 @@ const ROW_BG: Record<MatchStatus, string> = {
 };
 const BADGE: Record<MatchStatus, string> = {
   MANUAL: "bg-sky-100 text-sky-800",
+  EXACT_BOTH: "bg-emerald-100 text-emerald-800",
   EXACT_CODE: "bg-emerald-100 text-emerald-800",
   EXACT_NAME: "bg-emerald-100 text-emerald-800",
   FUZZY: "bg-amber-200 text-amber-900",
@@ -50,7 +53,7 @@ const BADGE: Record<MatchStatus, string> = {
   SYSTEM_ONLY: "bg-rose-200 text-rose-900",
 };
 // dòng có trong file lên trước (vàng, đỏ, rồi đã khớp); hàng hệ thống không thấy trong file để cuối
-const ORDER: Record<MatchStatus, number> = { FUZZY: 0, FILE_ONLY: 1, MANUAL: 2, EXACT_NAME: 3, EXACT_CODE: 4, SYSTEM_ONLY: 5 };
+const ORDER: Record<MatchStatus, number> = { FUZZY: 0, FILE_ONLY: 1, MANUAL: 2, EXACT_NAME: 3, EXACT_CODE: 4, EXACT_BOTH: 5, SYSTEM_ONLY: 6 };
 
 const fmt = (n: number) => Number(n || 0).toLocaleString("vi-VN", { maximumFractionDigits: 3 });
 const colName = (i: number) => XLSX.utils.encode_col(i);
@@ -73,7 +76,7 @@ function saveAliases(m: Map<string, string>) {
     /* trình duyệt chặn lưu: vẫn ghép được trong lần này */
   }
 }
-const isMatched = (st: MatchStatus) => st === "EXACT_CODE" || st === "EXACT_NAME" || st === "MANUAL";
+const isMatched = (st: MatchStatus) => st === "EXACT_BOTH" || st === "EXACT_CODE" || st === "EXACT_NAME" || st === "MANUAL";
 
 function errMsg(e: unknown, fallback: string) {
   const r = (e as { response?: { data?: { message?: string } }; message?: string }) || {};
@@ -93,8 +96,9 @@ const StockReconcilePage: React.FC = () => {
   // ---- file
   const [fileName, setFileName] = useState("");
   const [wb, setWb] = useState<XLSX.WorkBook | null>(null);
-  const [sheet, setSheet] = useState("");
-  const [cols, setCols] = useState<ColumnGuess>({ headerRow: 0, code: -1, name: -1, qty: -1 });
+  const [sheet, setSheet] = useState(""); // sheet đang xem / chỉnh cột
+  const [useAll, setUseAll] = useState(true); // ✅ đọc mọi sheet có đủ cột (vd TKM = máy, TKLK = linh kiện)
+  const [colsMap, setColsMap] = useState<Record<string, ColumnGuess>>({});
 
   // ---- xem
   const [view, setView] = useState<View>("ALL");
@@ -137,10 +141,25 @@ const StockReconcilePage: React.FC = () => {
     loadSys();
   }, [loadSys]);
 
-  const aoa: string[][] = useMemo(() => {
-    if (!wb || !sheet || !wb.Sheets[sheet]) return [];
-    return XLSX.utils.sheet_to_json<string[]>(wb.Sheets[sheet], { header: 1, raw: false, defval: "", blankrows: true });
-  }, [wb, sheet]);
+  const aoaMap: Record<string, string[][]> = useMemo(() => {
+    const m: Record<string, string[][]> = {};
+    if (!wb) return m;
+    for (const n of wb.SheetNames) {
+      if (!wb.Sheets[n]) continue;
+      m[n] = XLSX.utils.sheet_to_json<string[]>(wb.Sheets[n], { header: 1, raw: false, defval: "", blankrows: true });
+    }
+    return m;
+  }, [wb]);
+  const aoa: string[][] = useMemo(() => aoaMap[sheet] || [], [aoaMap, sheet]);
+  const EMPTY_COLS: ColumnGuess = { headerRow: 0, code: -1, name: -1, qty: -1 };
+  const cols: ColumnGuess = colsMap[sheet] || EMPTY_COLS;
+  const setCols = (c: ColumnGuess) => setColsMap((m) => ({ ...m, [sheet]: c }));
+  const okCols = (c?: ColumnGuess) => !!c && c.qty >= 0 && (c.code >= 0 || c.name >= 0);
+  // các sheet dùng được (dò ra đủ cột)
+  const usable = useMemo(
+    () => (wb ? wb.SheetNames.filter((n) => (aoaMap[n]?.length || 0) > 1 && okCols(colsMap[n])) : []),
+    [wb, aoaMap, colsMap]
+  );
 
   const width = useMemo(() => aoa.slice(0, 50).reduce((m, r) => Math.max(m, r.length), 0), [aoa]);
 
@@ -159,6 +178,16 @@ const StockReconcilePage: React.FC = () => {
           best = n;
         }
       }
+      // dò cột cho từng sheet
+      const guesses: Record<string, ColumnGuess> = {};
+      for (const n of book.SheetNames) {
+        const ws = book.Sheets[n];
+        if (!ws) continue;
+        const a = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, raw: false, defval: "", blankrows: true });
+        if (a.length) guesses[n] = guessColumns(a);
+      }
+      setColsMap(guesses);
+      setUseAll(true);
       setWb(book);
       setFileName(f.name);
       setSheet(best);
@@ -171,13 +200,25 @@ const StockReconcilePage: React.FC = () => {
     }
   };
 
-  // đổi sheet -> tự dò cột lại
-  useEffect(() => {
-    if (aoa.length) setCols(guessColumns(aoa));
-  }, [aoa]);
-
-  const read = useMemo(() => (aoa.length ? readFileRows(aoa, cols) : null), [aoa, cols]);
-  const ready = !!read && cols.qty >= 0 && (cols.code >= 0 || cols.name >= 0);
+  // đọc 1 sheet hoặc mọi sheet dùng được; nhiều sheet thì ghi tên sheet vào số dòng ("TKM dòng 5")
+  const usedSheets = useMemo(
+    () => (useAll && usable.length > 1 ? usable : okCols(colsMap[sheet]) ? [sheet] : []),
+    [useAll, usable, colsMap, sheet]
+  );
+  const read = useMemo(() => {
+    if (!usedSheets.length) return null;
+    const multi = usedSheets.length > 1;
+    const res = { rows: [] as FileRow[], skipped: 0, merged: 0 };
+    usedSheets.forEach((n) => {
+      const k = wb ? wb.SheetNames.indexOf(n) : 0;
+      const r = readFileRows(aoaMap[n] || [], colsMap[n], multi ? n : "", (k + 1) * 1_000_000);
+      res.rows.push(...r.rows);
+      res.skipped += r.skipped;
+      res.merged += r.merged;
+    });
+    return res;
+  }, [usedSheets, aoaMap, colsMap, wb]);
+  const ready = !!read;
 
   const all: ReconRow[] = useMemo(() => {
     if (!ready || !read) return [];
@@ -270,7 +311,7 @@ const StockReconcilePage: React.FC = () => {
     ws.columns = [
       { header: "Trạng thái", key: "st", width: 20 },
       { header: "Độ giống", key: "score", width: 10 },
-      { header: "Dòng file", key: "row", width: 10 },
+      { header: "Dòng file", key: "row", width: 16 },
       { header: "Mã (file)", key: "fc", width: 18 },
       { header: "Tên (file)", key: "fn", width: 38 },
       { header: "SL thực tế", key: "fq", width: 12 },
@@ -287,7 +328,7 @@ const StockReconcilePage: React.FC = () => {
       const row = ws.addRow({
         st: STATUS_LABEL[r.status],
         score: r.score != null ? `${Math.round(r.score * 100)}%` : "",
-        row: r.file ? r.file.rowNos.join(", ") : "",
+        row: r.file ? r.file.refs.join(", ") : "",
         fc: r.file?.code ?? "",
         fn: r.file?.name ?? "",
         fq: r.file ? r.file.qty : null,
@@ -394,10 +435,13 @@ const StockReconcilePage: React.FC = () => {
             <div className="flex flex-wrap items-end gap-3">
               {wb.SheetNames.length > 1 && (
                 <label className="flex flex-col gap-1 text-xs text-slate-600">
-                  Sheet
+                  {useAll && usable.length > 1 ? "Chỉnh cột cho sheet" : "Sheet"}
                   <select className="rounded-lg border px-2 py-1.5 text-sm text-slate-900" value={sheet} onChange={(e) => setSheet(e.target.value)}>
                     {wb.SheetNames.map((n) => (
-                      <option key={n} value={n}>{n}</option>
+                      <option key={n} value={n}>
+                        {n}
+                        {usable.includes(n) ? "" : " (chưa nhận ra cột)"}
+                      </option>
                     ))}
                   </select>
                 </label>
@@ -420,9 +464,23 @@ const StockReconcilePage: React.FC = () => {
               {colSelect("Cột tên hàng", "name")}
               {colSelect("Cột số lượng thực tế", "qty")}
             </div>
-            {!ready && (
+            {wb.SheetNames.length > 1 && (
+              <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" checked={useAll} onChange={(e) => setUseAll(e.target.checked)} />
+                Đọc tất cả sheet cùng lúc
+                <span className="text-slate-500">
+                  ({usable.length ? usable.map((n) => {
+                    const c = colsMap[n];
+                    const L = (i: number) => (i >= 0 ? colName(i) : "—");
+                    return `${n}: tên ${L(c.name)}, mã ${L(c.code)}, SL ${L(c.qty)}`;
+                  }).join(" · ") : "chưa sheet nào nhận ra cột"})
+                </span>
+              </label>
+            )}
+            {!okCols(cols) && (
               <div className="mt-2 text-sm text-rose-700">
-                Chưa xác định được cột. Chọn cột <b>số lượng thực tế</b> và ít nhất một trong hai cột <b>mã</b> / <b>tên</b>.
+                Sheet <b>{sheet}</b> chưa xác định được cột. Chọn cột <b>số lượng thực tế</b> và ít nhất một trong hai cột <b>mã</b> / <b>tên</b>
+                {useAll && usable.length > 1 ? " (hoặc bỏ qua nếu sheet này không phải bảng tồn)." : "."}
               </div>
             )}
           </div>
@@ -500,7 +558,7 @@ const StockReconcilePage: React.FC = () => {
                             Giống {Math.round(r.score * 100)}% theo {r.fuzzyBy === "code" ? "mã" : "tên"}
                           </div>
                         )}
-                        {r.file && <div className="mt-1 text-xs text-slate-400">Dòng {r.file.rowNos.join(", ")}</div>}
+                        {r.file && <div className="mt-1 text-xs text-slate-400">{r.file.refs.join(", ")}</div>}
                       </td>
                       {r.file ? (
                         <>
@@ -669,7 +727,7 @@ const ItemPicker: React.FC<{
             <div>
               <h2 className="font-semibold">Ghép với mặt hàng trong hệ thống</h2>
               <div className="mt-1 text-sm text-slate-600">
-                Dòng {file.rowNos.join(", ")} trong file: <b>{file.code || "—"}</b> · {file.name || "—"} · SL thực tế{" "}
+                {file.refs.join(", ")} trong file: <b>{file.code || "—"}</b> · {file.name || "—"} · SL thực tế{" "}
                 <b>{fmt(file.qty)}</b>
               </div>
             </div>
@@ -709,7 +767,7 @@ const ItemPicker: React.FC<{
                   {it.itemId === currentId && <div className="text-xs text-amber-800">Đang được ghép tự động (gần giống)</div>}
                   {busy && (
                     <div className="text-xs text-rose-700">
-                      Đang ghép với dòng {other!.rowNos.join(", ")} ({other!.code || other!.name}) — chọn sẽ chuyển sang dòng này
+                      Đang ghép với {other!.refs.join(", ")} ({other!.code || other!.name}) — chọn sẽ chuyển sang dòng này
                     </div>
                   )}
                 </div>
@@ -802,7 +860,7 @@ const FileRowPicker: React.FC<{
                   <div className="font-medium">
                     {f.code || "—"} <span className="font-normal text-slate-700">· {f.name || "—"}</span>
                   </div>
-                  <div className="text-xs text-slate-400">Dòng {f.rowNos.join(", ")}</div>
+                  <div className="text-xs text-slate-400">{f.refs.join(", ")}</div>
                   {pr && (
                     <div className="text-xs text-amber-800">
                       Đang ghép với {pr.sys?.sku || pr.sys?.name} ({STATUS_LABEL[pr.status]}) — chọn sẽ chuyển sang hàng này

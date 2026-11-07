@@ -15,14 +15,15 @@ export type SysItem = {
 };
 
 export type FileRow = {
-  rowNo: number; // số dòng trong Excel (1-based) — dòng đầu tiên nếu bị gộp
+  rowNo: number; // khoá duy nhất của dòng (đọc nhiều sheet: sheet thứ k cộng thêm k*1.000.000)
   rowNos: number[]; // mọi dòng trong file có cùng mã/tên (đã cộng dồn)
+  refs: string[]; // nhãn hiển thị: "TKM dòng 5" / "dòng 5"
   code: string;
   name: string;
   qty: number;
 };
 
-export type MatchStatus = "MANUAL" | "EXACT_CODE" | "EXACT_NAME" | "FUZZY" | "FILE_ONLY" | "SYSTEM_ONLY";
+export type MatchStatus = "MANUAL" | "EXACT_BOTH" | "EXACT_NAME" | "EXACT_CODE" | "FUZZY" | "FILE_ONLY" | "SYSTEM_ONLY";
 
 export type ReconRow = {
   key: string;
@@ -186,7 +187,8 @@ export type ReadResult = { rows: FileRow[]; skipped: number; merged: number };
 
 /** Lấy các dòng hàng từ bảng theo cột đã chọn.
  *  Chỉ cộng dồn khi trùng CẢ mã lẫn tên: cùng mã mà khác tên (vd DHZ550 "cao su" / "PU") là 2 mặt hàng khác nhau. */
-export function readFileRows(aoa: string[][], cols: ColumnGuess): ReadResult {
+export function readFileRows(aoa: string[][], cols: ColumnGuess, sheet = "", rowBase = 0): ReadResult {
+  const ref = (r: number) => (sheet ? `${sheet} dòng ${r + 1}` : `dòng ${r + 1}`);
   const out = new Map<string, FileRow>();
   let skipped = 0;
   let merged = 0;
@@ -207,11 +209,12 @@ export function readFileRows(aoa: string[][], cols: ColumnGuess): ReadResult {
     const cur = out.get(key);
     if (cur) {
       cur.qty += q;
-      cur.rowNos.push(r + 1);
+      cur.rowNos.push(rowBase + r + 1);
+      cur.refs.push(ref(r));
       if (!cur.name && name) cur.name = name;
       merged++;
     } else {
-      out.set(key, { rowNo: r + 1, rowNos: [r + 1], code, name, qty: q });
+      out.set(key, { rowNo: rowBase + r + 1, rowNos: [rowBase + r + 1], refs: [ref(r)], code, name, qty: q });
     }
   }
   return { rows: Array.from(out.values()), skipped, merged };
@@ -277,11 +280,22 @@ export function reconcile(
 
   /** file có thêm dòng trùng (tên / mã) mà hệ thống chỉ có ĐÚNG 1 mặt hàng như vậy (vd 1 hàng để 2 kệ)
    *  -> cộng dồn vào dòng đã ghép, không báo dư */
-  const mergeInto = (f: FileRow, list: SysItem[] | undefined) => {
+  const mergeInto = (f: FileRow, list: SysItem[] | undefined, sameCodeOnly = false) => {
     if (!list || list.length !== 1 || !usedSys.has(list[0].itemId) || rejected.has(pairKey(f, list[0]))) return false;
     const row = out.find((r) => r.status !== "MANUAL" && r.sys?.itemId === list[0].itemId);
     if (!row || !row.file) return false;
-    const merged: FileRow = { ...row.file, qty: row.file.qty + f.qty, rowNos: [...row.file.rowNos, ...f.rowNos].sort((a, b) => a - b) };
+    if (sameCodeOnly) {
+      // gộp theo tên: dòng có mã khác (vd "Máy cắt rau quả" 5 mã khác nhau) là hàng khác, không cộng dồn
+      const fc = codesOf(f);
+      const known = [...codesOf(row.file), ...sysCodes(list[0])];
+      if (fc.length && !fc.some((c) => known.includes(c))) return false;
+    }
+    const merged: FileRow = {
+      ...row.file,
+      qty: row.file.qty + f.qty,
+      rowNos: [...row.file.rowNos, ...f.rowNos].sort((a, b) => a - b),
+      refs: [...row.file.refs, ...f.refs],
+    };
     row.file = merged;
     row.diff = round(merged.qty - list[0].qty);
     usedFile.add(f.rowNo);
@@ -301,22 +315,40 @@ export function reconcile(
     if (s && !usedSys.has(s.itemId)) push("MANUAL", f, s);
   }
 
-  // (1) TÊN TRƯỚC: tên đã bỏ phần [xxx], bỏ dấu, khoảng trắng, gạch.
-  //     Nhiều mặt hàng trùng tên -> chọn mặt hàng có mã trùng mã trong file, không có thì lấy mặt hàng đầu.
+  // (1) TÊN TRƯỚC (tên đã bỏ phần [xxx], bỏ dấu, khoảng trắng, gạch)
+  // (1a) trùng CẢ tên lẫn mã: chắc chắn nhất, tách được các hàng trùng tên ("Máy cắt rau quả" có 5 mã)
   for (const f of fileRows) {
     if (usedFile.has(f.rowNo)) continue;
     const n = nameKey(f.name);
-    if (!n) continue;
-    const cand = free(f, sysByName.get(n));
-    if (!cand.length) continue;
     const fc = codesOf(f);
-    const best = cand.find((s) => sysCodes(s).some((c) => fc.includes(c))) || cand[0];
-    push("EXACT_NAME", f, best);
+    if (!n || !fc.length) continue;
+    const hit = free(f, sysByName.get(n)).find((s) => sysCodes(s).some((c) => fc.includes(c)));
+    if (hit) push("EXACT_BOTH", f, hit);
+  }
+  // (1b) chỉ trùng tên: ghép thẳng khi tên đó KHÔNG mơ hồ (hệ thống còn đúng 1 hàng tên đó,
+  //      file còn đúng 1 dòng tên đó). Mơ hồ thì để xuống nhóm "gần giống" cho người xem lại.
+  const fileByName = new Map<string, FileRow[]>();
+  for (const f of fileRows) {
+    if (usedFile.has(f.rowNo)) continue;
+    const n = nameKey(f.name);
+    if (n) fileByName.set(n, [...(fileByName.get(n) || []), f]);
+  }
+  for (const [n, group] of fileByName) {
+    const cand = group.length ? free(group[0], sysByName.get(n)) : [];
+    if (cand.length !== 1) continue;
+    const s0 = cand[0];
+    if (group.length === 1) {
+      if (!rejected.has(pairKey(group[0], s0))) push("EXACT_NAME", group[0], s0);
+      continue;
+    }
+    // file có nhiều dòng cùng tên: nếu không dòng nào ghi mã khác nhau -> cùng 1 hàng (để nhiều kệ), ghép + cộng dồn
+    const codes = new Set(group.map((f) => normCode(f.code)).filter(Boolean));
+    if (codes.size <= 1 && !rejected.has(pairKey(group[0], s0))) push("EXACT_NAME", group[0], s0);
   }
   for (const f of fileRows) {
     if (usedFile.has(f.rowNo)) continue;
     const n = nameKey(f.name);
-    if (n) mergeInto(f, sysByName.get(n));
+    if (n) mergeInto(f, sysByName.get(n), true);
   }
 
   // (2) SAU ĐÓ MỚI TỚI MÃ (cột mã trong file, hoặc mã trong [ ] ở tên trong file).
@@ -365,7 +397,7 @@ export function reconcile(
     if (p.nc.length >= 3) byPre.set(p.nc.slice(0, 3), [...(byPre.get(p.nc.slice(0, 3)) || []), i]);
   });
 
-  type Cand = { f: FileRow; si: number; score: number; by: "code" | "name" };
+  type Cand = { f: FileRow; si: number; score: number; tie: number; by: "code" | "name" };
   const cands: Cand[] = [];
   for (const f of fileRows) {
     if (usedFile.has(f.rowNo)) continue;
@@ -393,10 +425,11 @@ export function reconcile(
       let score = Math.max(sCode, sName);
       // khác số (9 khay / 6 khay, 2HP / 3HP, DZ-400 / DZ-500) thì gần như chắc chắn là 2 mặt hàng khác nhau
       if (nums.length && p.nums.length && nums.join() !== p.nums.join()) score *= 0.8;
-      if (score >= fuzzyMin) cands.push({ f, si: i, score, by: sCode >= sName ? "code" : "name" });
+      // điểm phụ (tên + mã) để tách các hàng trùng tên: cùng tên thì hàng có mã giống hơn được chọn trước
+      if (score >= fuzzyMin) cands.push({ f, si: i, score, tie: sCode + sName, by: sCode >= sName ? "code" : "name" });
     }
   }
-  cands.sort((a, b) => b.score - a.score);
+  cands.sort((a, b) => b.score - a.score || b.tie - a.tie);
   for (const c of cands) {
     const s = sysPre[c.si].s;
     if (usedFile.has(c.f.rowNo) || usedSys.has(s.itemId)) continue;
