@@ -236,10 +236,14 @@ export function readFileRows(aoa: string[][], cols: ColumnGuess, sheet = "", row
 /* ============ ghép ============ */
 export const FUZZY_MIN = 0.72;
 
-/** khoá nhớ ghép tay của 1 dòng file: theo mã nếu có, không thì theo tên (đã chuẩn hoá) */
+/** ✅ khoá nhớ ghép tay của 1 dòng file = MÃ + TÊN (đã chuẩn hoá, bỏ [xxx], dấu, khoảng trắng, gạch).
+ *  Không dùng riêng mã: file hay có nhiều hàng chung 1 mã (JL660 = máy cắt rau quả, bi + lò xo máy cắt rau…). */
 export function aliasKey(f: { code: string; name: string }) {
-  const c = normCode(f.code);
-  return c ? `c:${c}` : `n:${normName(f.name)}`;
+  return `c:${normCode(f.code)}|n:${nameKey(f.name)}`;
+}
+/** khoá kiểu cũ (trước 07/11): chỉ dùng lại khoá theo TÊN của dòng không có mã — khoá theo riêng mã bỏ qua vì dễ ghép nhầm */
+function legacyAliasKey(f: { code: string; name: string }) {
+  return normCode(f.code) ? "" : `n:${normName(f.name)}`;
 }
 
 export function reconcile(
@@ -327,7 +331,8 @@ export function reconcile(
   }
   for (const f of fileRows) {
     if (usedFile.has(f.rowNo)) continue;
-    const id = aliases.get(aliasKey(f));
+    const legacy = legacyAliasKey(f);
+    const id = aliases.get(aliasKey(f)) ?? (legacy ? aliases.get(legacy) : undefined);
     const s = id ? sysById.get(id) : undefined;
     if (s && !usedSys.has(s.itemId)) push("MANUAL", f, s);
   }
