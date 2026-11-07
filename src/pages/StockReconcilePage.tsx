@@ -2,7 +2,8 @@
 // ✅ Đối soát tồn thực tế (file Excel) với tồn hệ thống — CHỈ XEM, không ghi gì vào kho.
 //  - Tải file kiểm kê (xlsx / xls / csv) -> tự dò cột Mã / Tên / Số lượng (chỉnh lại được)
 //  - Trùng mã / trùng tên: ghép thẳng; gần giống: nền vàng (bỏ ghép được); không khớp: nền đỏ
-//  - Chênh lệch = thực tế − hệ thống; xuất kết quả ra Excel giữ nguyên màu
+//  - Chênh lệch = HỆ THỐNG − THỰC TẾ (+ = hệ thống thừa, − = hệ thống thiếu); xuất Excel giữ nguyên màu
+//  - Chọn được ngày lấy tồn hệ thống (tồn cuối ngày, tính từ báo cáo nhập – xuất – tồn)
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
@@ -60,6 +61,12 @@ const fmt = (n: number) => Number(n || 0).toLocaleString("vi-VN", { maximumFract
 const colName = (i: number) => XLSX.utils.encode_col(i);
 const PAGE = 300;
 
+/** hôm nay theo giờ VN, dạng YYYY-MM-DD (cho ô chọn ngày) */
+function todayVN() {
+  return new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+}
+const fmtYmd = (ymd: string) => ymd.split("-").reverse().join("/");
+
 // ✅ ghép tay đã lưu: mã / tên trong file -> mặt hàng hệ thống (lần sau tải file là tự ghép)
 const ALIAS_LS = "stock_reconcile_alias_v1";
 function loadAliases(): Map<string, string> {
@@ -112,6 +119,9 @@ const StockReconcilePage: React.FC = () => {
   const [aliases, setAliases] = useState<Map<string, string>>(() => loadAliases());
   const [picker, setPicker] = useState<{ file: FileRow; currentId?: string } | null>(null);
   const [filePicker, setFilePicker] = useState<SysItem | null>(null); // hàng hệ thống không thấy trong file -> tìm dòng trong file
+  // ✅ ngày lấy tồn hệ thống: "" = tồn hiện tại; có ngày = tồn cuối ngày đó (vd ngày kiểm kê)
+  const [asOf, setAsOf] = useState("");
+  const [sysAsOf, setSysAsOf] = useState(""); // ngày của bộ tồn đang hiển thị
 
   const loadSys = useCallback(async () => {
     setSysLoading(true);
@@ -120,16 +130,27 @@ const StockReconcilePage: React.FC = () => {
         params: { kind: kind || undefined, page: 1, pageSize: 100000 },
       });
       const rows: Array<Record<string, unknown>> = res?.data?.data || [];
-      setSys(
-        rows.map((r) => ({
-          itemId: String(r.itemId ?? r.id ?? ""),
-          sku: String(r.sku ?? ""),
-          name: String(r.name ?? ""),
-          unit: String(r.unitName || r.unit || ""),
-          kind: String(r.kind ?? ""),
-          qty: Number(r.totalQty ?? 0),
-        }))
-      );
+      let list: SysItem[] = rows.map((r) => ({
+        itemId: String(r.itemId ?? r.id ?? ""),
+        sku: String(r.sku ?? ""),
+        name: String(r.name ?? ""),
+        unit: String(r.unitName || r.unit || ""),
+        kind: String(r.kind ?? ""),
+        qty: Number(r.totalQty ?? 0),
+      }));
+
+      // ngày trong quá khứ: lấy TỒN CUỐI NGÀY từ báo cáo nhập – xuất – tồn (tính lùi từ phiếu nhập / xuất đã ghi sổ)
+      const day = asOf && asOf < todayVN() ? asOf : "";
+      if (day) {
+        const r2 = await api.get("/reports/stock-inout", { params: { from: day, to: day } });
+        const closing = new Map<string, number>();
+        for (const x of (r2?.data?.rows || []) as Array<{ itemId: string; closingQty: number }>) {
+          closing.set(String(x.itemId), Number(x.closingQty ?? 0));
+        }
+        list = list.map((it) => ({ ...it, qty: closing.get(it.itemId) ?? 0 }));
+      }
+      setSys(list);
+      setSysAsOf(day);
       setSysAt(new Date());
     } catch (e) {
       push({ type: "error", message: errMsg(e, "Không tải được tồn hệ thống.") });
@@ -137,7 +158,7 @@ const StockReconcilePage: React.FC = () => {
       setSysLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind]);
+  }, [kind, asOf]);
 
   useEffect(() => {
     loadSys();
@@ -332,7 +353,7 @@ const StockReconcilePage: React.FC = () => {
       { header: "Tên (hệ thống)", key: "sn", width: 38 },
       { header: "ĐVT", key: "u", width: 8 },
       { header: "Tồn hệ thống", key: "sq", width: 13 },
-      { header: "Chênh lệch", key: "d", width: 12 },
+      { header: "Chênh lệch (HT − thực tế)", key: "d", width: 14 },
     ];
     ws.getRow(1).font = { bold: true };
     ws.views = [{ state: "frozen", ySplit: 1 }];
@@ -355,7 +376,7 @@ const StockReconcilePage: React.FC = () => {
       if (r.status === "FILE_ONLY" || r.status === "SYSTEM_ONLY")
         row.eachCell({ includeEmpty: true }, (c) => (c.fill = fill("FFFFE4E6")));
       const dc = row.getCell("d");
-      dc.font = { bold: true, color: { argb: r.diff > 1e-9 ? "FF1D4ED8" : r.diff < -1e-9 ? "FFDC2626" : "FF059669" } };
+      dc.font = { bold: true, color: { argb: r.diff > 1e-9 ? "FFDC2626" : r.diff < -1e-9 ? "FF1D4ED8" : "FF059669" } };
     }
     ["fq", "sq", "d"].forEach((k) => (ws.getColumn(k).numFmt = "#,##0.###"));
     const buf = await book.xlsx.writeBuffer();
@@ -416,12 +437,35 @@ const StockReconcilePage: React.FC = () => {
               <option value="PART">Chỉ linh kiện</option>
             </select>
           </label>
+          <label className="flex flex-col gap-1 text-xs text-slate-600">
+            Tồn hệ thống tại ngày
+            <div className="flex items-center gap-1">
+              <input
+                type="date"
+                value={asOf}
+                max={todayVN()}
+                onChange={(e) => setAsOf(e.target.value)}
+                className="rounded-lg border px-2 py-1 text-sm text-slate-900"
+              />
+              {asOf && (
+                <button type="button" onClick={() => setAsOf("")} className="rounded-lg border px-2 py-1 text-xs hover:bg-slate-50" title="Về tồn hiện tại">
+                  Hiện tại
+                </button>
+              )}
+            </div>
+          </label>
           <button type="button" onClick={loadSys} disabled={sysLoading} className="rounded-lg border px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-60">
             {sysLoading ? "Đang tải tồn…" : "Tải lại tồn hệ thống"}
           </button>
           <span className="pb-1.5 text-xs text-slate-500">
             {sys.length ? `${fmt(sys.length)} mặt hàng` : ""}
-            {sysAt ? ` · lấy lúc ${sysAt.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}` : ""}
+            {sysLoading ? "" : sysAsOf ? (
+              <b className="text-slate-700"> · tồn cuối ngày {fmtYmd(sysAsOf)}</b>
+            ) : sysAt ? (
+              ` · tồn hiện tại, lấy lúc ${sysAt.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}`
+            ) : (
+              ""
+            )}
           </span>
 
           <div className="ml-auto flex items-end gap-2">
@@ -525,7 +569,8 @@ const StockReconcilePage: React.FC = () => {
             <div className="rounded-xl border bg-white px-3 py-2">
               <div className="text-xs text-slate-500">Tổng chênh lệch</div>
               <div className="text-sm font-semibold tabular-nums">
-                <span className="text-blue-700">+{fmt(stats.plus)}</span> / <span className="text-rose-600">{fmt(stats.minus)}</span>
+                <span className="text-rose-600" title="Hệ thống thừa so với thực tế">+{fmt(stats.plus)}</span> /{" "}
+                <span className="text-blue-700" title="Hệ thống thiếu so với thực tế">{fmt(stats.minus)}</span>
               </div>
             </div>
           </div>
@@ -563,7 +608,10 @@ const StockReconcilePage: React.FC = () => {
                     <th className="px-3 py-2 text-left font-medium" rowSpan={2}>Trạng thái</th>
                     <th className="border-l px-3 py-1.5 text-center font-medium" colSpan={3}>File thực tế</th>
                     <th className="border-l px-3 py-1.5 text-center font-medium" colSpan={3}>Hệ thống</th>
-                    <th className="border-l px-3 py-2 text-right font-medium" rowSpan={2}>Chênh lệch</th>
+                    <th className="border-l px-3 py-2 text-right font-medium" rowSpan={2}>
+                      Chênh lệch
+                      <div className="text-xs font-normal text-slate-400">HT − thực tế</div>
+                    </th>
                     <th className="px-2 py-2" rowSpan={2} />
                   </tr>
                   <tr className="text-xs">
@@ -611,12 +659,12 @@ const StockReconcilePage: React.FC = () => {
                       <td className="px-3 py-2 text-right tabular-nums">{r.sys ? fmt(r.sys.qty) : ""}</td>
                       <td
                         className={`border-l px-3 py-2 text-right font-semibold tabular-nums ${
-                          r.diff > 1e-9 ? "text-blue-700" : r.diff < -1e-9 ? "text-rose-600" : "text-emerald-600"
+                          r.diff > 1e-9 ? "text-rose-600" : r.diff < -1e-9 ? "text-blue-700" : "text-emerald-600"
                         }`}
                       >
                         {Math.abs(r.diff) < 1e-9 ? "Khớp" : `${r.diff > 0 ? "+" : ""}${fmt(r.diff)}`}
                         {Math.abs(r.diff) > 1e-9 && (
-                          <div className="text-xs font-normal whitespace-nowrap">{r.diff > 0 ? "thừa so với HT" : "thiếu so với HT"}</div>
+                          <div className="text-xs font-normal whitespace-nowrap">{r.diff > 0 ? "HT thừa so với thực tế" : "HT thiếu so với thực tế"}</div>
                         )}
                       </td>
                       <td className="px-2 py-2 text-right">

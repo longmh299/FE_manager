@@ -33,7 +33,7 @@ export type ReconRow = {
   sys?: SysItem;
   score?: number; // độ giống (0..1) cho FUZZY
   fuzzyBy?: "code" | "name";
-  diff: number; // thực tế - hệ thống
+  diff: number; // ✅ HỆ THỐNG − THỰC TẾ: file 0, hệ thống 2 -> +2 (hệ thống thừa so với thực tế)
 };
 
 /* ============ chuẩn hoá ============ */
@@ -283,7 +283,7 @@ export function reconcile(
   const push = (status: MatchStatus, f: FileRow, s: SysItem, extra: Partial<ReconRow> = {}) => {
     usedSys.add(s.itemId);
     usedFile.add(f.rowNo);
-    out.push({ key: pairKey(f, s), status, file: f, sys: s, diff: round(f.qty - s.qty), ...extra });
+    out.push({ key: pairKey(f, s), status, file: f, sys: s, diff: round(s.qty - f.qty), ...extra });
   };
   // ✅ dòng của sheet máy chỉ ghép với hàng loại máy, sheet linh kiện chỉ với linh kiện
   const sameKind = (f: FileRow, s: SysItem) => !f.kind || !s.kind || f.kind === s.kind;
@@ -314,7 +314,7 @@ export function reconcile(
       refs: [...row.file.refs, ...f.refs],
     };
     row.file = merged;
-    row.diff = round(merged.qty - list[0].qty);
+    row.diff = round(list[0].qty - merged.qty);
     usedFile.add(f.rowNo);
     return true;
   };
@@ -458,11 +458,11 @@ export function reconcile(
   // (4) không khớp
   for (const f of fileRows) {
     if (usedFile.has(f.rowNo)) continue;
-    out.push({ key: `f${fileKey(f)}`, status: "FILE_ONLY", file: f, diff: round(f.qty) });
+    out.push({ key: `f${fileKey(f)}`, status: "FILE_ONLY", file: f, diff: round(-f.qty) });
   }
   for (const s of sysItems) {
     if (usedSys.has(s.itemId)) continue;
-    out.push({ key: `s${s.itemId}`, status: "SYSTEM_ONLY", sys: s, diff: round(-s.qty) });
+    out.push({ key: `s${s.itemId}`, status: "SYSTEM_ONLY", sys: s, diff: round(s.qty) });
   }
   return out;
 }
