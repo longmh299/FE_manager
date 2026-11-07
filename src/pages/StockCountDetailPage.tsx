@@ -42,6 +42,26 @@ type StockCountDetail = {
 };
 
 type TabKind = "PART" | "MACHINE";
+type CountFilter = "ALL" | "TODO" | "DONE" | "DIFF";
+
+/** tìm không dấu: "bom 3hp" thấy "Bơm thủy lực 3HP"; mã viết liền / có gạch như nhau ("dhz550" thấy "DHZ-550") */
+function foldVN(s: string) {
+  return String(s ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .toLowerCase();
+}
+const compact = (s: string) => foldVN(s).replace(/[^a-z0-9]/g, "");
+function lineMatches(line: StockCountLine, q: string) {
+  const words = foldVN(q).split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const name = foldVN(line.item?.name || "");
+  const sku = foldVN(line.item?.sku || "");
+  const all = `${sku} ${name} ${compact(line.item?.sku || "")} ${compact(line.item?.name || "")}`;
+  return words.every((w) => all.includes(w) || all.includes(compact(w)));
+}
 
 function getApiErrorMessage(err: any, fallback: string) {
   return err?.response?.data?.message || err?.message || fallback;
@@ -89,6 +109,29 @@ const StockCountDetailPage: React.FC = () => {
 
   // tab hiện tại: Linh kiện (PART) / Máy móc
   const [activeTab, setActiveTab] = useState<TabKind>("PART");
+  // ✅ đếm không theo thứ tự danh sách: tìm mã / tên -> nhập số -> Enter -> tìm tiếp
+  const [q, setQ] = useState("");
+  const [filter, setFilter] = useState<CountFilter>("ALL");
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const qtyRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  // màn rộng (máy tính / điện thoại xoay ngang) -> bảng; điện thoại dọc -> thẻ. Chỉ vẽ 1 dạng để Enter nhảy đúng ô.
+  const [wide, setWide] = useState(() => typeof window !== "undefined" && window.matchMedia("(min-width: 640px)").matches);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 640px)");
+    const on = () => setWide(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  // màn thấp (điện thoại xoay ngang): thu gọn khung thông tin phiếu để chừa chỗ cho danh sách đếm
+  const [short, setShort] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-height: 500px)").matches);
+  const [showHead, setShowHead] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-height: 500px)");
+    const on = () => setShort(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  const headOpen = !short || showHead;
 
   // ✅ custom confirm modal (replace window.confirm)
   const [confirmModal, setConfirmModal] = useState<ConfirmConfig | null>(null);
@@ -157,10 +200,90 @@ const StockCountDetailPage: React.FC = () => {
   const isPosted = data?.status === "posted";
   const isReadOnly = isPosted || locked;
 
-  const visibleLines = data?.lines.filter((l) => l.item?.kind === activeTab) ?? [];
+  const tabLines = data?.lines.filter((l) => l.item?.kind === activeTab) ?? [];
+  const rawOf = (l: StockCountLine) => String(editingValues[l.id] ?? (l.countedQty == null ? "" : String(l.countedQty)));
+  const isCounted = (l: StockCountLine) => rawOf(l).trim() !== "";
+  const hasDiff = (l: StockCountLine) => isCounted(l) && parseNumber(rawOf(l)) !== parseNumber(l.bookQty ?? "0");
+  // đang tìm: tìm trên CẢ máy lẫn linh kiện (đỡ phải nhớ hàng nằm tab nào)
+  const searching = q.trim() !== "";
+  const visibleLines = (searching ? data?.lines ?? [] : tabLines).filter((l) => {
+    if (searching && !lineMatches(l, q)) return false;
+    if (filter === "TODO") return !isCounted(l);
+    if (filter === "DONE") return isCounted(l);
+    if (filter === "DIFF") return hasDiff(l);
+    return true;
+  });
+  const progress = {
+    done: tabLines.filter(isCounted).length,
+    total: tabLines.length,
+    diff: tabLines.filter(hasDiff).length,
+  };
+
+  /** nhập xong 1 dòng (Enter): đang tìm -> xoá ô tìm, quay về ô tìm để tìm hàng kế; không tìm -> xuống dòng dưới */
+  // ✅ hàng đếm thấy mà phiếu chưa có: tìm trong danh mục hàng để thêm vào phiếu
+  const [extra, setExtra] = useState<Array<{ id: string; sku: string; name: string; kind?: string; stockQty?: number; unit?: { name?: string; code?: string } | string }>>([]);
+  const [extraLoading, setExtraLoading] = useState(false);
+  const [addingId, setAddingId] = useState<string | null>(null);
+  useEffect(() => {
+    const kw = q.trim();
+    if (!kw || !data || isReadOnly) {
+      setExtra([]);
+      return;
+    }
+    const inPhieu = new Set(data.lines.map((l) => l.itemId));
+    let stop = false;
+    setExtraLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const res = await api.get("/items", { params: { q: kw, page: 1, pageSize: 15 } });
+        const rows = (res?.data?.data || res?.data?.items || []) as typeof extra;
+        if (!stop) setExtra(rows.filter((it) => !inPhieu.has(it.id)).slice(0, 8));
+      } catch {
+        if (!stop) setExtra([]);
+      } finally {
+        if (!stop) setExtraLoading(false);
+      }
+    }, 350);
+    return () => {
+      stop = true;
+      clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, data?.lines.length, isReadOnly]);
+
+  const addToPhieu = async (it: (typeof extra)[number]) => {
+    if (!id || !data) return;
+    try {
+      setAddingId(it.id);
+      const res = await api.post(`/stock-counts/${id}/lines`, { itemId: it.id });
+      const line: StockCountLine = res.data.data;
+      setData((prev) => (prev ? { ...prev, lines: [...prev.lines, line] } : prev));
+      setExtra((xs) => xs.filter((x) => x.id !== it.id));
+      // tìm đúng mã vừa thêm để nhập số đếm luôn
+      setQ(it.sku || it.name);
+      setTimeout(() => {
+        qtyRefs.current[line.id]?.focus();
+      }, 50);
+    } catch (err) {
+      appAlert(getApiErrorMessage(err, "Không thêm được hàng vào phiếu."), { tone: "danger" });
+    } finally {
+      setAddingId(null);
+    }
+  };
+
+  const afterEnter = (lineId: string) => {
+    if (searching) {
+      setQ("");
+      requestAnimationFrame(() => searchRef.current?.focus());
+      return;
+    }
+    const idx = visibleLines.findIndex((l) => l.id === lineId);
+    const next = visibleLines[idx + 1];
+    if (next) requestAnimationFrame(() => qtyRefs.current[next.id]?.focus());
+  };
 
   const totals = useMemo(() => {
-    const lines = visibleLines || [];
+    const lines = tabLines || [];
     let book = 0;
     let counted = 0;
     let diff = 0;
@@ -174,7 +297,7 @@ const StockCountDetailPage: React.FC = () => {
       diff += c - b;
     }
     return { book, counted, diff };
-  }, [visibleLines, editingValues]);
+  }, [tabLines, editingValues]);
 
   const applyPeriodLockIfNeeded = (msg: string) => {
     if (isPeriodLockMessage(msg)) {
@@ -341,16 +464,95 @@ const StockCountDetailPage: React.FC = () => {
     return <span style={style}>0</span>;
   };
 
+  // ô nhập số đếm (dùng chung bảng + thẻ). Enter = lưu rồi sang hàng kế / quay về ô tìm
+  const renderQtyInput = (line: StockCountLine, width: number | string) => (
+    <input
+      ref={(el) => {
+        qtyRefs.current[line.id] = el;
+      }}
+      type="number"
+      inputMode="decimal"
+      enterKeyHint="next"
+      value={rawOf(line)}
+      placeholder="Chưa đếm"
+      disabled={isReadOnly}
+      onFocus={(e) => e.currentTarget.select()}
+      onChange={(e) => setEditingValues((prev) => ({ ...prev, [line.id]: e.target.value }))}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.currentTarget.blur(); // blur -> lưu
+          afterEnter(line.id);
+        }
+      }}
+      onBlur={() => {
+        if (isReadOnly) return;
+        const saved = line.countedQty == null ? "" : String(line.countedQty);
+        if (rawOf(line) === saved) return; // không đổi thì không gọi API
+        handleUpdateCountedQty(line);
+      }}
+      style={{
+        width,
+        padding: "6px 8px",
+        borderRadius: 6,
+        border: savingLineId === line.id ? "1px solid #3182ce" : "1px solid #cbd5e0",
+        fontSize: 16, // >=16px: iPhone không tự phóng to khi bấm vào ô
+        backgroundColor: isReadOnly ? "#f7fafc" : "#fff",
+        color: isReadOnly ? "#718096" : "#111827",
+        cursor: isReadOnly ? "not-allowed" : "text",
+      }}
+      title={locked ? lockedMsg || "Phiếu thuộc kỳ đã khoá" : isPosted ? "Phiếu đã ghi sổ" : ""}
+    />
+  );
+
+  const renderQtyCard = (line: StockCountLine) => (
+    <div
+      key={line.id}
+      className={`rounded-lg border p-3 ${isCounted(line) ? "bg-white" : "border-amber-200 bg-amber-50"}`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold">{line.item?.sku || "—"}</div>
+          <div className="text-sm text-slate-700">{line.item?.name || ""}</div>
+          <div className="mt-0.5 text-xs text-slate-500">
+            {searching ? `${line.item?.kind === "MACHINE" ? "Máy" : "Linh kiện"} · ` : ""}Tồn sổ <b>{line.bookQty ?? 0}</b>
+            {line.item?.unit ? ` ${line.item.unit}` : ""}
+          </div>
+        </div>
+        <div className="shrink-0 text-right text-sm">{isCounted(line) ? renderDiff(line.diff) : <span className="text-xs text-amber-700">chưa đếm</span>}</div>
+      </div>
+      <div className="mt-2 flex items-center gap-2">
+        <span className="text-xs text-slate-500">Thực đếm</span>
+        {renderQtyInput(line, "100%")}
+      </div>
+    </div>
+  );
+
   if (!id) {
     return <div style={{ padding: 16 }}>Thiếu ID phiếu kiểm kê.</div>;
   }
 
   return (
-    <div style={{ padding: 16, maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ padding: short ? "8px 16px" : 16, maxWidth: 1200, margin: "0 auto" }}>
+      {short && data && (
+        <div className="mb-2 flex items-center justify-between gap-2 text-sm">
+          <button type="button" onClick={() => navigate(-1)} className="rounded border px-2 py-1">
+            ←
+          </button>
+          <div className="min-w-0 flex-1 truncate">
+            <b>{data.refNo || data.id}</b>
+            <span className="text-slate-500"> · {isPosted ? "Đã ghi sổ" : "Đang đếm"}</span>
+          </div>
+          <button type="button" onClick={() => setShowHead((v) => !v)} className="shrink-0 rounded border px-2 py-1 text-xs">
+            {showHead ? "Ẩn thông tin ▴" : "Thông tin phiếu ▾"}
+          </button>
+        </div>
+      )}
       <button
         type="button"
         onClick={() => navigate(-1)}
         style={{
+          display: short ? "none" : undefined,
           marginBottom: 12,
           padding: "4px 10px",
           borderRadius: 4,
@@ -390,6 +592,7 @@ const StockCountDetailPage: React.FC = () => {
           {/* Header info */}
           <div
             style={{
+              display: headOpen ? undefined : "none",
               border: "1px solid #e2e8f0",
               borderRadius: 6,
               padding: 12,
@@ -543,120 +746,185 @@ const StockCountDetailPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Tabs PART / MACHINE */}
-          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-            <button
-              type="button"
-              onClick={() => setActiveTab("PART")}
-              style={{
-                padding: "6px 12px",
-                borderRadius: 999,
-                border: activeTab === "PART" ? "1px solid #3182ce" : "1px solid #cbd5e0",
-                backgroundColor: activeTab === "PART" ? "#ebf8ff" : "#fff",
-                fontSize: 13,
-                cursor: "pointer",
-              }}
-            >
-              Linh kiện
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab("MACHINE")}
-              style={{
-                padding: "6px 12px",
-                borderRadius: 999,
-                border:
-                  activeTab === "MACHINE" ? "1px solid #3182ce" : "1px solid #cbd5e0",
-                backgroundColor: activeTab === "MACHINE" ? "#ebf8ff" : "#fff",
-                fontSize: 13,
-                cursor: "pointer",
-              }}
-            >
-              Máy móc
-            </button>
+          {/* ✅ Thanh đếm: tab + tìm mã / tên + lọc — dính trên đầu khi cuộn (điện thoại dọc / ngang đều dùng được) */}
+          <div className="sticky top-0 z-20 -mx-4 mb-2 border-b bg-white/95 px-4 py-2 backdrop-blur">
+            <div className={short ? "flex items-center gap-2" : ""}>
+            <div className={`flex items-center gap-2 ${short ? "shrink-0" : "flex-wrap"}`}>
+              {(["PART", "MACHINE"] as TabKind[]).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setActiveTab(k)}
+                  className={`rounded-full border ${short ? "px-2 py-1 text-xs" : "px-3 py-1.5 text-sm"} ${
+                    activeTab === k && !searching ? "border-blue-500 bg-blue-50 font-medium text-blue-800" : "border-slate-300 bg-white"
+                  }`}
+                >
+                  {k === "PART" ? "Linh kiện" : "Máy móc"}
+                </button>
+              ))}
+              <span className="text-xs text-slate-500">
+                Đã đếm <b className="text-slate-800">{progress.done}</b>/{progress.total}
+                {progress.diff ? (
+                  <>
+                    {" "}· lệch <b className="text-rose-600">{progress.diff}</b>
+                  </>
+                ) : null}
+              </span>
+            </div>
+
+            <div className={`flex items-center gap-2 ${short ? "flex-1" : "mt-2"}`}>
+              <div className="relative flex-1">
+                <input
+                  ref={searchRef}
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Enter: nhảy vào ô số lượng của kết quả đầu tiên
+                    if (e.key === "Enter" && visibleLines[0]) {
+                      e.preventDefault();
+                      qtyRefs.current[visibleLines[0].id]?.focus();
+                      qtyRefs.current[visibleLines[0].id]?.select();
+                    }
+                  }}
+                  type="search"
+                  inputMode="search"
+                  enterKeyHint="go"
+                  placeholder="Tìm mã / tên hàng để nhập số đếm (không cần dấu)"
+                  className={`w-full rounded-lg border border-slate-300 px-3 text-base ${short ? "py-1" : "py-2"}`}
+                />
+                {q && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQ("");
+                      searchRef.current?.focus();
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded px-2 text-slate-400 hover:text-slate-700"
+                    aria-label="Xoá tìm kiếm"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+              {short && (
+                <select
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value as CountFilter)}
+                  className="shrink-0 rounded-lg border border-slate-300 px-2 py-1 text-sm"
+                >
+                  <option value="ALL">Tất cả</option>
+                  <option value="TODO">Chưa đếm</option>
+                  <option value="DONE">Đã đếm</option>
+                  <option value="DIFF">Lệch</option>
+                </select>
+              )}
+            </div>
+            </div>
+
+            <div className={`mt-2 flex-wrap gap-1.5 text-xs ${short ? "hidden" : "flex"}`}>
+              {(
+                [
+                  ["ALL", "Tất cả"],
+                  ["TODO", "Chưa đếm"],
+                  ["DONE", "Đã đếm"],
+                  ["DIFF", "Lệch"],
+                ] as [CountFilter, string][]
+              ).map(([k, label]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setFilter(k)}
+                  className={`rounded-full border px-2.5 py-1 ${filter === k ? "border-slate-800 bg-slate-800 text-white" : "border-slate-300 bg-white text-slate-700"}`}
+                >
+                  {label}
+                </button>
+              ))}
+              {searching && (
+                <span className="self-center text-slate-500">
+                  {visibleLines.length} kết quả (tìm cả máy lẫn linh kiện)
+                </span>
+              )}
+            </div>
           </div>
 
-          {/* Table lines */}
-          <div
-            style={{
-              border: "1px solid #e2e8f0",
-              borderRadius: 6,
-              overflow: "auto",
-            }}
-          >
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead style={{ backgroundColor: "#f7fafc" }}>
-                <tr>
-                  <th style={thStyle}>Mã hàng</th>
-                  <th style={thStyle}>Tên hàng</th>
-                  <th style={thStyle}>ĐVT</th>
-                  <th style={thStyle}>Tồn sổ</th>
-                  <th style={thStyle}>Thực đếm</th>
-                  <th style={thStyle}>Chênh lệch</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleLines.length === 0 && (
+          {/* ✅ đang tìm: hàng có trong danh mục nhưng CHƯA có trong phiếu -> thêm vào để đếm */}
+          {searching && !isReadOnly && (extra.length > 0 || extraLoading) && (
+            <div className="mb-2 rounded-lg border border-sky-200 bg-sky-50 p-2">
+              <div className="mb-1 px-1 text-xs font-medium text-sky-900">
+                {extraLoading && !extra.length ? "Đang tìm thêm trên hệ thống…" : "Có trên hệ thống nhưng CHƯA có trong phiếu — thêm vào để đếm:"}
+              </div>
+              {extra.map((it) => (
+                <div key={it.id} className="flex items-center justify-between gap-2 rounded-md bg-white px-2 py-1.5 text-sm">
+                  <div className="min-w-0">
+                    <b>{it.sku}</b> <span className="text-slate-700">· {it.name}</span>
+                    <div className="text-xs text-slate-500">
+                      {it.kind === "MACHINE" ? "Máy" : "Linh kiện"} · tồn hệ thống {Number(it.stockQty ?? 0).toLocaleString("vi-VN")}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={addingId === it.id}
+                    onClick={() => addToPhieu(it)}
+                    className="shrink-0 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-60"
+                  >
+                    {addingId === it.id ? "Đang thêm…" : "Thêm vào phiếu"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {visibleLines.length === 0 && (
+            <div className="rounded-lg border bg-white p-6 text-center text-sm text-slate-500">
+              {searching
+                ? `Không thấy hàng nào trong phiếu khớp "${q}".${
+                    !isReadOnly && !extra.length && !extraLoading
+                      ? " Hệ thống cũng chưa có mã này — tạo mã trước (form thêm mới ở trang Tồn linh kiện / Tồn máy, hoặc nút + Tạo mã hàng ở trang Đối soát tồn) rồi quay lại tìm để Thêm vào phiếu."
+                      : ""
+                  }`
+                : `Không có dòng nào trong tab ${activeTab === "PART" ? "Linh kiện" : "Máy"}.`}
+            </div>
+          )}
+
+          {/* Điện thoại dọc: dạng thẻ, ô nhập to */}
+          {visibleLines.length > 0 && !wide && (
+            <div className="space-y-2">
+              {visibleLines.map((line) => renderQtyCard(line))}
+            </div>
+          )}
+
+          {/* Màn rộng / điện thoại xoay ngang: dạng bảng */}
+          {visibleLines.length > 0 && wide && (
+            <div className="overflow-auto rounded-md border">
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead style={{ backgroundColor: "#f7fafc" }}>
                   <tr>
-                    <td colSpan={6} style={{ padding: 12, textAlign: "center" }}>
-                      Không có dòng nào trong tab {activeTab === "PART" ? "Linh kiện" : "Máy"}.
-                    </td>
+                    <th style={thStyle}>Mã hàng</th>
+                    <th style={thStyle}>Tên hàng</th>
+                    <th style={thStyle}>ĐVT</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>Tồn sổ</th>
+                    <th style={thStyle}>Thực đếm</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>Chênh lệch</th>
                   </tr>
-                )}
-
-                {visibleLines.map((line) => {
-                  const inputValue =
-                    editingValues[line.id] ?? (line.countedQty as any)?.toString?.() ?? "";
-
-                  return (
-                    <tr key={line.id} style={{ borderTop: "1px solid #edf2f7" }}>
-                      <td style={tdStyle}>{line.item?.sku || ""}</td>
+                </thead>
+                <tbody>
+                  {visibleLines.map((line) => (
+                    <tr key={line.id} style={{ borderTop: "1px solid #edf2f7", backgroundColor: isCounted(line) ? "#fff" : "#fffbeb" }}>
+                      <td style={{ ...tdStyle, whiteSpace: "nowrap", fontWeight: 600 }}>
+                        {line.item?.sku || ""}
+                        {searching && <div className="text-[11px] font-normal text-slate-400">{line.item?.kind === "MACHINE" ? "Máy" : "Linh kiện"}</div>}
+                      </td>
                       <td style={tdStyle}>{line.item?.name || ""}</td>
                       <td style={tdStyle}>{line.item?.unit || ""}</td>
-                      <td style={tdStyle}>{line.bookQty ?? ""}</td>
-                      <td style={tdStyle}>
-                        <input
-                          type="number"
-                          value={inputValue}
-                          placeholder="Chưa đếm"
-                          disabled={isReadOnly}
-                          onChange={(e) =>
-                            setEditingValues((prev) => ({
-                              ...prev,
-                              [line.id]: e.target.value,
-                            }))
-                          }
-                          onBlur={() => {
-                            if (isReadOnly) return;
-                            handleUpdateCountedQty(line);
-                          }}
-                          style={{
-                            width: 100,
-                            padding: "2px 4px",
-                            borderRadius: 4,
-                            border:
-                              savingLineId === line.id ? "1px solid #3182ce" : "1px solid #cbd5e0",
-                            fontSize: 13,
-                            backgroundColor: isReadOnly ? "#f7fafc" : "#fff",
-                            color: isReadOnly ? "#718096" : "#111827",
-                            cursor: isReadOnly ? "not-allowed" : "text",
-                          }}
-                          title={
-                            locked
-                              ? lockedMsg || "Phiếu thuộc kỳ đã khoá"
-                              : isPosted
-                              ? "Phiếu đã ghi sổ"
-                              : ""
-                          }
-                        />
-                      </td>
-                      <td style={tdStyle}>{renderDiff(line.diff)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{line.bookQty ?? ""}</td>
+                      <td style={tdStyle}>{renderQtyInput(line, 110)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{isCounted(line) ? renderDiff(line.diff) : <span className="text-xs text-amber-700">chưa đếm</span>}</td>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </>
       )}
 

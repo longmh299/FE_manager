@@ -17,7 +17,8 @@ export default defineConfig({
         display: 'standalone', // ✅ mở ra như app thật, không có thanh địa chỉ trình duyệt
         background_color: '#0f172a',
         theme_color: '#0f172a',
-        orientation: 'portrait',
+        // ✅ cho xoay ngang (kiểm kê / bảng nhiều cột xem ngang dễ hơn); trước để 'portrait' là khoá màn hình dọc
+        orientation: 'any',
         icons: [
           {
             src: '/pwa-192.png',

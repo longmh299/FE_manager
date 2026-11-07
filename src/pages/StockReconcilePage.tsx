@@ -10,6 +10,7 @@ import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
 import api from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
+import { useAuth } from "../context/AuthContext";
 import {
   type ColumnGuess,
   type FileRow,
@@ -61,6 +62,53 @@ const fmt = (n: number) => Number(n || 0).toLocaleString("vi-VN", { maximumFract
 const colName = (i: number) => XLSX.utils.encode_col(i);
 const PAGE = 300;
 
+type Book = { names: string[]; aoa: Record<string, string[][]> };
+
+// ✅ phiên đối soát lưu trên máy chủ; máy này nhớ phiên đang làm để F5 tự mở lại
+const LAST_SESSION_LS = "stock_reconcile_last_session_v1";
+type SessionMeta = { id: string; name: string; fileName?: string | null; createdBy?: string | null; updatedBy?: string | null; updatedAt: string };
+type SaveState = "idle" | "saving" | "saved" | "error";
+function lsGet(k: string) {
+  try {
+    return localStorage.getItem(k) || "";
+  } catch {
+    return "";
+  }
+}
+function lsSet(k: string, v: string | null) {
+  try {
+    if (v) localStorage.setItem(k, v);
+    else localStorage.removeItem(k);
+  } catch {
+    /* trình duyệt chặn lưu: bỏ qua */
+  }
+}
+/** phần "nhẹ" của phiên (tự lưu mỗi lần ghép / bỏ ghép). Thứ tự khoá cố định để so sánh JSON. */
+function makeLight(p: {
+  sheet: string;
+  useAll: boolean;
+  colsMap: Record<string, ColumnGuess>;
+  kindMap: Record<string, KindFilter>;
+  kind: KindFilter;
+  asOf: string;
+  hideZeroSys: boolean;
+  manual: Map<number, string>;
+  rejected: Set<string>;
+}) {
+  return {
+    v: 1,
+    sheet: p.sheet,
+    useAll: p.useAll,
+    colsMap: p.colsMap,
+    kindMap: p.kindMap,
+    kind: p.kind,
+    asOf: p.asOf,
+    hideZeroSys: p.hideZeroSys,
+    manual: [...p.manual.entries()],
+    rejected: [...p.rejected],
+  };
+}
+
 /** hôm nay theo giờ VN, dạng YYYY-MM-DD (cho ô chọn ngày) */
 function todayVN() {
   return new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
@@ -103,7 +151,8 @@ const StockReconcilePage: React.FC = () => {
 
   // ---- file
   const [fileName, setFileName] = useState("");
-  const [wb, setWb] = useState<XLSX.WorkBook | null>(null);
+  // bảng Excel đã đọc (tên sheet + dữ liệu từng sheet) — dạng thuần để lưu được vào phiên
+  const [book, setBook] = useState<Book | null>(null);
   const [sheet, setSheet] = useState(""); // sheet đang xem / chỉnh cột
   const [useAll, setUseAll] = useState(true); // ✅ đọc mọi sheet có đủ cột (vd TKM = máy, TKLK = linh kiện)
   const [colsMap, setColsMap] = useState<Record<string, ColumnGuess>>({});
@@ -119,8 +168,19 @@ const StockReconcilePage: React.FC = () => {
   const [aliases, setAliases] = useState<Map<string, string>>(() => loadAliases());
   const [picker, setPicker] = useState<{ file: FileRow; currentId?: string } | null>(null);
   const [filePicker, setFilePicker] = useState<SysItem | null>(null); // hàng hệ thống không thấy trong file -> tìm dòng trong file
+  const [createFor, setCreateFor] = useState<FileRow | null>(null); // ✅ dòng file chưa có mã trên hệ thống -> tạo mã hàng
+  const { user: authUser } = useAuth();
+  const isAdmin = String(authUser?.role || "") === "admin";
   // ✅ ngày lấy tồn hệ thống: "" = tồn hiện tại; có ngày = tồn cuối ngày đó (vd ngày kiểm kê)
   const [asOf, setAsOf] = useState("");
+  // ✅ phiên đối soát
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionName, setSessionName] = useState("");
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [savedAt, setSavedAt] = useState<Date | null>(null);
+  const [nameOpen, setNameOpen] = useState(false);
+  const [listOpen, setListOpen] = useState(false);
+  const lastSavedRef = useRef(""); // JSON phần nhẹ đã lưu gần nhất -> không lưu trùng
   const [sysAsOf, setSysAsOf] = useState(""); // ngày của bộ tồn đang hiển thị
 
   const loadSys = useCallback(async () => {
@@ -164,15 +224,7 @@ const StockReconcilePage: React.FC = () => {
     loadSys();
   }, [loadSys]);
 
-  const aoaMap: Record<string, string[][]> = useMemo(() => {
-    const m: Record<string, string[][]> = {};
-    if (!wb) return m;
-    for (const n of wb.SheetNames) {
-      if (!wb.Sheets[n]) continue;
-      m[n] = XLSX.utils.sheet_to_json<string[]>(wb.Sheets[n], { header: 1, raw: false, defval: "", blankrows: true });
-    }
-    return m;
-  }, [wb]);
+  const aoaMap: Record<string, string[][]> = useMemo(() => book?.aoa ?? {}, [book]);
   const aoa: string[][] = useMemo(() => aoaMap[sheet] || [], [aoaMap, sheet]);
   const EMPTY_COLS: ColumnGuess = { headerRow: 0, code: -1, name: -1, qty: -1 };
   const cols: ColumnGuess = colsMap[sheet] || EMPTY_COLS;
@@ -180,8 +232,8 @@ const StockReconcilePage: React.FC = () => {
   const okCols = (c?: ColumnGuess) => !!c && c.qty >= 0 && (c.code >= 0 || c.name >= 0);
   // các sheet dùng được (dò ra đủ cột)
   const usable = useMemo(
-    () => (wb ? wb.SheetNames.filter((n) => (aoaMap[n]?.length || 0) > 1 && okCols(colsMap[n])) : []),
-    [wb, aoaMap, colsMap]
+    () => (book ? book.names.filter((n) => (aoaMap[n]?.length || 0) > 1 && okCols(colsMap[n])) : []),
+    [book, aoaMap, colsMap]
   );
 
   const width = useMemo(() => aoa.slice(0, 50).reduce((m, r) => Math.max(m, r.length), 0), [aoa]);
@@ -189,36 +241,36 @@ const StockReconcilePage: React.FC = () => {
   const onFile = async (f: File | undefined) => {
     if (!f) return;
     try {
-      const book = XLSX.read(new Uint8Array(await f.arrayBuffer()), { type: "array" });
-      // sheet có nhiều dòng nhất
-      let best = book.SheetNames[0] || "";
-      let bestN = -1;
-      for (const n of book.SheetNames) {
-        const ref = book.Sheets[n]?.["!ref"];
-        const rows = ref ? XLSX.utils.decode_range(ref).e.r : 0;
-        if (rows > bestN) {
-          bestN = rows;
-          best = n;
-        }
-      }
-      // dò cột cho từng sheet
-      const guesses: Record<string, ColumnGuess> = {};
-      for (const n of book.SheetNames) {
-        const ws = book.Sheets[n];
+      const wb = XLSX.read(new Uint8Array(await f.arrayBuffer()), { type: "array" });
+      const nb: Book = { names: [], aoa: {} };
+      for (const n of wb.SheetNames) {
+        const ws = wb.Sheets[n];
         if (!ws) continue;
+        // bỏ dòng trống cuối bảng cho phiên lưu gọn
         const a = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, raw: false, defval: "", blankrows: true });
-        if (a.length) guesses[n] = guessColumns(a);
+        let end = a.length;
+        while (end > 0 && !(a[end - 1] || []).some((c) => String(c ?? "").trim())) end--;
+        nb.names.push(n);
+        nb.aoa[n] = a.slice(0, end).map((row) => row.map((c) => String(c ?? "")));
       }
+      // sheet có nhiều dòng nhất
+      const best = nb.names.reduce((b, n) => ((nb.aoa[n]?.length || 0) > (nb.aoa[b]?.length || 0) ? n : b), nb.names[0] || "");
+      // dò cột + loại (máy / linh kiện) cho từng sheet
+      const guesses: Record<string, ColumnGuess> = {};
       const kinds: Record<string, KindFilter> = {};
-      for (const n of Object.keys(guesses)) {
-        const ws = book.Sheets[n];
-        const a = ws ? XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, raw: false, defval: "", blankrows: true }) : [];
+      for (const n of nb.names) {
+        const a = nb.aoa[n];
+        if (!a?.length) continue;
+        guesses[n] = guessColumns(a);
         kinds[n] = guessSheetKind(n, a, guesses[n]);
       }
+      // file mới = phiên mới (phiên cũ vẫn còn trên máy chủ, mở lại được)
+      setSessionId(null);
+      setSessionName("");
       setColsMap(guesses);
       setKindMap(kinds);
       setUseAll(true);
-      setWb(book);
+      setBook(nb);
       setFileName(f.name);
       setSheet(best);
       setRejected(new Set());
@@ -244,14 +296,14 @@ const StockReconcilePage: React.FC = () => {
     const multi = usedSheets.length > 1;
     const res = { rows: [] as FileRow[], skipped: 0, merged: 0 };
     usedSheets.forEach((n) => {
-      const k = wb ? wb.SheetNames.indexOf(n) : 0;
+      const k = book ? book.names.indexOf(n) : 0;
       const r = readFileRows(aoaMap[n] || [], colsMap[n], multi ? n : "", (k + 1) * 1_000_000, kindMap[n] || "");
       res.rows.push(...r.rows);
       res.skipped += r.skipped;
       res.merged += r.merged;
     });
     return res;
-  }, [usedSheets, aoaMap, colsMap, wb, kindMap]);
+  }, [usedSheets, aoaMap, colsMap, book, kindMap]);
   const ready = !!read;
 
   const all: ReconRow[] = useMemo(() => {
@@ -277,7 +329,7 @@ const StockReconcilePage: React.FC = () => {
     if (remember) next.set(key, itemId);
     if (next.size !== aliases.size || remember) {
       setAliases(next);
-      saveAliases(next);
+      persistAliases(aliases, next);
     }
     setPicker(null);
     push({ type: "success", message: remember ? "Đã ghép và lưu cho lần đối soát sau." : "Đã ghép." });
@@ -294,7 +346,7 @@ const StockReconcilePage: React.FC = () => {
       const next = new Map(aliases);
       next.delete(k);
       setAliases(next);
-      saveAliases(next);
+      persistAliases(aliases, next);
     }
   };
 
@@ -338,6 +390,164 @@ const StockReconcilePage: React.FC = () => {
   }, [base, view, q]);
 
   const unpair = (key: string) => setRejected((s) => new Set(s).add(key));
+
+  /* ===================== NHỚ CẶP dùng chung (máy chủ) ===================== */
+  // lưu trên máy này + gửi phần thay đổi lên máy chủ để cả công ty dùng chung
+  const persistAliases = (prev: Map<string, string>, next: Map<string, string>) => {
+    saveAliases(next);
+    const set: Record<string, string> = {};
+    const remove: string[] = [];
+    for (const [k, v] of next) if (prev.get(k) !== v) set[k] = v;
+    for (const k of prev.keys()) if (!next.has(k)) remove.push(k);
+    if (!Object.keys(set).length && !remove.length) return;
+    api.put("/stock-reconcile/aliases", { set, remove }).catch(() => {
+      push({ type: "error", message: "Chưa lưu được cặp ghép lên máy chủ (vẫn nhớ trên máy này)." });
+    });
+  };
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api.get("/stock-reconcile/aliases");
+        const server = new Map(Object.entries((res?.data?.data || {}) as Record<string, string>));
+        const local = loadAliases();
+        // cặp chỉ có trên máy này (lưu từ trước khi có máy chủ) -> đẩy lên cho mọi người dùng
+        const up: Record<string, string> = {};
+        for (const [k, v] of local) if (!server.has(k)) up[k] = v;
+        if (Object.keys(up).length) api.put("/stock-reconcile/aliases", { set: up }).catch(() => undefined);
+        const merged = new Map([...local, ...server]);
+        setAliases(merged);
+        saveAliases(merged);
+      } catch {
+        /* máy chủ chưa có bảng / lỗi mạng: dùng cặp trên máy này */
+      }
+    })();
+  }, []);
+
+  /* ===================== PHIÊN ĐỐI SOÁT ===================== */
+  const light = useMemo(
+    () => makeLight({ sheet, useAll, colsMap, kindMap, kind, asOf, hideZeroSys, manual, rejected }),
+    [sheet, useAll, colsMap, kindMap, kind, asOf, hideZeroSys, manual, rejected]
+  );
+
+  // tự lưu (1,2 giây sau lần sửa cuối) khi đang ở trong 1 phiên
+  useEffect(() => {
+    if (!sessionId || !book) return;
+    const str = JSON.stringify(light);
+    if (str === lastSavedRef.current) return;
+    setSaveState("saving");
+    const t = setTimeout(async () => {
+      try {
+        await api.put(`/stock-reconcile/sessions/${sessionId}`, { data: light });
+        lastSavedRef.current = str;
+        setSaveState("saved");
+        setSavedAt(new Date());
+      } catch {
+        setSaveState("error");
+      }
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [light, sessionId, book]);
+
+  const createSession = async (name: string) => {
+    if (!book) return;
+    try {
+      setSaveState("saving");
+      const res = await api.post("/stock-reconcile/sessions", { name, fileName, data: { ...light, book } });
+      const row = res?.data?.data;
+      lastSavedRef.current = JSON.stringify(light);
+      setSessionId(String(row.id));
+      setSessionName(String(row.name));
+      lsSet(LAST_SESSION_LS, String(row.id));
+      setSaveState("saved");
+      setSavedAt(new Date());
+      setNameOpen(false);
+      push({ type: "success", message: "Đã lưu phiên. Từ giờ mỗi lần ghép / bỏ ghép tự lưu, F5 tự mở lại." });
+    } catch (e) {
+      setSaveState("error");
+      push({ type: "error", message: errMsg(e, "Không lưu được phiên đối soát.") });
+    }
+  };
+
+  const renameSession = async (name: string) => {
+    if (!sessionId) return;
+    try {
+      await api.put(`/stock-reconcile/sessions/${sessionId}`, { name });
+      setSessionName(name);
+      setNameOpen(false);
+    } catch (e) {
+      push({ type: "error", message: errMsg(e, "Không đổi được tên phiên.") });
+    }
+  };
+
+  const openSession = useCallback(
+    async (id: string, silent = false) => {
+      try {
+        const res = await api.get(`/stock-reconcile/sessions/${id}`);
+        const row = res?.data?.data;
+        const d = (row?.data || {}) as Record<string, unknown>;
+        const b = d.book as Book | undefined;
+        if (!b?.names?.length) throw new Error("Phiên không có dữ liệu file.");
+        const m = new Map<number, string>(((d.manual as [number, string][]) || []).map(([k, v]) => [Number(k), String(v)]));
+        const rj = new Set<string>(((d.rejected as string[]) || []).map(String));
+        const restored = makeLight({
+          sheet: String(d.sheet || b.names[0]),
+          useAll: d.useAll !== false,
+          colsMap: (d.colsMap as Record<string, ColumnGuess>) || {},
+          kindMap: (d.kindMap as Record<string, KindFilter>) || {},
+          kind: (d.kind as KindFilter) || "",
+          asOf: String(d.asOf || ""),
+          hideZeroSys: d.hideZeroSys !== false,
+          manual: m,
+          rejected: rj,
+        });
+        lastSavedRef.current = JSON.stringify(restored); // mở lại không tính là sửa -> không tự lưu lại
+        setBook(b);
+        setFileName(String(row.fileName || ""));
+        setSheet(restored.sheet);
+        setUseAll(restored.useAll);
+        setColsMap(restored.colsMap);
+        setKindMap(restored.kindMap);
+        setKind(restored.kind);
+        setAsOf(restored.asOf);
+        setHideZeroSys(restored.hideZeroSys);
+        setManual(m);
+        setRejected(rj);
+        setSessionId(String(row.id));
+        setSessionName(String(row.name));
+        setSaveState("saved");
+        setSavedAt(row.updatedAt ? new Date(row.updatedAt) : null);
+        setLimit(PAGE);
+        setView("ALL");
+        setListOpen(false);
+        lsSet(LAST_SESSION_LS, String(row.id));
+        if (!silent) push({ type: "success", message: `Đã mở phiên "${row.name}".` });
+      } catch (e) {
+        if (silent) lsSet(LAST_SESSION_LS, null);
+        else push({ type: "error", message: errMsg(e, "Không mở được phiên đối soát.") });
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  // F5 / mở lại trang: tự mở phiên đang làm dở trên máy này
+  useEffect(() => {
+    const last = lsGet(LAST_SESSION_LS);
+    if (last) openSession(last, true);
+  }, [openSession]);
+
+  const newSession = () => {
+    setSessionId(null);
+    setSessionName("");
+    setBook(null);
+    setFileName("");
+    setManual(new Map());
+    setRejected(new Set());
+    setSaveState("idle");
+    setSavedAt(null);
+    lastSavedRef.current = "";
+    lsSet(LAST_SESSION_LS, null);
+  };
 
   const exportExcel = async () => {
     const book = new ExcelJS.Workbook();
@@ -468,7 +678,10 @@ const StockReconcilePage: React.FC = () => {
             )}
           </span>
 
-          <div className="ml-auto flex items-end gap-2">
+          <div className="ml-auto flex flex-wrap items-end gap-2">
+            <button type="button" onClick={() => setListOpen(true)} className="rounded-lg border px-3 py-2 text-sm hover:bg-slate-50">
+              Mở phiên đã lưu
+            </button>
             <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => { onFile(e.target.files?.[0]); e.target.value = ""; }} />
             <button type="button" onClick={() => fileRef.current?.click()} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">
               {fileName ? "Chọn file khác" : "Tải file Excel kiểm kê"}
@@ -476,7 +689,52 @@ const StockReconcilePage: React.FC = () => {
           </div>
         </div>
 
-        {wb && (
+        {/* ✅ phiên đối soát: lưu lên máy chủ, tự lưu khi ghép / bỏ ghép, F5 tự mở lại */}
+        {book && (
+          <div
+            className={`mt-3 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-sm ${
+              sessionId ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"
+            }`}
+          >
+            {sessionId ? (
+              <>
+                <span>
+                  Phiên: <b>{sessionName}</b>
+                </span>
+                <span className="text-xs text-slate-600">
+                  {saveState === "saving"
+                    ? "· đang lưu…"
+                    : saveState === "error"
+                    ? "· ⚠ chưa lưu được, đang thử lại khi bạn sửa tiếp"
+                    : savedAt
+                    ? `· đã lưu lúc ${savedAt.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })} (tự lưu)`
+                    : "· tự lưu"}
+                </span>
+                <button type="button" onClick={() => setNameOpen(true)} className="text-xs text-blue-700 hover:underline">
+                  Đổi tên
+                </button>
+                <button type="button" onClick={newSession} className="ml-auto rounded-lg border bg-white px-3 py-1 text-xs hover:bg-slate-50">
+                  Đóng phiên
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="text-amber-900">
+                  Chưa lưu: F5 hoặc tải lại file sẽ mất các cặp đã ghép / bỏ ghép.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setNameOpen(true)}
+                  className="ml-auto rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+                >
+                  Lưu phiên đối soát
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {book && (
           <div className="mt-4 rounded-lg border bg-slate-50 p-3">
             <div className="mb-2 text-sm">
               File: <b>{fileName}</b>
@@ -490,11 +748,11 @@ const StockReconcilePage: React.FC = () => {
               )}
             </div>
             <div className="flex flex-wrap items-end gap-3">
-              {wb.SheetNames.length > 1 && (
+              {book.names.length > 1 && (
                 <label className="flex flex-col gap-1 text-xs text-slate-600">
                   {useAll && usable.length > 1 ? "Chỉnh cột cho sheet" : "Sheet"}
                   <select className="rounded-lg border px-2 py-1.5 text-sm text-slate-900" value={sheet} onChange={(e) => setSheet(e.target.value)}>
-                    {wb.SheetNames.map((n) => (
+                    {book.names.map((n) => (
                       <option key={n} value={n}>
                         {n}
                         {usable.includes(n) ? "" : " (chưa nhận ra cột)"}
@@ -533,7 +791,7 @@ const StockReconcilePage: React.FC = () => {
                 </select>
               </label>
             </div>
-            {wb.SheetNames.length > 1 && (
+            {book.names.length > 1 && (
               <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
                 <input type="checkbox" checked={useAll} onChange={(e) => setUseAll(e.target.checked)} />
                 Đọc tất cả sheet cùng lúc
@@ -699,6 +957,16 @@ const StockReconcilePage: React.FC = () => {
                               Tìm hàng để ghép
                             </button>
                           )}
+                          {r.status === "FILE_ONLY" && r.file && (
+                            <button
+                              type="button"
+                              onClick={() => setCreateFor(r.file!)}
+                              title="Hệ thống chưa có hàng này: tạo mã hàng mới theo dòng trong file"
+                              className="whitespace-nowrap rounded-lg border border-emerald-400 bg-white px-2 py-1 text-xs text-emerald-800 hover:bg-emerald-50"
+                            >
+                              + Tạo mã hàng
+                            </button>
+                          )}
                           {r.status === "SYSTEM_ONLY" && r.sys && (
                             <button
                               type="button"
@@ -764,6 +1032,308 @@ const StockReconcilePage: React.FC = () => {
           onClose={() => setFilePicker(null)}
         />
       )}
+      {nameOpen && (
+        <SessionNameModal
+          initial={sessionName || `Đối soát ${fileName.replace(/\.[^.]+$/, "")} ${new Date().toLocaleDateString("vi-VN")}`}
+          title={sessionId ? "Đổi tên phiên" : "Lưu phiên đối soát"}
+          onClose={() => setNameOpen(false)}
+          onSave={(n) => (sessionId ? renameSession(n) : createSession(n))}
+        />
+      )}
+      {listOpen && (
+        <SessionListModal
+          currentId={sessionId}
+          onOpen={(id) => openSession(id)}
+          onDeleted={(id) => {
+            if (id === sessionId) newSession();
+          }}
+          onClose={() => setListOpen(false)}
+          onError={(m) => push({ type: "error", message: m })}
+        />
+      )}
+      {createFor && (
+        <CreateItemModal
+          file={createFor}
+          defaultKind={(createFor.kind as KindFilter) || kind || "PART"}
+          isAdmin={isAdmin}
+          onClose={() => setCreateFor(null)}
+          onCreated={async (it) => {
+            const f = createFor;
+            setCreateFor(null);
+            // ghép luôn dòng file với mã vừa tạo, rồi tải lại tồn để có mặt hàng mới
+            setManual((m) => new Map(m).set(f.rowNo, it.id));
+            await loadSys();
+            push({ type: "success", message: `Đã tạo mã ${it.sku}. Tồn hệ thống đang là 0 — nhập tồn bằng phiếu kiểm kê hoặc phiếu nhập.` });
+          }}
+        />
+      )}
+    </div>
+  );
+};
+
+/* ============ đặt tên phiên ============ */
+const SessionNameModal: React.FC<{ initial: string; title: string; onClose: () => void; onSave: (name: string) => void }> = ({
+  initial,
+  title,
+  onClose,
+  onSave,
+}) => {
+  const [name, setName] = useState(initial);
+  const ref = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    ref.current?.select();
+  }, []);
+  const ok = () => name.trim() && onSave(name.trim());
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-3 pt-[12vh]" onClick={onClose}>
+      <div className="w-full max-w-md rounded-xl bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <h2 className="font-semibold">{title}</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Lưu cả dữ liệu file, cột đã chọn, ngày lấy tồn và các cặp ghép tay / bỏ ghép. Admin và kế toán mở lại được trên mọi máy.
+        </p>
+        <input
+          ref={ref}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && ok()}
+          className="mt-3 w-full rounded-lg border px-3 py-2 text-sm"
+        />
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-lg border px-4 py-2 text-sm hover:bg-slate-50">
+            Huỷ
+          </button>
+          <button type="button" onClick={ok} disabled={!name.trim()} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60">
+            Lưu
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ============ danh sách phiên đã lưu ============ */
+const SessionListModal: React.FC<{
+  currentId: string | null;
+  onOpen: (id: string) => void;
+  onDeleted: (id: string) => void;
+  onClose: () => void;
+  onError: (msg: string) => void;
+}> = ({ currentId, onOpen, onDeleted, onClose, onError }) => {
+  const [rows, setRows] = useState<SessionMeta[] | null>(null);
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  useEffect(() => {
+    api
+      .get("/stock-reconcile/sessions")
+      .then((res) => setRows(res?.data?.data || []))
+      .catch((e) => {
+        setRows([]);
+        onError(errMsg(e, "Không tải được danh sách phiên."));
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const del = async (id: string) => {
+    try {
+      await api.delete(`/stock-reconcile/sessions/${id}`);
+      setRows((rs) => (rs || []).filter((r) => r.id !== id));
+      setConfirmDel(null);
+      onDeleted(id);
+    } catch (e) {
+      onError(errMsg(e, "Không xoá được phiên."));
+    }
+  };
+  const when = (v: string) =>
+    new Date(v).toLocaleString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-3 pt-[8vh]" onClick={onClose}>
+      <div className="flex max-h-[80vh] w-full max-w-2xl flex-col rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b p-4">
+          <h2 className="font-semibold">Phiên đối soát đã lưu</h2>
+          <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-slate-500 hover:bg-slate-100" aria-label="Đóng">
+            ✕
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          {rows === null && <div className="p-6 text-center text-sm text-slate-400">Đang tải…</div>}
+          {rows?.length === 0 && <div className="p-6 text-center text-sm text-slate-400">Chưa có phiên nào được lưu.</div>}
+          {rows?.map((r) => (
+            <div key={r.id} className={`flex items-center justify-between gap-3 border-b px-4 py-3 text-sm ${r.id === currentId ? "bg-emerald-50" : ""}`}>
+              <div className="min-w-0">
+                <div className="font-medium">
+                  {r.name} {r.id === currentId && <span className="text-xs font-normal text-emerald-700">(đang mở)</span>}
+                </div>
+                <div className="text-xs text-slate-500">
+                  {r.fileName || "—"} · sửa {when(r.updatedAt)}
+                  {r.updatedBy ? ` bởi ${r.updatedBy}` : ""}
+                  {r.createdBy && r.createdBy !== r.updatedBy ? ` · tạo bởi ${r.createdBy}` : ""}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {confirmDel === r.id ? (
+                  <>
+                    <span className="text-xs text-rose-700">Xoá phiên này?</span>
+                    <button type="button" onClick={() => del(r.id)} className="rounded-lg bg-rose-600 px-3 py-1 text-xs text-white">
+                      Xoá
+                    </button>
+                    <button type="button" onClick={() => setConfirmDel(null)} className="rounded-lg border px-3 py-1 text-xs">
+                      Không
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" onClick={() => onOpen(r.id)} className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-medium text-white">
+                      Mở
+                    </button>
+                    <button type="button" onClick={() => setConfirmDel(r.id)} className="rounded-lg border px-3 py-1.5 text-xs text-rose-700 hover:bg-rose-50">
+                      Xoá
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ============ hộp tạo mã hàng từ 1 dòng trong file (chưa có trên hệ thống) ============ */
+type UnitOpt = { id: string; code: string; name: string };
+const CreateItemModal: React.FC<{
+  file: FileRow;
+  defaultKind: KindFilter;
+  isAdmin: boolean;
+  onClose: () => void;
+  onCreated: (it: { id: string; sku: string; name: string }) => void;
+}> = ({ file, defaultKind, isAdmin, onClose, onCreated }) => {
+  const [sku, setSku] = useState(file.code.trim());
+  const [name, setName] = useState(file.name.replace(/\[[^\]]*\]/g, " ").replace(/\s+/g, " ").trim());
+  const [itemKind, setItemKind] = useState<"PART" | "MACHINE">(defaultKind === "MACHINE" ? "MACHINE" : "PART");
+  const [units, setUnits] = useState<UnitOpt[]>([]);
+  const [unitId, setUnitId] = useState("");
+  const [sellPrice, setSellPrice] = useState("");
+  const [cost, setCost] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api.get("/items/units");
+        const list: UnitOpt[] = res?.data?.data || [];
+        setUnits(list);
+        const pcs = list.find((u) => u.code === "pcs") || list.find((u) => normName(u.name) === "cai");
+        setUnitId(pcs?.id || list[0]?.id || "");
+      } catch {
+        setErr("Không tải được danh sách đơn vị tính.");
+      }
+    })();
+  }, []);
+
+  const money = (v: string) => Number(v.replace(/[^\d]/g, "") || 0);
+  const fmtInput = (v: string) => {
+    const d = v.replace(/[^\d]/g, "");
+    return d ? Number(d).toLocaleString("vi-VN") : "";
+  };
+
+  const save = async () => {
+    if (!name.trim() && !sku.trim()) return setErr("Nhập ít nhất mã hoặc tên hàng.");
+    setErr("");
+    setSaving(true);
+    try {
+      const res = await api.post("/items", {
+        sku: sku.trim(),
+        name: name.trim(),
+        kind: itemKind,
+        unitId: unitId || undefined,
+        sellPrice: money(sellPrice),
+        ...(isAdmin && cost ? { price: money(cost) } : {}),
+        note: `Tạo từ đối soát tồn (${file.refs.join(", ")})`,
+      });
+      const d = res?.data?.data || {};
+      onCreated({ id: String(d.id), sku: String(d.sku || sku), name: String(d.name || name) });
+    } catch (e) {
+      setErr(errMsg(e, "Không tạo được mã hàng."));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const field = "w-full rounded-lg border px-3 py-2 text-sm";
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-3 pt-[8vh]" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-xl bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">Tạo mã hàng mới</h2>
+            <div className="mt-1 text-sm text-slate-600">
+              Theo {file.refs.join(", ")} trong file · SL thực tế <b>{fmt(file.qty)}</b>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-slate-500 hover:bg-slate-100" aria-label="Đóng">
+            ✕
+          </button>
+        </div>
+
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="text-xs text-slate-600">
+            Mã hàng
+            <input value={sku} onChange={(e) => setSku(e.target.value)} placeholder="Để trống: tự sinh theo tên" className={field} />
+          </label>
+          <label className="text-xs text-slate-600">
+            Loại
+            <select value={itemKind} onChange={(e) => setItemKind(e.target.value as "PART" | "MACHINE")} className={field}>
+              <option value="PART">Linh kiện</option>
+              <option value="MACHINE">Máy móc</option>
+            </select>
+          </label>
+          <label className="text-xs text-slate-600 sm:col-span-2">
+            Tên hàng
+            <input value={name} onChange={(e) => setName(e.target.value)} className={field} />
+          </label>
+          <label className="text-xs text-slate-600">
+            Đơn vị tính
+            <select value={unitId} onChange={(e) => setUnitId(e.target.value)} className={field}>
+              {units.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs text-slate-600">
+            Giá bán đề xuất
+            <input value={sellPrice} onChange={(e) => setSellPrice(fmtInput(e.target.value))} inputMode="numeric" placeholder="0" className={field} />
+          </label>
+          {isAdmin && (
+            <label className="text-xs text-slate-600">
+              Giá vốn
+              <input value={cost} onChange={(e) => setCost(fmtInput(e.target.value))} inputMode="numeric" placeholder="0" className={field} />
+            </label>
+          )}
+        </div>
+
+        <p className="mt-3 rounded-lg bg-amber-50 p-2 text-xs text-amber-900">
+          Tạo mã xong, tồn hệ thống của hàng này là <b>0</b>. Muốn đưa số lượng thực tế vào kho: thêm hàng vào phiếu kiểm kê
+          (nút <b>Thêm vào phiếu</b>) rồi quản trị ghi sổ, hoặc lập phiếu nhập / hoá đơn mua.
+        </p>
+
+        {err && <div className="mt-2 text-sm text-rose-700">{err}</div>}
+
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-lg border px-4 py-2 text-sm hover:bg-slate-50">
+            Huỷ
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+          >
+            {saving ? "Đang tạo…" : "Tạo mã hàng"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
