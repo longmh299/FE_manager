@@ -18,6 +18,7 @@ export type FileRow = {
   rowNo: number; // khoá duy nhất của dòng (đọc nhiều sheet: sheet thứ k cộng thêm k*1.000.000)
   rowNos: number[]; // mọi dòng trong file có cùng mã/tên (đã cộng dồn)
   refs: string[]; // nhãn hiển thị: "TKM dòng 5" / "dòng 5"
+  kind?: string; // "MACHINE" | "PART" theo sheet (TKM = máy, TKLK = linh kiện); rỗng = không giới hạn
   code: string;
   name: string;
   qty: number;
@@ -183,11 +184,23 @@ function isTotalRow(code: string, name: string) {
   return TOTAL_WORDS.has(n) || /^tong cong\b/.test(n);
 }
 
+/** Đoán loại hàng của 1 sheet: máy / linh kiện, theo tên sheet và tiêu đề cột tên ("TÊN MÁY").
+ *  Không chắc thì trả "" (không giới hạn loại). */
+export function guessSheetKind(sheet: string, aoa: string[][], cols: ColumnGuess): "" | "MACHINE" | "PART" {
+  const sn = normName(sheet);
+  const head = cols.name >= 0 ? normName(String(aoa[cols.headerRow]?.[cols.name] ?? "")) : "";
+  const isPart = /\b(lk|tklk|linh kien|phu tung|vat tu|part|parts)\b/.test(sn) || /linh kien|phu tung|vat tu/.test(head);
+  const isMachine = /\b(tkm|may|may moc|thiet bi|machine|machines)\b/.test(sn) || /\bten may\b|may moc|thiet bi/.test(head);
+  if (isPart && !isMachine) return "PART";
+  if (isMachine && !isPart) return "MACHINE";
+  return "";
+}
+
 export type ReadResult = { rows: FileRow[]; skipped: number; merged: number };
 
 /** Lấy các dòng hàng từ bảng theo cột đã chọn.
  *  Chỉ cộng dồn khi trùng CẢ mã lẫn tên: cùng mã mà khác tên (vd DHZ550 "cao su" / "PU") là 2 mặt hàng khác nhau. */
-export function readFileRows(aoa: string[][], cols: ColumnGuess, sheet = "", rowBase = 0): ReadResult {
+export function readFileRows(aoa: string[][], cols: ColumnGuess, sheet = "", rowBase = 0, kind = ""): ReadResult {
   const ref = (r: number) => (sheet ? `${sheet} dòng ${r + 1}` : `dòng ${r + 1}`);
   const out = new Map<string, FileRow>();
   let skipped = 0;
@@ -214,7 +227,7 @@ export function readFileRows(aoa: string[][], cols: ColumnGuess, sheet = "", row
       if (!cur.name && name) cur.name = name;
       merged++;
     } else {
-      out.set(key, { rowNo: rowBase + r + 1, rowNos: [rowBase + r + 1], refs: [ref(r)], code, name, qty: q });
+      out.set(key, { rowNo: rowBase + r + 1, rowNos: [rowBase + r + 1], refs: [ref(r)], code, name, qty: q, ...(kind ? { kind } : {}) });
     }
   }
   return { rows: Array.from(out.values()), skipped, merged };
@@ -272,16 +285,20 @@ export function reconcile(
     usedFile.add(f.rowNo);
     out.push({ key: pairKey(f, s), status, file: f, sys: s, diff: round(f.qty - s.qty), ...extra });
   };
+  // ✅ dòng của sheet máy chỉ ghép với hàng loại máy, sheet linh kiện chỉ với linh kiện
+  const sameKind = (f: FileRow, s: SysItem) => !f.kind || !s.kind || f.kind === s.kind;
+  const ofKind = (f: FileRow, list: SysItem[] | undefined) => (list || []).filter((s) => sameKind(f, s));
   const free = (f: FileRow, list: SysItem[] | undefined) =>
-    (list || []).filter((s) => !usedSys.has(s.itemId) && !rejected.has(pairKey(f, s)));
+    ofKind(f, list).filter((s) => !usedSys.has(s.itemId) && !rejected.has(pairKey(f, s)));
   const codesOf = (f: FileRow) => [f.code, ...splitName(f.name).codes].map(normCode).filter(Boolean);
   const sysCodes = (s: SysItem) => [s.sku, ...splitName(s.name).codes].map(normCode).filter(Boolean);
   const cleanNorm = (s: string) => normName(splitName(s).name);
 
   /** file có thêm dòng trùng (tên / mã) mà hệ thống chỉ có ĐÚNG 1 mặt hàng như vậy (vd 1 hàng để 2 kệ)
    *  -> cộng dồn vào dòng đã ghép, không báo dư */
-  const mergeInto = (f: FileRow, list: SysItem[] | undefined, sameCodeOnly = false) => {
-    if (!list || list.length !== 1 || !usedSys.has(list[0].itemId) || rejected.has(pairKey(f, list[0]))) return false;
+  const mergeInto = (f: FileRow, all0: SysItem[] | undefined, sameCodeOnly = false) => {
+    const list = ofKind(f, all0);
+    if (list.length !== 1 || !usedSys.has(list[0].itemId) || rejected.has(pairKey(f, list[0]))) return false;
     const row = out.find((r) => r.status !== "MANUAL" && r.sys?.itemId === list[0].itemId);
     if (!row || !row.file) return false;
     if (sameCodeOnly) {
@@ -331,9 +348,11 @@ export function reconcile(
   for (const f of fileRows) {
     if (usedFile.has(f.rowNo)) continue;
     const n = nameKey(f.name);
-    if (n) fileByName.set(n, [...(fileByName.get(n) || []), f]);
+    const k = `${f.kind || ""}|${n}`;
+    if (n) fileByName.set(k, [...(fileByName.get(k) || []), f]);
   }
-  for (const [n, group] of fileByName) {
+  for (const [k, group] of fileByName) {
+    const n = k.slice(k.indexOf("|") + 1);
     const cand = group.length ? free(group[0], sysByName.get(n)) : [];
     if (cand.length !== 1) continue;
     const s0 = cand[0];
@@ -416,7 +435,7 @@ export function reconcile(
     if (nc.length >= 3) for (const i of byPre.get(nc.slice(0, 3)) || []) idx.add(i);
     for (const i of idx) {
       const p = sysPre[i];
-      if (rejected.has(pairKey(f, p.s))) continue;
+      if (rejected.has(pairKey(f, p.s)) || !sameKind(f, p.s)) continue;
       const sCode = Math.max(
         nc && p.nc ? dice(bc, p.bc, sc, p.sc) : 0,
         sSlugN && p.nc.length >= 6 ? dice(bSlug, p.bc, sSlugN, p.sc) : 0

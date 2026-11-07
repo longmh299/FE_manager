@@ -17,6 +17,7 @@ import {
   type SysItem,
   aliasKey,
   guessColumns,
+  guessSheetKind,
   normName,
   readFileRows,
   reconcile,
@@ -99,6 +100,7 @@ const StockReconcilePage: React.FC = () => {
   const [sheet, setSheet] = useState(""); // sheet đang xem / chỉnh cột
   const [useAll, setUseAll] = useState(true); // ✅ đọc mọi sheet có đủ cột (vd TKM = máy, TKLK = linh kiện)
   const [colsMap, setColsMap] = useState<Record<string, ColumnGuess>>({});
+  const [kindMap, setKindMap] = useState<Record<string, KindFilter>>({}); // ✅ sheet nào là máy / linh kiện
 
   // ---- xem
   const [view, setView] = useState<View>("ALL");
@@ -186,7 +188,14 @@ const StockReconcilePage: React.FC = () => {
         const a = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, raw: false, defval: "", blankrows: true });
         if (a.length) guesses[n] = guessColumns(a);
       }
+      const kinds: Record<string, KindFilter> = {};
+      for (const n of Object.keys(guesses)) {
+        const ws = book.Sheets[n];
+        const a = ws ? XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, raw: false, defval: "", blankrows: true }) : [];
+        kinds[n] = guessSheetKind(n, a, guesses[n]);
+      }
       setColsMap(guesses);
+      setKindMap(kinds);
       setUseAll(true);
       setWb(book);
       setFileName(f.name);
@@ -202,8 +211,12 @@ const StockReconcilePage: React.FC = () => {
 
   // đọc 1 sheet hoặc mọi sheet dùng được; nhiều sheet thì ghi tên sheet vào số dòng ("TKM dòng 5")
   const usedSheets = useMemo(
-    () => (useAll && usable.length > 1 ? usable : okCols(colsMap[sheet]) ? [sheet] : []),
-    [useAll, usable, colsMap, sheet]
+    () => {
+      const list = useAll && usable.length > 1 ? usable : okCols(colsMap[sheet]) ? [sheet] : [];
+      // "So với tồn" chỉ máy / chỉ linh kiện -> bỏ sheet loại kia
+      return kind ? list.filter((n) => !kindMap[n] || kindMap[n] === kind) : list;
+    },
+    [useAll, usable, colsMap, sheet, kind, kindMap]
   );
   const read = useMemo(() => {
     if (!usedSheets.length) return null;
@@ -211,13 +224,13 @@ const StockReconcilePage: React.FC = () => {
     const res = { rows: [] as FileRow[], skipped: 0, merged: 0 };
     usedSheets.forEach((n) => {
       const k = wb ? wb.SheetNames.indexOf(n) : 0;
-      const r = readFileRows(aoaMap[n] || [], colsMap[n], multi ? n : "", (k + 1) * 1_000_000);
+      const r = readFileRows(aoaMap[n] || [], colsMap[n], multi ? n : "", (k + 1) * 1_000_000, kindMap[n] || "");
       res.rows.push(...r.rows);
       res.skipped += r.skipped;
       res.merged += r.merged;
     });
     return res;
-  }, [usedSheets, aoaMap, colsMap, wb]);
+  }, [usedSheets, aoaMap, colsMap, wb, kindMap]);
   const ready = !!read;
 
   const all: ReconRow[] = useMemo(() => {
@@ -463,6 +476,18 @@ const StockReconcilePage: React.FC = () => {
               {colSelect("Cột mã hàng", "code")}
               {colSelect("Cột tên hàng", "name")}
               {colSelect("Cột số lượng thực tế", "qty")}
+              <label className="flex flex-col gap-1 text-xs text-slate-600">
+                Sheet này là
+                <select
+                  className="rounded-lg border px-2 py-1.5 text-sm text-slate-900"
+                  value={kindMap[sheet] || ""}
+                  onChange={(e) => setKindMap((m) => ({ ...m, [sheet]: e.target.value as KindFilter }))}
+                >
+                  <option value="MACHINE">Máy móc (chỉ ghép với máy)</option>
+                  <option value="PART">Linh kiện (chỉ ghép với linh kiện)</option>
+                  <option value="">Không phân loại (ghép mọi loại)</option>
+                </select>
+              </label>
             </div>
             {wb.SheetNames.length > 1 && (
               <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
@@ -472,7 +497,9 @@ const StockReconcilePage: React.FC = () => {
                   ({usable.length ? usable.map((n) => {
                     const c = colsMap[n];
                     const L = (i: number) => (i >= 0 ? colName(i) : "—");
-                    return `${n}: tên ${L(c.name)}, mã ${L(c.code)}, SL ${L(c.qty)}`;
+                    const kd = kindMap[n] === "MACHINE" ? "máy" : kindMap[n] === "PART" ? "linh kiện" : "mọi loại";
+                    const off = !usedSheets.includes(n) ? " — bỏ qua theo ô So với tồn" : "";
+                    return `${n} (${kd}): tên ${L(c.name)}, mã ${L(c.code)}, SL ${L(c.qty)}${off}`;
                   }).join(" · ") : "chưa sheet nào nhận ra cột"})
                 </span>
               </label>
