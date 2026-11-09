@@ -3033,6 +3033,72 @@ const InvoiceDetailPage: React.FC = () => {
   const collectible = calcCollectible(invoice);
   const debtNow = Math.max(0, collectible - Math.max(0, toNum(invoice.paidAmount)));
 
+  // ô Thuế VAT (%) — dùng chung cho hoá đơn bán và hoá đơn nhập
+  const vatRow = (
+    <div className="inv-sum-row" style={styles.summaryRow}>
+      <span className="inv-sum-label" style={styles.summaryLabel}>Thuế VAT</span>
+
+      <div
+        style={{
+          display: "flex",
+          alignItems: "stretch",
+          width: 110,
+          height: 36,
+          border: `1px solid ${C.borderInput}`,
+          borderRadius: 8,
+          overflow: "hidden",
+          background: locked ? "#f8fafc" : "#fff",
+          boxSizing: "border-box",
+          flexShrink: 0,
+        }}
+      >
+        <input
+          style={{
+            padding: "0 8px",
+            fontSize: 13.5,
+            boxSizing: "border-box",
+            flex: 1,
+            minWidth: 0,
+            width: "100%",
+            border: "none",
+            outline: "none",
+            background: "transparent",
+            textAlign: "right",
+            boxShadow: "none",
+          }}
+          type="number"
+          min={0}
+          value={invoice.taxPercent ?? 0}
+          disabled={locked}
+          onChange={(e) => {
+            markDirty();
+            const num = Number(e.target.value || 0);
+            setInvoice((prev) => {
+              if (!prev) return prev;
+              const pct = isNaN(num) ? 0 : num;
+              return recomputeInvoiceCore(prev, { taxPercent: pct });
+            });
+          }}
+        />
+        <span
+          style={{
+            padding: "0 10px",
+            display: "flex",
+            alignItems: "center",
+            borderLeft: `1px solid ${C.border}`,
+            background: C.soft,
+            color: "#334155",
+            fontSize: 13,
+          }}
+        >
+          %
+        </span>
+      </div>
+
+      <span style={styles.summaryValue}>{formatMoney(vatAmount + Number(invoice.shipTax || 0))} đ</span>
+    </div>
+  );
+
   const derivedHoldPct =
     invoice.hasWarrantyHold && Number(invoice.subtotal || 0) > 0
       ? ((hold * 100) / Number(invoice.subtotal || 0)).toFixed(2)
@@ -4031,12 +4097,26 @@ const InvoiceDetailPage: React.FC = () => {
                 <div style={styles.sectionTitle}>Thanh toán</div>
 
                 {isPurchase && (
-                  <div style={styles.totalRow}>
-                    <span style={{ fontWeight: 600 }}>Tổng tiền hàng</span>
-                    <span style={{ fontWeight: 800, fontSize: 18, fontVariantNumeric: "tabular-nums" }}>
-                      {formatMoney(invoice.subtotal ?? 0)} đ
-                    </span>
-                  </div>
+                  <>
+                    <div className="inv-sum-row" style={styles.summaryRow}>
+                      <span className="inv-sum-label" style={styles.summaryLabel}>Tổng tiền hàng</span>
+                      <span style={styles.summaryValue}>{formatMoney(invoice.subtotal ?? 0)} đ</span>
+                    </div>
+
+                    {vatRow}
+
+                    <div style={styles.totalRow}>
+                      <span style={{ fontWeight: 600 }}>Tổng cộng (gồm VAT)</span>
+                      <span style={{ fontWeight: 800, fontSize: 18, fontVariantNumeric: "tabular-nums" }}>
+                        {formatMoney(invoice.totalAmount)} đ
+                      </span>
+                    </div>
+                    {vatAmount > 0 && (
+                      <div style={{ fontSize: 12, color: C.muted, padding: "0 0 6px", textAlign: "right" }}>
+                        Giá vốn hàng nhập vẫn tính theo giá chưa VAT. Số phải trả NCC tính theo tổng gồm VAT.
+                      </div>
+                    )}
+                  </>
                 )}
 
                 {!isPurchase && (
@@ -4119,68 +4199,7 @@ const InvoiceDetailPage: React.FC = () => {
                       </div>
                     )}
 
-                    <div className="inv-sum-row" style={styles.summaryRow}>
-                      <span className="inv-sum-label" style={styles.summaryLabel}>Thuế VAT</span>
-
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "stretch",
-                          width: 110,
-                          height: 36,
-                          border: `1px solid ${C.borderInput}`,
-                          borderRadius: 8,
-                          overflow: "hidden",
-                          background: locked ? "#f8fafc" : "#fff",
-                          boxSizing: "border-box",
-                          flexShrink: 0,
-                        }}
-                      >
-                        <input
-                          style={{
-                            padding: "0 8px",
-                            fontSize: 13.5,
-                            boxSizing: "border-box",
-                            flex: 1,
-                            minWidth: 0,
-                            width: "100%",
-                            border: "none",
-                            outline: "none",
-                            background: "transparent",
-                            textAlign: "right",
-                            boxShadow: "none",
-                          }}
-                          type="number"
-                          min={0}
-                          value={invoice.taxPercent ?? 0}
-                          disabled={locked}
-                          onChange={(e) => {
-                            markDirty();
-                            const num = Number(e.target.value || 0);
-                            setInvoice((prev) => {
-                              if (!prev) return prev;
-                              const pct = isNaN(num) ? 0 : num;
-                              return recomputeInvoiceCore(prev, { taxPercent: pct });
-                            });
-                          }}
-                        />
-                        <span
-                          style={{
-                            padding: "0 10px",
-                            display: "flex",
-                            alignItems: "center",
-                            borderLeft: `1px solid ${C.border}`,
-                            background: C.soft,
-                            color: "#334155",
-                            fontSize: 13,
-                          }}
-                        >
-                          %
-                        </span>
-                      </div>
-
-                      <span style={styles.summaryValue}>{formatMoney(vatAmount + Number(invoice.shipTax || 0))} đ</span>
-                    </div>
+                    {vatRow}
 
                     {invoice.type === "SALES" && (Number(invoice.shipFee || 0) > 0 || Number(invoice.laborFee || 0) > 0) && (
                       <div style={{ fontSize: 12, color: C.muted, padding: "0 0 6px", textAlign: "right" }}>
@@ -4607,9 +4626,9 @@ const InvoiceDetailPage: React.FC = () => {
               <div style={styles.postStatusRow}>
                 <span style={statusPill}>● {statusText}</span>
                 <span className="inv-hide-sm" style={{ fontSize: 13, color: C.muted }}>
-                  {isPurchase ? "Tổng tiền hàng" : "Tổng cộng"}:{" "}
+                  Tổng cộng:{" "}
                   <b style={{ color: C.text, fontVariantNumeric: "tabular-nums" }}>
-                    {formatMoney(isPurchase ? invoice.subtotal ?? 0 : invoice.totalAmount)} đ
+                    {formatMoney(invoice.totalAmount)} đ
                   </b>
                 </span>
 
