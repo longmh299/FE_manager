@@ -432,7 +432,10 @@ const CashbookLedger: React.FC = () => {
   const head = selAcc ?? (summary && !cashOnly ? { ...summary.total, name: "Tất cả quỹ và tài khoản" } : null);
 
   /* ---------- modals ---------- */
-  type VoucherForm = { type: "RECEIPT" | "PAYMENT"; date: string; accountId: string; amount: number; personName: string; subject: string; note: string; refNo: string };
+  // lines: 1 dòng = phiếu thường; 2–5 dòng = thu / chi từ nhiều tài khoản (mỗi dòng 1 phiếu, cùng nội dung)
+  type VoucherLine = { accountId: string; amount: number };
+  type VoucherForm = { type: "RECEIPT" | "PAYMENT"; date: string; lines: VoucherLine[]; personName: string; subject: string; note: string; refNo: string };
+  const MAX_VOUCHER_LINES = 5;
   const [voucher, setVoucher] = useState<VoucherForm | null>(null);
   const [transfer, setTransfer] = useState<{ date: string; fromAccountId: string; toAccountId: string; amount: number; note: string; refNo: string } | null>(null);
   const [count, setCount] = useState<{ accountId: string; date: string; actual: number; reason: string; book: number | null } | null>(null);
@@ -447,7 +450,7 @@ const CashbookLedger: React.FC = () => {
   const defaultAccId = (selAcc?.isActive ? selAcc.id : "") || defaultCashId;
   const openVoucher = (type: "RECEIPT" | "PAYMENT") => {
     setFormErr(null);
-    setVoucher({ type, date: today, accountId: defaultAccId, amount: 0, personName: "", subject: "", note: "", refNo: "" });
+    setVoucher({ type, date: today, lines: [{ accountId: defaultAccId, amount: 0 }], personName: "", subject: "", note: "", refNo: "" });
   };
   const openTransfer = () => {
     setFormErr(null);
@@ -489,14 +492,26 @@ const CashbookLedger: React.FC = () => {
 
   const submitVoucher = () => {
     if (!voucher) return;
-    if (!voucher.accountId) return setFormErr("Chọn quỹ hoặc tài khoản.");
-    if (!voucher.amount) return setFormErr("Nhập số tiền.");
+    const lines = voucher.lines;
+    const multi = lines.length > 1;
+    if (lines.some((l) => !l.accountId)) return setFormErr(multi ? "Chọn quỹ / tài khoản cho tất cả các dòng." : "Chọn quỹ hoặc tài khoản.");
+    if (multi && new Set(lines.map((l) => l.accountId)).size !== lines.length) return setFormErr("Mỗi dòng phải là một quỹ / tài khoản khác nhau.");
+    if (lines.some((l) => !l.amount)) return setFormErr(multi ? "Nhập số tiền cho tất cả các dòng." : "Nhập số tiền.");
     if (!voucher.note.trim()) return setFormErr("Ghi nội dung thu chi.");
+    const { lines: _l, ...rest } = voucher;
+    void _l;
+    const payload = {
+      ...rest,
+      accountId: lines[0].accountId,
+      amount: lines.reduce((t, l) => t + l.amount, 0),
+      ...(multi ? { lines } : {}),
+    };
     let code = "";
     run(
       async () => {
-        const r = await postOnce("/cashbook/vouchers", voucher);
-        code = String(r.data?.code || "");
+        const r = await postOnce("/cashbook/vouchers", payload);
+        const list = Array.isArray(r.data?.vouchers) ? r.data.vouchers : [r.data];
+        code = list.map((x: { code?: string } | null) => String(x?.code || "")).filter(Boolean).join(", ");
       },
       () => `${voucher.type === "RECEIPT" ? "Đã lập phiếu thu" : "Đã lập phiếu chi"}${code ? ` ${code}` : ""}.`,
       () => setVoucher(null)
@@ -1074,20 +1089,104 @@ const CashbookLedger: React.FC = () => {
       >
         {voucher && (
           <>
-            <div className="grid grid-cols-[1fr_auto] gap-3">
-              <label>
-                <span className={labelCls}>Số tiền</span>
-                <MoneyInput large autoFocus value={voucher.amount} onChange={(n) => setVoucher({ ...voucher, amount: n })} />
-              </label>
-              <label>
-                <span className={labelCls}>Ngày</span>
-                <input type="date" className={`${inputBase} py-2.5`} value={voucher.date} onChange={(e) => setVoucher({ ...voucher, date: e.target.value })} />
-              </label>
-            </div>
-            <label className="block">
-              <span className={labelCls}>{voucher.type === "RECEIPT" ? "Thu vào" : "Chi từ"}</span>
-              <AccountSelect accounts={viewAccounts} value={voucher.accountId} onChange={(v) => setVoucher({ ...voucher, accountId: v })} />
-            </label>
+            {voucher.lines.length === 1 ? (
+              <>
+                <div className="grid grid-cols-[1fr_auto] gap-3">
+                  <label>
+                    <span className={labelCls}>Số tiền</span>
+                    <MoneyInput
+                      large
+                      autoFocus
+                      value={voucher.lines[0].amount}
+                      onChange={(n) => setVoucher({ ...voucher, lines: [{ ...voucher.lines[0], amount: n }] })}
+                    />
+                  </label>
+                  <label>
+                    <span className={labelCls}>Ngày</span>
+                    <input type="date" className={`${inputBase} py-2.5`} value={voucher.date} onChange={(e) => setVoucher({ ...voucher, date: e.target.value })} />
+                  </label>
+                </div>
+                <label className="block">
+                  <span className={labelCls}>{voucher.type === "RECEIPT" ? "Thu vào" : "Chi từ"}</span>
+                  <AccountSelect
+                    accounts={viewAccounts}
+                    value={voucher.lines[0].accountId}
+                    onChange={(v) => setVoucher({ ...voucher, lines: [{ ...voucher.lines[0], accountId: v }] })}
+                  />
+                </label>
+                {viewAccounts.filter((a) => a.isActive).length >= 2 && (
+                  <button
+                    type="button"
+                    className="text-sm font-medium text-sky-700 hover:underline"
+                    onClick={() => {
+                      const first = voucher.lines[0];
+                      const other = viewAccounts.find((a) => a.isActive && a.id !== first.accountId);
+                      setVoucher({ ...voucher, lines: [first, { accountId: other?.id || "", amount: 0 }] });
+                    }}
+                  >
+                    + {voucher.type === "RECEIPT" ? "Thu vào" : "Chi từ"} nhiều tài khoản
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="grid grid-cols-[1fr_auto] items-end gap-3">
+                  <div>
+                    <span className={labelCls}>Tổng tiền</span>
+                    <div className="py-1 text-2xl font-semibold tabular-nums text-slate-900">
+                      {money(voucher.lines.reduce((t, l) => t + l.amount, 0))} đ
+                    </div>
+                  </div>
+                  <label>
+                    <span className={labelCls}>Ngày</span>
+                    <input type="date" className={`${inputBase} py-2.5`} value={voucher.date} onChange={(e) => setVoucher({ ...voucher, date: e.target.value })} />
+                  </label>
+                </div>
+                <div className="space-y-2 rounded-lg border border-slate-200 p-3">
+                  {voucher.lines.map((l, i) => {
+                    const used = new Set(voucher.lines.filter((_, j) => j !== i).map((x) => x.accountId));
+                    const setLine = (patch: Partial<VoucherLine>) =>
+                      setVoucher({ ...voucher, lines: voucher.lines.map((x, j) => (j === i ? { ...x, ...patch } : x)) });
+                    return (
+                      <div key={i} className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
+                        <label>
+                          <span className={labelCls}>
+                            Dòng {i + 1}: {voucher.type === "RECEIPT" ? "thu vào" : "chi từ"}
+                          </span>
+                          <AccountSelect accounts={viewAccounts.filter((a) => !used.has(a.id))} value={l.accountId} onChange={(v) => setLine({ accountId: v })} />
+                        </label>
+                        <label>
+                          <span className={labelCls}>Số tiền</span>
+                          <MoneyInput value={l.amount} onChange={(n) => setLine({ amount: n })} />
+                        </label>
+                        <button
+                          type="button"
+                          className="rounded-lg px-2 py-2 text-sm text-slate-500 hover:bg-rose-50 hover:text-rose-700"
+                          aria-label={`Xoá dòng ${i + 1}`}
+                          onClick={() => setVoucher({ ...voucher, lines: voucher.lines.filter((_, j) => j !== i) })}
+                        >
+                          Xoá
+                        </button>
+                      </div>
+                    );
+                  })}
+                  {voucher.lines.length < Math.min(MAX_VOUCHER_LINES, viewAccounts.filter((a) => a.isActive).length) && (
+                    <button
+                      type="button"
+                      className="text-sm font-medium text-sky-700 hover:underline"
+                      onClick={() => {
+                        const used = new Set(voucher.lines.map((x) => x.accountId));
+                        const next = viewAccounts.find((a) => a.isActive && !used.has(a.id));
+                        setVoucher({ ...voucher, lines: [...voucher.lines, { accountId: next?.id || "", amount: 0 }] });
+                      }}
+                    >
+                      + Thêm tài khoản
+                    </button>
+                  )}
+                  <p className="text-xs text-slate-500">Mỗi tài khoản sẽ có 1 phiếu riêng, cùng nội dung. Lưu cùng lúc: lỗi 1 dòng thì không phiếu nào được tạo.</p>
+                </div>
+              </>
+            )}
             <label className="block">
               <span className={labelCls}>Nội dung</span>
               <input

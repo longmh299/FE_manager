@@ -47,7 +47,7 @@ type Props = {
   amountInputRef?: React.RefObject<HTMLInputElement | null>;
 
   onClose: () => void;
-  /** có splitLines = thanh toán gộp: dòng 1 tiền mặt, dòng 2 chuyển khoản */
+  /** có splitLines = thanh toán nhiều tài khoản: 2–5 dòng, mỗi dòng 1 quỹ / tài khoản */
   onSubmit: (splitLines?: Array<{ accountId: string; amount: number }>) => void;
 };
 
@@ -96,24 +96,23 @@ function accountSub(a: PayAccount) {
 const InvoicePayDialog: React.FC<Props> = (p) => {
   const panelRef = useRef<HTMLDivElement | null>(null);
 
-  // ✅ thanh toán gộp: tiền mặt + chuyển khoản, sinh 2 phiếu chờ duyệt
+  // ✅ thanh toán nhiều tài khoản: 2–5 dòng, mỗi dòng 1 quỹ / tài khoản, mỗi dòng sinh 1 phiếu
+  //    dòng cuối tự tính = số tiền lần này − các dòng trên
+  const MAX_SPLITS = 5;
   const [split, setSplit] = useState(false);
-  const [cashId, setCashId] = useState("");
-  const [bankId, setBankId] = useState("");
-  const [cashText, setCashText] = useState("");
-  const cashAccounts = p.accounts.filter((a) => a.type === "CASH");
-  const bankAccounts = p.accounts.filter((a) => a.type !== "CASH");
+  const [rows, setRows] = useState<Array<{ accountId: string; text: string }>>([]);
 
   useEffect(() => {
     if (p.open) {
       setSplit(false);
-      setCashText("");
+      setRows([]);
     }
   }, [p.open]);
   useEffect(() => {
-    if (!split) return;
-    setCashId((v) => v || (cashAccounts.find((a) => a.id === p.accountId) || cashAccounts[0])?.id || "");
-    setBankId((v) => v || (bankAccounts.find((a) => a.id === p.accountId) || bankAccounts[0])?.id || "");
+    if (!split || rows.length) return;
+    const first = p.accounts.find((a) => a.id === p.accountId) || p.accounts[0];
+    const second = p.accounts.find((a) => a.id !== first?.id);
+    if (first && second) setRows([{ accountId: first.id, text: "" }, { accountId: second.id, text: "" }]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [split, p.accounts]);
 
@@ -137,10 +136,17 @@ const InvoicePayDialog: React.FC<Props> = (p) => {
   const over = p.amount > p.remaining + 0.0001;
   const zero = !(p.amount > 0);
   const left = Math.max(0, p.remaining - p.amount);
-  const cashAmt = Number(cashText.replace(/[^\d]/g, "")) || 0;
-  const bankAmt = Math.max(0, p.amount - cashAmt);
-  const splitOk = !!cashId && !!bankId && cashAmt > 0 && cashAmt < p.amount;
-  const canSplit = cashAccounts.length > 0 && bankAccounts.length > 0;
+  const parseMoney = (t: string) => Number(t.replace(/[^\d]/g, "")) || 0;
+  const headSum = rows.slice(0, -1).reduce((t, r) => t + parseMoney(r.text), 0);
+  const lastAmt = Math.max(0, p.amount - headSum);
+  const splitAmounts = rows.map((r, i) => (i === rows.length - 1 ? lastAmt : parseMoney(r.text)));
+  const splitOk =
+    rows.length >= 2 &&
+    rows.every((r) => !!r.accountId) &&
+    new Set(rows.map((r) => r.accountId)).size === rows.length &&
+    splitAmounts.every((a) => a > 0) &&
+    headSum < p.amount;
+  const canSplit = p.accounts.length >= 2;
   const noAccount = split ? false : !p.accountId;
   const canSubmit = !p.submitting && !over && !zero && (split ? splitOk : !noAccount) && p.accounts.length > 0;
 
@@ -160,7 +166,7 @@ const InvoicePayDialog: React.FC<Props> = (p) => {
         onSubmit={(e) => {
           e.preventDefault();
           if (!canSubmit) return;
-          if (split) p.onSubmit([{ accountId: cashId, amount: cashAmt }, { accountId: bankId, amount: bankAmt }]);
+          if (split) p.onSubmit(rows.map((r, i) => ({ accountId: r.accountId, amount: splitAmounts[i] })));
           else p.onSubmit();
         }}
         className="relative flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:max-w-[480px] sm:rounded-2xl"
@@ -262,55 +268,93 @@ const InvoicePayDialog: React.FC<Props> = (p) => {
             </div>
           </div>
 
-          {/* thanh toán gộp */}
+          {/* thanh toán nhiều tài khoản */}
           {canSplit && (
             <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-800">
               <input type="checkbox" checked={split} disabled={p.submitting} onChange={(e) => setSplit(e.target.checked)} className="h-4 w-4 rounded border-slate-300" />
-              {verb} 2 hình thức: tiền mặt + chuyển khoản
+              {verb} từ nhiều tài khoản (tiền mặt, ngân hàng…)
             </label>
           )}
           {split && (
             <div className="space-y-3 rounded-xl border border-slate-200 p-3">
-              <div>
-                <div className="mb-1 text-sm font-medium text-slate-800">Dòng 1: Tiền mặt</div>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <select aria-label="Quỹ tiền mặt" value={cashId} disabled={p.submitting} onChange={(e) => setCashId(e.target.value)} className="rounded-lg border border-slate-300 px-2.5 py-2 text-sm text-slate-800">
-                    {cashAccounts.map((a) => (
-                      <option key={a.id} value={a.id}>{a.name || a.code}</option>
-                    ))}
-                  </select>
-                  <input
-                    aria-label="Số tiền mặt"
-                    type="text"
-                    inputMode="numeric"
-                    autoComplete="off"
-                    value={cashText}
-                    disabled={p.submitting}
-                    placeholder="0"
-                    onChange={(e) => {
-                      const n = Number(e.target.value.replace(/[^\d]/g, "")) || 0;
-                      setCashText(e.target.value.trim() === "" ? "" : money(n));
-                    }}
-                    className="rounded-lg border border-slate-300 px-2.5 py-2 text-right text-sm font-semibold tabular-nums text-slate-900"
-                  />
-                </div>
-              </div>
-              <div>
-                <div className="mb-1 text-sm font-medium text-slate-800">Dòng 2: Chuyển khoản</div>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <select aria-label="Tài khoản chuyển khoản" value={bankId} disabled={p.submitting} onChange={(e) => setBankId(e.target.value)} className="rounded-lg border border-slate-300 px-2.5 py-2 text-sm text-slate-800">
-                    {bankAccounts.map((a) => (
-                      <option key={a.id} value={a.id}>{a.name || a.code}</option>
-                    ))}
-                  </select>
-                  <div aria-label="Số tiền chuyển khoản" className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-right text-sm font-semibold tabular-nums text-slate-700">
-                    {money(bankAmt)}
+              {rows.map((r, i) => {
+                const last = i === rows.length - 1;
+                const usedElsewhere = new Set(rows.filter((_, j) => j !== i).map((x) => x.accountId));
+                return (
+                  <div key={i}>
+                    <div className="mb-1 flex items-center justify-between text-sm font-medium text-slate-800">
+                      <span>Dòng {i + 1}</span>
+                      {rows.length > 2 && (
+                        <button
+                          type="button"
+                          disabled={p.submitting}
+                          onClick={() => setRows((cur) => cur.filter((_, j) => j !== i))}
+                          className="!min-h-0 rounded px-1.5 text-xs font-normal text-slate-500 hover:bg-slate-100 hover:text-rose-700"
+                        >
+                          Xoá dòng
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <select
+                        aria-label={`Tài khoản dòng ${i + 1}`}
+                        value={r.accountId}
+                        disabled={p.submitting}
+                        onChange={(e) => setRows((cur) => cur.map((x, j) => (j === i ? { ...x, accountId: e.target.value } : x)))}
+                        className="rounded-lg border border-slate-300 px-2.5 py-2 text-sm text-slate-800"
+                      >
+                        {p.accounts
+                          .filter((a) => !usedElsewhere.has(a.id))
+                          .map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.name || a.code}
+                              {a.type === "CASH" ? " (tiền mặt)" : ""}
+                            </option>
+                          ))}
+                      </select>
+                      {last ? (
+                        <div aria-label={`Số tiền dòng ${i + 1}`} className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-right text-sm font-semibold tabular-nums text-slate-700">
+                          {money(lastAmt)}
+                        </div>
+                      ) : (
+                        <input
+                          aria-label={`Số tiền dòng ${i + 1}`}
+                          type="text"
+                          inputMode="numeric"
+                          autoComplete="off"
+                          value={r.text}
+                          disabled={p.submitting}
+                          placeholder="0"
+                          onChange={(e) => {
+                            const n = parseMoney(e.target.value);
+                            const text = e.target.value.trim() === "" ? "" : money(n);
+                            setRows((cur) => cur.map((x, j) => (j === i ? { ...x, text } : x)));
+                          }}
+                          className="rounded-lg border border-slate-300 px-2.5 py-2 text-right text-sm font-semibold tabular-nums text-slate-900"
+                        />
+                      )}
+                    </div>
+                    {last && <div className="mt-1 text-xs text-slate-500">Tự tính: số tiền lần này trừ các dòng trên.</div>}
                   </div>
-                </div>
-                <div className="mt-1 text-xs text-slate-500">Tự tính: số tiền lần này trừ tiền mặt.</div>
-              </div>
-              {cashAmt >= p.amount && p.amount > 0 && <div className="text-sm text-rose-700">Tiền mặt phải nhỏ hơn số tiền lần này.</div>}
-              <div className="text-xs text-amber-700">Sẽ tạo 2 phiếu chờ duyệt, kế toán hoặc quản trị duyệt từng phiếu.</div>
+                );
+              })}
+              {rows.length < Math.min(MAX_SPLITS, p.accounts.length) && (
+                <button
+                  type="button"
+                  disabled={p.submitting}
+                  onClick={() => {
+                    const used = new Set(rows.map((x) => x.accountId));
+                    const next = p.accounts.find((a) => !used.has(a.id));
+                    // thêm dòng mới phía trên dòng tự tính
+                    if (next) setRows((cur) => [...cur.slice(0, -1), { accountId: next.id, text: "" }, cur[cur.length - 1]]);
+                  }}
+                  className="!min-h-0 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  + Thêm tài khoản
+                </button>
+              )}
+              {headSum >= p.amount && p.amount > 0 && <div className="text-sm text-rose-700">Các dòng trên phải nhỏ hơn số tiền lần này.</div>}
+              <div className="text-xs text-amber-700">Sẽ tạo {rows.length} phiếu chờ duyệt (mỗi tài khoản 1 phiếu), kế toán hoặc quản trị duyệt từng phiếu.</div>
             </div>
           )}
 
@@ -444,7 +488,7 @@ const InvoicePayDialog: React.FC<Props> = (p) => {
               "Chọn tài khoản"
             ) : (
               <>
-                {p.isPurchase ? "Gửi duyệt" : "Thu"} {split ? "2 phiếu " : ""}{zero ? "" : `${money(p.amount)} đ`}
+                {p.isPurchase ? "Gửi duyệt" : "Thu"} {split ? `${rows.length} phiếu ` : ""}{zero ? "" : `${money(p.amount)} đ`}
               </>
             )}
           </button>
