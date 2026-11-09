@@ -125,7 +125,7 @@ type Invoice = {
   bookedPayAmount?: number; // đã vào sổ qua phiếu chưa huỷ
 
   receiveAccountId?: string | null;
-  paySplits?: Array<{ accountId: string; amount: number }> | null; // thanh toán gộp: dòng 1 tiền mặt, dòng 2 chuyển khoản
+  paySplits?: Array<{ accountId: string; amount: number }> | null; // thanh toán nhiều tài khoản: 2–5 dòng, mỗi dòng 1 quỹ / tài khoản
   shipFee?: number; // phí ship thu khách, có VAT
   shipTax?: number;
   laborFee?: number; // công kỹ thuật, không VAT
@@ -2157,7 +2157,7 @@ const InvoiceDetailPage: React.FC = () => {
         shipFee: Number(x.shipFee || 0),
         shipTax: Number(x.shipTax || 0),
         laborFee: Number(x.laborFee || 0),
-        paySplits: Array.isArray(x.paySplits) && x.paySplits.length === 2 ? x.paySplits.map((s: any) => ({ accountId: String(s.accountId), amount: Number(s.amount) || 0 })) : null,
+        paySplits: Array.isArray(x.paySplits) && x.paySplits.length >= 2 ? x.paySplits.map((s: any) => ({ accountId: String(s.accountId), amount: Number(s.amount) || 0 })) : null,
         note: x.note ?? "",
 
         status,
@@ -2512,7 +2512,7 @@ const InvoiceDetailPage: React.FC = () => {
 
     if (paymentStatus === "UNPAID") paidAmount = 0;
     if (paymentStatus === "PAID") paidAmount = totalBase;
-    const splitOn = paymentStatus !== "UNPAID" && Array.isArray(inv.paySplits) && inv.paySplits.length === 2;
+    const splitOn = paymentStatus !== "UNPAID" && Array.isArray(inv.paySplits) && inv.paySplits.length >= 2;
     if (paymentStatus === "PARTIAL") {
       if (paidAmount > totalBase) paidAmount = totalBase;
       if (paidAmount < 0) paidAmount = 0;
@@ -2548,11 +2548,15 @@ const InvoiceDetailPage: React.FC = () => {
       ...(inv.status === "APPROVED"
         ? {}
         : {
+            // đã thanh toán đủ: dòng cuối tự tính = số phải trả − các dòng trên
             paySplits: splitOn
-              ? [
-                  { accountId: inv.paySplits![0].accountId, amount: inv.paySplits![0].amount },
-                  { accountId: inv.paySplits![1].accountId, amount: paymentStatus === "PAID" ? paidAmount - inv.paySplits![0].amount : inv.paySplits![1].amount },
-                ]
+              ? inv.paySplits!.map((l, i, arr) => ({
+                  accountId: l.accountId,
+                  amount:
+                    paymentStatus === "PAID" && i === arr.length - 1
+                      ? paidAmount - arr.slice(0, -1).reduce((t, x) => t + x.amount, 0)
+                      : l.amount,
+                }))
               : null,
           }),
 
@@ -2634,21 +2638,27 @@ const InvoiceDetailPage: React.FC = () => {
     const allowAdjustApprovedEdit = isAdmin && isAdjustMode && status === "APPROVED" && !isCreate && !!invoice.id;
 
     // ✅ đã thu / đã trả mà chưa chọn tài khoản -> BE sẽ chặn, báo sớm ở đây cho rõ
-    // ✅ thanh toán gộp: 2 dòng đều phải có tài khoản và số tiền
-    if (!allowAdjustApprovedEdit && (invoice.paymentStatus ?? "UNPAID") !== "UNPAID" && invoice.paySplits?.length === 2) {
-      const [c, b] = invoice.paySplits;
+    // ✅ thanh toán nhiều tài khoản: mọi dòng phải có tài khoản (không trùng) và số tiền
+    if (!allowAdjustApprovedEdit && (invoice.paymentStatus ?? "UNPAID") !== "UNPAID" && (invoice.paySplits?.length ?? 0) >= 2) {
+      const lines = invoice.paySplits!;
       const paidAll = calcCollectible(invoice);
-      const bankAmt = invoice.paymentStatus === "PAID" ? paidAll - c.amount : b.amount;
-      if (!c.accountId || !b.accountId) {
-        toastError("Chọn tài khoản cho cả 2 dòng thanh toán.", "Thiếu tài khoản");
+      const amounts = lines.map((l, i) =>
+        invoice.paymentStatus === "PAID" && i === lines.length - 1 ? paidAll - lines.slice(0, -1).reduce((t, x) => t + x.amount, 0) : l.amount
+      );
+      if (lines.some((l) => !l.accountId)) {
+        toastError("Chọn tài khoản cho tất cả các dòng thanh toán.", "Thiếu tài khoản");
         return;
       }
-      if (!(c.amount > 0) || !(bankAmt > 0)) {
+      if (new Set(lines.map((l) => l.accountId)).size !== lines.length) {
+        toastError("Mỗi dòng thanh toán phải là một tài khoản khác nhau.", "Trùng tài khoản");
+        return;
+      }
+      if (amounts.some((a) => !(a > 0))) {
         toastError("Mỗi dòng thanh toán phải có số tiền lớn hơn 0.", "Sai số tiền");
         return;
       }
-      if (invoice.paymentStatus === "PARTIAL" && c.amount + bankAmt > paidAll) {
-        toastError("Tổng 2 dòng lớn hơn số phải thu.", "Sai số tiền");
+      if (invoice.paymentStatus === "PARTIAL" && amounts.reduce((t, a) => t + a, 0) > paidAll) {
+        toastError(`Tổng các dòng lớn hơn số phải ${invoice.type === "PURCHASE" ? "trả" : "thu"}.`, "Sai số tiền");
         return;
       }
     } else if (!allowAdjustApprovedEdit && (invoice.paymentStatus ?? "UNPAID") !== "UNPAID" && !safeId(invoice.receiveAccountId)) {
@@ -2987,20 +2997,26 @@ const InvoiceDetailPage: React.FC = () => {
   const showPaidInput = (invoice.paymentStatus ?? "UNPAID") === "PARTIAL";
   // ✅ đã thu / đã trả thì tiền phải vào 1 quỹ / tài khoản cụ thể
   const needAccount = (invoice.paymentStatus ?? "UNPAID") !== "UNPAID";
-  // ✅ thanh toán gộp: tiền mặt + chuyển khoản
-  const paySplit = needAccount && invoice.paySplits?.length === 2 ? invoice.paySplits : null;
-  const cashAccs = accounts.filter((a) => a.type === "CASH" && a.isActive !== false);
-  const bankAccs = accounts.filter((a) => a.type !== "CASH" && a.isActive !== false);
+  // ✅ thanh toán nhiều tài khoản: 2–5 dòng, mỗi dòng 1 quỹ / tài khoản (tiền mặt, ngân hàng… tuỳ ý)
+  const MAX_SPLITS = 5;
+  const paySplit = needAccount && (invoice.paySplits?.length ?? 0) >= 2 ? invoice.paySplits! : null;
+  const activeAccs = accounts.filter((a) => a.isActive !== false);
   const splitLocked = locked || status === "APPROVED";
   const splitPaidAll = calcCollectible(invoice);
-  const setSplitLine = (cash: { accountId: string; amount: number }, bank: { accountId: string; amount: number }) => {
+  const setSplits = (lines: Array<{ accountId: string; amount: number }>) => {
     markDirty();
+    const sum = lines.reduce((t, l) => t + l.amount, 0);
     updateInvoice(
       invoice.paymentStatus === "PARTIAL"
-        ? { paySplits: [cash, bank], paidAmount: cash.amount + bank.amount, receiveAccountId: cash.accountId }
-        : { paySplits: [cash, bank], receiveAccountId: cash.accountId }
+        ? { paySplits: lines, paidAmount: sum, receiveAccountId: lines[0].accountId }
+        : { paySplits: lines, receiveAccountId: lines[0].accountId }
     );
   };
+  // số tiền hiển thị của dòng i (đã thanh toán đủ: dòng cuối tự tính)
+  const splitAmountAt = (i: number) =>
+    paySplit && invoice.paymentStatus === "PAID" && i === paySplit.length - 1
+      ? Math.max(0, splitPaidAll - paySplit.slice(0, -1).reduce((t, x) => t + x.amount, 0))
+      : paySplit?.[i]?.amount ?? 0;
 
   const statusText =
     status === "APPROVED"
@@ -4337,7 +4353,7 @@ const InvoiceDetailPage: React.FC = () => {
                   </div>
                 </div>
 
-                {needAccount && !splitLocked && cashAccs.length > 0 && bankAccs.length > 0 && (
+                {needAccount && !splitLocked && activeAccs.length >= 2 && (
                   <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, margin: "6px 0", cursor: "pointer" }}>
                     <input
                       type="checkbox"
@@ -4349,75 +4365,90 @@ const InvoiceDetailPage: React.FC = () => {
                           return;
                         }
                         const cur = invoice.receiveAccountId;
-                        const cash = cashAccs.find((a) => a.id === cur) || cashAccs[0];
-                        const bank = bankAccs.find((a) => a.id === cur) || bankAccs[0];
+                        const first = activeAccs.find((a) => String(a.id) === String(cur)) || activeAccs[0];
+                        const second = activeAccs.find((a) => a.id !== first.id)!;
                         const partial = invoice.paymentStatus === "PARTIAL";
                         updateInvoice({
                           paySplits: [
-                            { accountId: String(cash.id), amount: partial ? Number(invoice.paidAmount || 0) : 0 },
-                            { accountId: String(bank.id), amount: 0 },
+                            { accountId: String(first.id), amount: partial ? Number(invoice.paidAmount || 0) : 0 },
+                            { accountId: String(second.id), amount: 0 },
                           ],
-                          receiveAccountId: String(cash.id),
+                          receiveAccountId: String(first.id),
                         });
                       }}
                     />
-                    {isPurchase ? "Trả" : "Thu"} 2 hình thức: tiền mặt + chuyển khoản
+                    {isPurchase ? "Trả" : "Thu"} từ nhiều tài khoản (tiền mặt, ngân hàng…)
                   </label>
                 )}
 
                 {paySplit ? (
                   <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: 8, margin: "4px 0", display: "grid", gap: 8 }}>
-                    <div>
-                      <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 4 }}>Dòng 1: Tiền mặt</div>
-                      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 6 }}>
-                        <select
-                          aria-label="Quỹ tiền mặt"
-                          style={styles.select}
-                          disabled={splitLocked}
-                          value={paySplit[0].accountId}
-                          onChange={(e) => setSplitLine({ ...paySplit[0], accountId: e.target.value }, paySplit[1])}
-                        >
-                          {!cashAccs.some((a) => String(a.id) === paySplit[0].accountId) && <option value={paySplit[0].accountId}>Tài khoản đã chọn</option>}
-                          {cashAccs.map((a) => (
-                            <option key={a.id} value={a.id}>{a.code} - {a.name}</option>
-                          ))}
-                        </select>
-                        <PaidAmountInput
-                          value={paySplit[0].amount}
-                          disabled={splitLocked}
-                          onChange={(raw) => setSplitLine({ ...paySplit[0], amount: Math.max(0, raw) }, paySplit[1])}
-                          styleInput={{ textAlign: "right" }}
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 4 }}>Dòng 2: Chuyển khoản</div>
-                      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 6 }}>
-                        <select
-                          aria-label="Tài khoản chuyển khoản"
-                          style={styles.select}
-                          disabled={splitLocked}
-                          value={paySplit[1].accountId}
-                          onChange={(e) => setSplitLine(paySplit[0], { ...paySplit[1], accountId: e.target.value })}
-                        >
-                          {!bankAccs.some((a) => String(a.id) === paySplit[1].accountId) && <option value={paySplit[1].accountId}>Tài khoản đã chọn</option>}
-                          {bankAccs.map((a) => (
-                            <option key={a.id} value={a.id}>{a.code} - {a.name}</option>
-                          ))}
-                        </select>
-                        <PaidAmountInput
-                          value={invoice.paymentStatus === "PAID" ? Math.max(0, splitPaidAll - paySplit[0].amount) : paySplit[1].amount}
-                          disabled={splitLocked || invoice.paymentStatus === "PAID"}
-                          onChange={(raw) => setSplitLine(paySplit[0], { ...paySplit[1], amount: Math.max(0, raw) })}
-                          styleInput={{ textAlign: "right" }}
-                        />
-                      </div>
-                      {invoice.paymentStatus === "PAID" && !splitLocked && (
-                        <div style={{ fontSize: 12, color: C.muted, marginTop: 3, textAlign: "right" }}>Tự tính: số phải thu trừ tiền mặt.</div>
-                      )}
-                    </div>
+                    {paySplit.map((line, i) => {
+                      const isLastAuto = invoice.paymentStatus === "PAID" && i === paySplit.length - 1;
+                      const usedElsewhere = new Set(paySplit.filter((_, j) => j !== i).map((x) => x.accountId));
+                      return (
+                        <div key={i}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, fontWeight: 600, marginBottom: 4 }}>
+                            <span>Dòng {i + 1}</span>
+                            {!splitLocked && paySplit.length > 2 && (
+                              <button
+                                type="button"
+                                className="inv-btn"
+                                style={{ ...styles.secondarySmallBtn, height: 24, fontSize: 12, padding: "0 8px" }}
+                                onClick={() => setSplits(paySplit.filter((_, j) => j !== i))}
+                              >
+                                Xoá dòng
+                              </button>
+                            )}
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 6 }}>
+                            <select
+                              aria-label={`Tài khoản dòng ${i + 1}`}
+                              style={styles.select}
+                              disabled={splitLocked}
+                              value={line.accountId}
+                              onChange={(e) => setSplits(paySplit.map((x, j) => (j === i ? { ...x, accountId: e.target.value } : x)))}
+                            >
+                              {!activeAccs.some((a) => String(a.id) === line.accountId) && <option value={line.accountId}>Tài khoản đã chọn</option>}
+                              {activeAccs
+                                .filter((a) => !usedElsewhere.has(String(a.id)))
+                                .map((a) => (
+                                  <option key={a.id} value={a.id}>
+                                    {a.code} - {a.name}
+                                  </option>
+                                ))}
+                            </select>
+                            <PaidAmountInput
+                              value={splitAmountAt(i)}
+                              disabled={splitLocked || isLastAuto}
+                              onChange={(raw) => setSplits(paySplit.map((x, j) => (j === i ? { ...x, amount: Math.max(0, raw) } : x)))}
+                              styleInput={{ textAlign: "right" }}
+                            />
+                          </div>
+                          {isLastAuto && !splitLocked && (
+                            <div style={{ fontSize: 12, color: C.muted, marginTop: 3, textAlign: "right" }}>
+                              Tự tính: số phải {isPurchase ? "trả" : "thu"} trừ các dòng trên.
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {!splitLocked && paySplit.length < Math.min(MAX_SPLITS, activeAccs.length) && (
+                      <button
+                        type="button"
+                        className="inv-btn"
+                        style={{ ...styles.secondarySmallBtn, justifySelf: "start" }}
+                        onClick={() => {
+                          const used = new Set(paySplit.map((x) => x.accountId));
+                          const next = activeAccs.find((a) => !used.has(String(a.id)));
+                          if (next) setSplits([...paySplit, { accountId: String(next.id), amount: 0 }]);
+                        }}
+                      >
+                        + Thêm tài khoản
+                      </button>
+                    )}
                     <div style={{ fontSize: 12, color: "#92400e" }}>
-                      Duyệt hoá đơn sẽ tạo 2 phiếu chờ duyệt, kế toán hoặc quản trị duyệt từng phiếu.
+                      Duyệt hoá đơn sẽ tạo {paySplit.length} phiếu chờ duyệt (mỗi tài khoản 1 phiếu), kế toán hoặc quản trị duyệt từng phiếu.
                     </div>
                   </div>
                 ) : (

@@ -1042,11 +1042,19 @@ const InvoicesPage: React.FC = () => {
       if (!splitLines) localStorage.setItem(LS_LAST_PAY_ACCOUNT, String(payAccountId));
     } catch {}
 
+    const splitText = (lines: Array<{ accountId: string; amount: number }>) =>
+      lines
+        .map((l) => {
+          const a = accounts.find((x) => String(x.id) === String(l.accountId));
+          return `${a?.name || a?.code || "tài khoản"} ${formatMoney(l.amount)} đ`;
+        })
+        .join(", ");
+
     try {
       setPaySubmitting(true);
 
       if (splitLines) {
-        // ✅ thanh toán gộp: 2 phiếu cùng được tạo hoặc cùng không
+        // ✅ thanh toán nhiều tài khoản: các phiếu cùng được tạo hoặc cùng không
         payRes = await postOnce("/payments/split", {
           direct: payTarget.type !== "PURCHASE",
           date: payDate,
@@ -1081,14 +1089,14 @@ const InvoicesPage: React.FC = () => {
           type: "success",
           title: "Đã thu tiền",
           message: splitLines
-            ? `Đã vào sổ 2 phiếu thu: tiền mặt ${formatMoney(splitLines[0].amount)} đ, chuyển khoản ${formatMoney(splitLines[1].amount)} đ.`
+            ? `Đã vào sổ ${splitLines.length} phiếu thu: ${splitText(splitLines)}.`
             : `Đã vào sổ phiếu thu ${formatMoney(amount)} đ và trừ công nợ.`,
         });
       } else toast.push({
         type: "success",
         title: "Đã gửi chờ duyệt",
         message: splitLines
-          ? `2 phiếu chờ duyệt: tiền mặt ${formatMoney(splitLines[0].amount)} đ, chuyển khoản ${formatMoney(splitLines[1].amount)} đ.`
+          ? `${splitLines.length} phiếu chờ duyệt: ${splitText(splitLines)}.`
           : `Phiếu ${formatMoney(amount)} đ đang chờ duyệt. Duyệt rồi mới vào sổ thu chi và trừ công nợ.`,
       });
 
