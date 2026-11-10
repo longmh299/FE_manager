@@ -372,6 +372,111 @@ const ACT_BTN =
 
 /* ========================= Page ========================= */
 
+/* ================= ✅ Xem nhanh hàng trong hoá đơn (không phải mở trang chi tiết) ================= */
+type QuickLine = { id: string; sku: string; name: string; unit: string; qty: number; price: number; amount: number };
+type QuickState = { loading: boolean; error?: string; lines?: QuickLine[]; note?: string };
+
+type RawUnit = string | { name?: string; code?: string } | null | undefined;
+type RawLine = {
+  id?: string | number;
+  qty?: number | string;
+  unitPrice?: number | string;
+  price?: number | string;
+  amount?: number | string;
+  lineTotal?: number | string;
+  itemSku?: string;
+  sku?: string;
+  itemName?: string;
+  name?: string;
+  unit?: RawUnit;
+  item?: { sku?: string; name?: string; unit?: RawUnit } | null;
+};
+function mapQuickLines(x: { lines?: RawLine[] } | null | undefined): QuickLine[] {
+  return (x?.lines || []).map((l: RawLine, i: number) => {
+    const unitRaw = l.item?.unit ?? l.unit;
+    const unit = typeof unitRaw === "string" ? unitRaw : unitRaw?.name || unitRaw?.code || "";
+    const qty = Number(l.qty ?? 0);
+    const price = Number(l.unitPrice ?? l.price ?? 0);
+    const amount = l.amount != null ? Number(l.amount) : l.lineTotal != null ? Number(l.lineTotal) : qty * price;
+    return {
+      id: String(l.id ?? i),
+      sku: String(l.item?.sku ?? l.itemSku ?? l.sku ?? ""),
+      name: String(l.item?.name ?? l.itemName ?? l.name ?? ""),
+      unit,
+      qty,
+      price,
+      amount,
+    };
+  });
+}
+
+const QuickLines: React.FC<{ st?: QuickState; compact?: boolean; onOpen: () => void }> = ({ st, compact, onOpen }) => {
+  if (!st || st.loading) return <div className="px-3 py-2 text-xs text-slate-500">Đang tải hàng trong hoá đơn…</div>;
+  if (st.error) return <div className="px-3 py-2 text-xs text-rose-700">{st.error}</div>;
+  const lines = st.lines || [];
+  if (!lines.length) return <div className="px-3 py-2 text-xs text-slate-500">Hoá đơn không có dòng hàng.</div>;
+  const qtyTotal = lines.reduce((t, l) => t + l.qty, 0);
+  if (compact) {
+    // điện thoại: dạng danh sách gọn
+    return (
+      <div className="mt-2 divide-y rounded-lg border border-slate-200 bg-slate-50 text-xs">
+        {lines.map((l) => (
+          <div key={l.id} className="flex items-start justify-between gap-2 px-2.5 py-1.5">
+            <div className="min-w-0">
+              <div className="font-medium text-slate-800">{l.name || "—"}</div>
+              <div className="text-slate-500">
+                {l.sku ? `${l.sku} · ` : ""}
+                {formatMoney(l.qty)} {l.unit} × {formatMoney(l.price)}
+              </div>
+            </div>
+            <div className="shrink-0 font-semibold tabular-nums text-slate-800">{formatMoney(l.amount)}</div>
+          </div>
+        ))}
+        {st.note && <div className="px-2.5 py-1.5 text-slate-600">Ghi chú: {st.note}</div>}
+      </div>
+    );
+  }
+  return (
+    <div className="px-3 py-2">
+      <table className="w-full text-xs">
+        <thead className="text-slate-500">
+          <tr>
+            <th className="w-[36px] py-1 text-left font-medium">#</th>
+            <th className="w-[140px] py-1 text-left font-medium">Mã hàng</th>
+            <th className="py-1 text-left font-medium">Tên hàng</th>
+            <th className="w-[60px] py-1 text-left font-medium">ĐVT</th>
+            <th className="w-[70px] py-1 text-right font-medium">SL</th>
+            <th className="w-[120px] py-1 text-right font-medium">Đơn giá</th>
+            <th className="w-[130px] py-1 text-right font-medium">Thành tiền</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lines.map((l, i) => (
+            <tr key={l.id} className="border-t border-slate-200">
+              <td className="py-1 text-slate-400">{i + 1}</td>
+              <td className="py-1 font-medium">{l.sku || "—"}</td>
+              <td className="py-1">{l.name || "—"}</td>
+              <td className="py-1 text-slate-500">{l.unit}</td>
+              <td className="py-1 text-right tabular-nums">{formatMoney(l.qty)}</td>
+              <td className="py-1 text-right tabular-nums">{formatMoney(l.price)}</td>
+              <td className="py-1 text-right font-semibold tabular-nums">{formatMoney(l.amount)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+        <span>
+          {lines.length} dòng · tổng SL {formatMoney(qtyTotal)}
+        </span>
+        {st.note && <span className="text-slate-600">Ghi chú: {st.note}</span>}
+        <button type="button" onClick={onOpen} className="ml-auto text-blue-700 hover:underline">
+          Mở chi tiết hoá đơn →
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const InvoicesPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -455,6 +560,31 @@ const InvoicesPage: React.FC = () => {
   const invoicesRef = useRef<InvoiceListItem[]>([]);
   const lastListQuery = useRef<{ q: string; from: string; to: string; type: InvoiceTypeFilter } | null>(null);
   const [expandedNameId, setExpandedNameId] = useState<InvoiceListItem["id"] | null>(null);
+  // ✅ xem nhanh hàng: các hoá đơn đang mở xem nhanh + bộ nhớ đệm dòng hàng (mỗi hoá đơn chỉ tải 1 lần)
+  const [quickOpen, setQuickOpen] = useState<Set<string>>(new Set());
+  const [quickData, setQuickData] = useState<Record<string, QuickState>>({});
+  const toggleQuick = (invId: InvoiceListItem["id"]) => {
+    const k = String(invId);
+    const opening = !quickOpen.has(k);
+    setQuickOpen((s0) => {
+      const n = new Set(s0);
+      if (n.has(k)) n.delete(k);
+      else n.add(k);
+      return n;
+    });
+    if (!opening || (quickData[k] && !quickData[k].error)) return;
+    setQuickData((d) => ({ ...d, [k]: { loading: true } }));
+    api
+      .get(`/invoices/${k}`)
+      .then((res) => {
+        const x = res?.data?.data ?? res?.data;
+        setQuickData((d) => ({ ...d, [k]: { loading: false, lines: mapQuickLines(x), note: x?.note ? String(x.note) : "" } }));
+      })
+      .catch((e) => {
+        const msg = e?.response?.data?.message || "Không tải được hàng trong hoá đơn.";
+        setQuickData((d) => ({ ...d, [k]: { loading: false, error: msg } }));
+      });
+  };
   const [listTotal, setListTotal] = useState(0);
   const [listPage, setListPage] = useState(1);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -1572,6 +1702,21 @@ const InvoicesPage: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* ✅ xem nhanh hàng ngay trên thẻ */}
+                  <div onClick={stop}>
+                    <button
+                      type="button"
+                      onClick={() => toggleQuick(inv.id)}
+                      className="mt-2 text-xs font-medium text-blue-700"
+                      aria-expanded={quickOpen.has(String(inv.id))}
+                    >
+                      {quickOpen.has(String(inv.id)) ? "▾ Ẩn hàng" : "▸ Xem hàng trong hoá đơn"}
+                    </button>
+                    {quickOpen.has(String(inv.id)) && (
+                      <QuickLines st={quickData[String(inv.id)]} compact onOpen={() => navigate(`/invoices/${inv.id}`)} />
+                    )}
+                  </div>
+
                   <div className="mt-2 flex items-center gap-2" onClick={stop}>
                     <div className="mr-auto">{renderPaymentBadge(inv)}</div>
                     {f.canPay && (
@@ -1752,8 +1897,8 @@ const InvoicesPage: React.FC = () => {
                     const canAdjust = isAdmin && inv.status === "APPROVED" && !adjustLocked; // ✅ chỉ quản trị + mật khẩu cấp 2
 
                     return (
+                      <React.Fragment key={inv.id}>
                       <tr
-                        key={inv.id}
                         id={`inv-row-${String(inv.id)}`}
                         className={
                           "odd:bg-white even:bg-gray-50 hover:bg-blue-50 transition-colors " +
@@ -1761,7 +1906,16 @@ const InvoicesPage: React.FC = () => {
                         }
                       >
                         <td className="px-2 py-2 border-t border-gray-200 whitespace-nowrap">
-                          <div className="flex items-center gap-2 min-w-0">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <button
+                              type="button"
+                              onClick={() => toggleQuick(inv.id)}
+                              aria-expanded={quickOpen.has(String(inv.id))}
+                              title={quickOpen.has(String(inv.id)) ? "Thu gọn" : "Xem nhanh hàng trong hoá đơn"}
+                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-[10px] text-gray-600 hover:bg-gray-100"
+                            >
+                              {quickOpen.has(String(inv.id)) ? "▾" : "▸"}
+                            </button>
                             <div className="truncate font-medium">{inv.code}</div>
                             {returnedBadge}
                           </div>
@@ -1997,6 +2151,14 @@ const InvoicesPage: React.FC = () => {
                           </div>
                         </td>
                       </tr>
+                      {quickOpen.has(String(inv.id)) && (
+                        <tr className="bg-slate-50">
+                          <td colSpan={colCount} className="border-t border-gray-200 p-0">
+                            <QuickLines st={quickData[String(inv.id)]} onOpen={() => navigate(`/invoices/${inv.id}`)} />
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
                     );
                   })}
               </tbody>
