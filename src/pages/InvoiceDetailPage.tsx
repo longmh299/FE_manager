@@ -2821,6 +2821,7 @@ const InvoiceDetailPage: React.FC = () => {
         try {
           setConfirmBusy(true);
           await api.post(`/invoices/${invoice.id}/submit`);
+          window.dispatchEvent(new Event("invoice:changed")); // ✅ cập nhật số hoá đơn chờ duyệt ở menu
           updateInvoice({ status: "SUBMITTED" });
           setMessage({ type: "success", text: "Đã gửi duyệt." });
           toastSuccess("Đã gửi duyệt.");
@@ -2862,6 +2863,7 @@ const InvoiceDetailPage: React.FC = () => {
         try {
           setConfirmBusy(true);
           await api.post(`/invoices/${invoice.id}/approve`);
+          window.dispatchEvent(new Event("invoice:changed")); // ✅ cập nhật số hoá đơn chờ duyệt ở menu
           updateInvoice({ status: "APPROVED" });
           setMessage({ type: "success", text: "Đã duyệt hóa đơn." });
           toastSuccess("Đã duyệt hóa đơn.");
@@ -2906,6 +2908,7 @@ const InvoiceDetailPage: React.FC = () => {
         try {
           setPromptBusy(true);
           await api.post(`/invoices/${invoice.id}/reject`, { reason: (reason || "").trim() });
+          window.dispatchEvent(new Event("invoice:changed")); // ✅ cập nhật số hoá đơn chờ duyệt ở menu
           updateInvoice({ status: "REJECTED" });
           setMessage({ type: "success", text: "Đã từ chối hóa đơn." });
           toastSuccess("Đã từ chối hóa đơn.");
@@ -4797,6 +4800,7 @@ const InvoiceDetailPage: React.FC = () => {
         onClose={() => setCostAskItems(null)}
         onSubmit={async (costs) => {
           await api.post(`/invoices/${invoice.id}/approve`, { backorderCosts: costs });
+          window.dispatchEvent(new Event("invoice:changed")); // ✅ cập nhật số hoá đơn chờ duyệt ở menu
           setCostAskItems(null);
           updateInvoice({ status: "APPROVED" });
           setMessage({ type: "success", text: "Đã duyệt hóa đơn." });

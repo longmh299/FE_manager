@@ -980,6 +980,7 @@ const InvoicesPage: React.FC = () => {
       ),
       action: async () => {
         await api.post(`/invoices/${inv.id}/submit`);
+        window.dispatchEvent(new Event("invoice:changed")); // ✅ cập nhật số hoá đơn chờ duyệt ở menu
         toast.push({ type: "success", title: "Thành công", message: "Đã gửi duyệt." });
         await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
       },
@@ -1002,6 +1003,7 @@ const InvoicesPage: React.FC = () => {
       ),
       action: async () => {
         await api.post(`/invoices/${inv.id}/recall`);
+        window.dispatchEvent(new Event("invoice:changed")); // ✅ cập nhật số hoá đơn chờ duyệt ở menu
         toast.push({ type: "success", title: "Thành công", message: "Đã hủy gửi duyệt." });
         await runFetchBySource({ q: search.trim(), from, to, type: typeFilter, src: sourceFilter });
       },
@@ -1029,6 +1031,7 @@ const InvoicesPage: React.FC = () => {
         };
         try {
           await api.post(`/invoices/${inv.id}/approve`, {});
+          window.dispatchEvent(new Event("invoice:changed")); // ✅ cập nhật số hoá đơn chờ duyệt ở menu
           await done();
         } catch (e: any) {
           // ✅ linh kiện xuất âm chưa có giá vốn: hỏi giá ngay tại đây
@@ -1037,6 +1040,7 @@ const InvoicesPage: React.FC = () => {
             items: e.response.data.items,
             submit: async (costs) => {
               await api.post(`/invoices/${inv.id}/approve`, { backorderCosts: costs });
+              window.dispatchEvent(new Event("invoice:changed")); // ✅ cập nhật số hoá đơn chờ duyệt ở menu
               setCostAsk(null);
               await done();
             },
@@ -2275,6 +2279,7 @@ const InvoicesPage: React.FC = () => {
                   await api.post(`/invoices/${rejectTarget.id}/reject`, {
                     reason: rejectReason.trim() || undefined,
                   });
+                  window.dispatchEvent(new Event("invoice:changed")); // ✅ cập nhật số hoá đơn chờ duyệt ở menu
                   toast.push({
                     type: "success",
                     title: "Đã trả về",

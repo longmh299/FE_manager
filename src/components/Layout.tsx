@@ -134,6 +134,26 @@ const Layout: React.FC = () => {
     };
   }, [role, location.pathname]);
 
+  // ✅ hoá đơn chờ duyệt (admin / kế toán): số vàng ở "Hoá đơn bán / nhập"
+  const [invBadge, setInvBadge] = useState(0);
+  useEffect(() => {
+    if (!isAdmin && !isAccountant) return;
+    let alive = true;
+    const pull = () =>
+      api
+        .get("/invoices/pending-count")
+        .then((r) => alive && setInvBadge(Number(r.data?.pending) || 0))
+        .catch(() => {});
+    pull();
+    window.addEventListener("invoice:changed", pull); // gửi duyệt / duyệt / từ chối xong -> cập nhật số ngay
+    const t = window.setInterval(pull, 60_000); // nhân viên khác vừa gửi duyệt
+    return () => {
+      alive = false;
+      window.removeEventListener("invoice:changed", pull);
+      window.clearInterval(t);
+    };
+  }, [isAdmin, isAccountant, location.pathname]);
+
   // ✅ hàng chờ bù: số dòng còn mở, để người quản lý kho không quên
   const [boBadge, setBoBadge] = useState(0);
   useEffect(() => {
@@ -161,7 +181,12 @@ const Layout: React.FC = () => {
         title: "Bán hàng",
         icon: "sales",
         links: [
-          { to: "/invoices", label: "Hoá đơn bán / nhập", hint: "Lập, duyệt, thu tiền, in hoá đơn" },
+          {
+            to: "/invoices",
+            label: "Hoá đơn bán / nhập",
+            badge: AA ? invBadge : 0,
+            hint: AA && invBadge ? `${invBadge} hoá đơn đang chờ duyệt` : "Lập, duyệt, thu tiền, in hoá đơn",
+          },
           ...(AA ? [{ to: "/sales-returns", label: "Khách trả hàng" }] : []),
           { to: "/partners", label: "Khách hàng" },
           { to: "/reports/invoice-trace", label: "Tra hoá đơn theo mã máy" },
@@ -230,7 +255,7 @@ const Layout: React.FC = () => {
       },
     ];
     return g.filter((x) => x.links.length > 0);
-  }, [isAdmin, isAccountant, canSeeMovements, canSeeAuditLogs, prBadge.pending, boBadge]);
+  }, [isAdmin, isAccountant, canSeeMovements, canSeeAuditLogs, prBadge.pending, boBadge, invBadge]);
 
   // ===== MENU nhân viên bán hàng: ít trang -> liệt kê thẳng, chia mục có tiêu đề nhỏ =====
   const staffSections: Array<{ title: string; icon: IconName; links: NavItem[] }> = useMemo(
