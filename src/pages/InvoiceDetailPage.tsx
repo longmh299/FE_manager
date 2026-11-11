@@ -38,7 +38,7 @@ type Item = {
   unit?: string;
   price?: number;
   stockQty?: number; // ✅ tổng tồn kho (tất cả kho) — hiện trong gợi ý + cảnh báo hết hàng
-  kind?: string; // ✅ MỚI: MACHINE | PART — để chặn máy trùng mã khi tạo nhanh
+  kind?: string; // MACHINE | PART | SERVICE (dịch vụ: không quản tồn)
 };
 
 type InvoiceLine = {
@@ -128,7 +128,7 @@ type Invoice = {
   paySplits?: Array<{ accountId: string; amount: number }> | null; // thanh toán nhiều tài khoản: 2–5 dòng, mỗi dòng 1 quỹ / tài khoản
   shipFee?: number; // phí ship thu khách, có VAT
   shipTax?: number;
-  laborFee?: number; // công kỹ thuật, không VAT
+  laborFee?: number; // phụ cấp kỹ thuật: cộng vào tổng hoá đơn, không VAT, không tính doanh thu
   note?: string;
 
   status?: InvoiceStatus;
@@ -1121,13 +1121,13 @@ const QuickCreateItemModal: React.FC<{
   initialText: string;
   initialSku?: string; // ✅ từ file nhập: điền sẵn đúng mã / tên / loại
   initialName?: string;
-  initialKind?: "PART" | "MACHINE";
+  initialKind?: "PART" | "MACHINE" | "SERVICE";
   items: Item[];
   onClose: () => void;
   onCreated: (it: Item) => void;
   onPickExisting: (it: Item) => void;
 }> = ({ open, initialText, initialSku, initialName, initialKind, items, onClose, onCreated, onPickExisting }) => {
-  const [kind, setKind] = useState<"PART" | "MACHINE">("PART");
+  const [kind, setKind] = useState<"PART" | "MACHINE" | "SERVICE">("PART");
   const [sku, setSku] = useState("");
   const [name, setName] = useState("");
   const [unitId, setUnitId] = useState("");
@@ -1290,7 +1290,7 @@ const QuickCreateItemModal: React.FC<{
 
         <div style={{ ...modalBody, display: "grid", gap: 12, padding: 16 }}>
           <div style={{ display: "flex", gap: 8 }}>
-            {(["PART", "MACHINE"] as const).map((k) => (
+            {(["PART", "MACHINE", "SERVICE"] as const).map((k) => (
               <button
                 key={k}
                 type="button"
@@ -1306,10 +1306,15 @@ const QuickCreateItemModal: React.FC<{
                   color: kind === k ? "#fff" : "#334155",
                 }}
               >
-                {k === "PART" ? "Linh kiện" : "Máy"}
+                {k === "PART" ? "Linh kiện" : k === "MACHINE" ? "Máy" : "Dịch vụ"}
               </button>
             ))}
           </div>
+          {kind === "SERVICE" && (
+            <div style={{ fontSize: 12.5, color: "#475569", marginTop: -4 }}>
+              Dịch vụ (công sửa máy, công lắp đặt…): không quản tồn, bán bao nhiêu cũng được. Có tính doanh thu, không tính doanh số.
+            </div>
+          )}
 
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,2fr)", gap: 10 }}>
             <div>
@@ -1471,7 +1476,7 @@ const InvoiceDetailPage: React.FC = () => {
     text: string;
     sku?: string;
     name?: string;
-    kind?: "PART" | "MACHINE";
+    kind?: "PART" | "MACHINE" | "SERVICE";
   } | null>(null);
 
   const [invoice, setInvoice] = useState<Invoice | null>(null);
@@ -3057,6 +3062,7 @@ const InvoiceDetailPage: React.FC = () => {
     <div className="inv-sum-row" style={styles.summaryRow}>
       <span className="inv-sum-label" style={styles.summaryLabel}>Thuế VAT</span>
 
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
       <div
         style={{
           display: "flex",
@@ -3112,6 +3118,43 @@ const InvoiceDetailPage: React.FC = () => {
         >
           %
         </span>
+      </div>
+      {/* ✅ chọn nhanh mức thuế hay dùng */}
+      {!locked && (
+        <div style={{ display: "flex", gap: 4, width: 150 }}>
+          {[0, 5, 8, 10].map((pct) => {
+            const on = Number(invoice.taxPercent ?? 0) === pct;
+            return (
+              <button
+                key={pct}
+                type="button"
+                onClick={() => {
+                  if (on) return;
+                  markDirty();
+                  setInvoice((prev) => (prev ? recomputeInvoiceCore(prev, { taxPercent: pct }) : prev));
+                }}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  height: 26,
+                  minHeight: 0,
+                  padding: 0,
+                  lineHeight: "24px",
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  border: on ? "1px solid #0f172a" : `1px solid ${C.borderInput}`,
+                  background: on ? "#0f172a" : "#fff",
+                  color: on ? "#fff" : "#334155",
+                }}
+              >
+                {pct}%
+              </button>
+            );
+          })}
+        </div>
+      )}
       </div>
 
       <span style={styles.summaryValue}>{formatMoney(vatAmount + Number(invoice.shipTax || 0))} đ</span>
@@ -3721,7 +3764,9 @@ const InvoiceDetailPage: React.FC = () => {
                 const itemSuggestions =
                   qTokens.length > 0
                     ? itemsSearchIndex
-                        .filter(({ normName, normSku, compact }) => {
+                        .filter(({ item: it, normName, normSku, compact }) => {
+                          // ✅ hàng dịch vụ chỉ bán, không nhập / trả nhà cung cấp
+                          if (it.kind === "SERVICE" && invoice.type !== "SALES") return false;
                           const hay = `${normName} ${normSku}`;
                           // mỗi từ gõ vào phải xuất hiện đâu đó trong tên/mã
                           // (không cần đúng thứ tự, không cần dấu, không phân biệt hoa/thường)
@@ -3751,6 +3796,7 @@ const InvoiceDetailPage: React.FC = () => {
                 const showBackorder =
                   invoice.type === "SALES" &&
                   firstOfItem &&
+                  lineItem?.kind !== "SERVICE" && // ✅ dịch vụ không quản tồn
                   (!!line.backorderNote || (status === "DRAFT" && lineItem?.kind !== "MACHINE" && !!lineItem && shortQty > 0));
 
                 return (
@@ -3929,7 +3975,8 @@ const InvoiceDetailPage: React.FC = () => {
                               // ✅ chỉ cảnh báo hết hàng khi hoá đơn là loại XUẤT (SALES) —
                               // hoá đơn PURCHASE (nhập hàng) thì tồn=0 là chuyện bình thường
                               const isOutInvoice = invoice.type === "SALES";
-                              const outOfStock = isOutInvoice && Number(it.stockQty ?? 0) <= 0;
+                              const isService = it.kind === "SERVICE"; // ✅ dịch vụ: không quản tồn
+                              const outOfStock = isOutInvoice && !isService && Number(it.stockQty ?? 0) <= 0;
 
                               return (
                                 <div
@@ -3976,7 +4023,7 @@ const InvoiceDetailPage: React.FC = () => {
                                         fontWeight: outOfStock ? 700 : 500,
                                       }}
                                     >
-                                      {outOfStock ? "Hết hàng" : `Tồn: ${it.stockQty ?? 0}`}
+                                      {isService ? "Dịch vụ" : outOfStock ? "Hết hàng" : `Tồn: ${it.stockQty ?? 0}`}
                                       {it.price ? ` · ${it.price.toLocaleString("vi-VN")}đ` : ""}
                                     </span>
                                   </div>
@@ -4165,7 +4212,9 @@ const InvoiceDetailPage: React.FC = () => {
 
                     {invoice.type === "SALES" && (
                       <div className="inv-sum-row" style={styles.summaryRow}>
-                        <span className="inv-sum-label" style={styles.summaryLabel}>Công kỹ thuật</span>
+                        <span className="inv-sum-label" style={styles.summaryLabel} title="Cộng vào tổng hoá đơn khách trả, trả cho kỹ thuật — không tính doanh thu, không VAT">
+                          Phụ cấp kỹ thuật
+                        </span>
                         <div style={{ flex: 1, minWidth: 140 }}>
                           <PaidAmountInput
                             value={Number(invoice.laborFee || 0)}
@@ -4222,7 +4271,7 @@ const InvoiceDetailPage: React.FC = () => {
 
                     {invoice.type === "SALES" && (Number(invoice.shipFee || 0) > 0 || Number(invoice.laborFee || 0) > 0) && (
                       <div style={{ fontSize: 12, color: C.muted, padding: "0 0 6px", textAlign: "right" }}>
-                        VAT tính trên tiền hàng và phí vận chuyển, không tính trên công kỹ thuật.
+                        VAT tính trên tiền hàng và phí vận chuyển, không tính trên phụ cấp kỹ thuật.
                       </div>
                     )}
 

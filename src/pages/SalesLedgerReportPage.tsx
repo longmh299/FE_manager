@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import api from "../api/client";
 import { ToastHost, useToast } from "../components/Toast";
 import { saveAs } from "file-saver";
+import CustomerStatementDialog from "../components/CustomerStatementDialog"; // ✅ bảng kê công nợ gửi khách
 
 import { roundCostDisplay } from "../utils/costDisplay"; // ✅ giá vốn hiển thị số chẵn
 type PaymentStatus = "UNPAID" | "PARTIAL" | "PAID" | "";
@@ -222,6 +223,7 @@ const SalesLedgerReportPage: React.FC = () => {
 
   const [saleUserId, setSaleUserId] = useState<string>("");
   const [techUserId, setTechUserId] = useState<string>("");
+  const [stmtOpen, setStmtOpen] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>("");
 
   const [staffs, setStaffs] = useState<StaffUser[]>([]);
@@ -738,6 +740,12 @@ const SalesLedgerReportPage: React.FC = () => {
   return (
     <div className="space-y-4">
       <ToastHost toasts={toasts} onClose={remove} />
+      <CustomerStatementDialog
+        open={stmtOpen}
+        onClose={() => setStmtOpen(false)}
+        onError={(m) => pushRef.current({ type: "error", title: "Lỗi", message: m })}
+        onDone={(m) => pushRef.current({ type: "success", title: "Đã xuất", message: m })}
+      />
 
       {/* Filter */}
       <div className="bg-white rounded-xl border border-slate-200 p-4">
@@ -842,6 +850,15 @@ const SalesLedgerReportPage: React.FC = () => {
               }`}
             >
               Export Excel
+            </button>
+
+            {/* ✅ bảng kê công nợ gửi khách (không có giá vốn / lãi / NV / ghi chú nội bộ) */}
+            <button
+              type="button"
+              onClick={() => setStmtOpen(true)}
+              className="px-4 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+            >
+              Công nợ gửi khách
             </button>
           </div>
         </div>

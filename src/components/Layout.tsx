@@ -199,6 +199,7 @@ const Layout: React.FC = () => {
         links: [
           { to: "/machine-stocks", label: "Tồn máy móc" },
           { to: "/part-stocks", label: "Tồn linh kiện" },
+          ...(AA ? [{ to: "/service-items", label: "Hàng dịch vụ", hint: "Công sửa máy, công lắp đặt… không quản tồn" }] : []),
           ...(AA ? [{ to: "/stock-backorders", label: "Hàng chờ bù", badge: boBadge, hint: boBadge ? `${boBadge} dòng linh kiện đang chờ bù` : undefined }] : []),
           ...(canSeeMovements ? [{ to: "/movements", label: "Điều chỉnh tồn / giá vốn" }] : []),
           ...(AA ? [{ to: "/stock-counts", label: "Kiểm kê kho" }] : []),
@@ -225,6 +226,7 @@ const Layout: React.FC = () => {
         links: [
           { to: "/revenue", label: "Doanh thu" },
           ...(AA ? [{ to: "/reports/sales-ledger", label: "Bảng kê bán hàng" }] : []),
+          ...(AA ? [{ to: "/reports/tech-commission", label: "Doanh số & hoa hồng NV", hint: "Doanh số sale + 0,5% và phụ cấp kỹ thuật theo tháng" }] : []),
           ...(isAdmin ? [{ to: "/reports/best-sellers", label: "Hàng bán chạy" }] : []),
           ...(isAdmin ? [{ to: "/analytics", label: "Lượt truy cập website" }] : []),
         ],

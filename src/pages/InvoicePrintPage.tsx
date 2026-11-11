@@ -892,7 +892,7 @@ const InvoicePrintPage: React.FC = () => {
             {laborFee > 0 && (
               <tr>
                 <td colSpan={6} style={moneyRowLabelStyle}>
-                  Công kỹ thuật (không VAT)
+                  Phụ cấp kỹ thuật (không VAT)
                 </td>
                 <td colSpan={1} style={moneyRowValueStyle}>
                   {formatMoney(laborFee)} đ

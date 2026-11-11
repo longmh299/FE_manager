@@ -6,6 +6,7 @@ import Layout from "./components/Layout";
 import LoginPage from "./pages/LoginPage";
 import ItemsPage from "./pages/ItemsPage";
 import ItemsMasterPage from "./pages/ItemsMasterPage";
+import ServiceItemsPage from "./pages/ServiceItemsPage"; // ✅ hàng dịch vụ (không quản tồn)
 import RevenuePage from "./pages/RevenuePage";
 import InvoicesPage from "./pages/InvoicesPage";
 import PartnersPage from "./pages/CustomersPage";
@@ -33,6 +34,7 @@ import SalesReturnsPage from "./pages/SalesReturnsPage";
 import SalesReturnFormPage from "./pages/SalesReturnFormPage";
 import LedgerPage from "./pages/LedgerPage";
 import SalesLedgerReportPage from "./pages/SalesLedgerReportPage";
+import TechCommissionPage from "./pages/TechCommissionPage"; // ✅ hoa hồng kỹ thuật (kế toán)
 import PaymentAccountsPage from "./pages/PaymentAccountsPage";
 import MySalesDashboardPage from "./pages/MySalesDashboardPage";
 import MyDebtsPage from "./pages/MyDebtsPage";
@@ -159,6 +161,14 @@ const App: React.FC = () => {
             }
           />
           <Route path="stock-import-opening" element={<StockOpeningImportPage />} />
+          <Route
+            path="service-items"
+            element={
+              <RequireRole roles={["admin", "accountant"]}>
+                <ServiceItemsPage />
+              </RequireRole>
+            }
+          />
 
           {/* machines */}
           <Route path="machines" element={<MachinesPage />} />
@@ -180,6 +190,14 @@ const App: React.FC = () => {
           <Route path="debts/by-sale" element={<ReceivablesReport />} />
           <Route path="reports/ledger" element={<LedgerPage />} />
           <Route path="reports/sales-ledger" element={<SalesLedgerReportPage />} />
+          <Route
+            path="reports/tech-commission"
+            element={
+              <RequireRole roles={["admin", "accountant"]}>
+                <TechCommissionPage />
+              </RequireRole>
+            }
+          />
           <Route path="payment-accounts" element={<PaymentAccountsPage />} />
           <Route
             path="stock-backorders"

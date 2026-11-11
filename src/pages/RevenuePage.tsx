@@ -737,8 +737,15 @@ export default function RevenuePage() {
           />
           <KpiCard
             tone="slate"
-            label="Phí ship + công thu khách"
-            value={fmtVnd((data?.kpis?.shipRevenue ?? 0) + (data?.kpis?.laborRevenue ?? 0))}
+            label="Phí ship thu khách"
+            value={fmtVnd(data?.kpis?.shipRevenue ?? 0)}
+            icon={<IconReceipt className="h-4 w-4" />}
+          />
+          {/* ✅ phụ cấp kỹ thuật: khách trả trong tổng hoá đơn nhưng là tiền của kỹ thuật -> không tính doanh thu / lợi nhuận */}
+          <KpiCard
+            tone="slate"
+            label="Phụ cấp kỹ thuật (không tính DT)"
+            value={fmtVnd(data?.kpis?.laborRevenue ?? 0)}
             icon={<IconReceipt className="h-4 w-4" />}
           />
           <KpiCard
