@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { saveAs } from "file-saver";
 import * as mammoth from "mammoth";
 import DOMPurify from "dompurify";
-import api, { extractList } from "../api/client";
+import api, { extractList, API_BASE_URL } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 
 type QuoteDoc = {
@@ -122,6 +122,17 @@ const QuoteDocumentsPage: React.FC = () => {
   const [pageSize] = useState(20);
   const [loading, setLoading] = useState(false);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [sharingId, setSharingId] = useState<string | null>(null);
+  const [share, setShare] = useState<{
+    id: string;
+    title: string;
+    url: string;
+    days: number;
+    file: File | null; // có = máy gửi được file
+    note: string;
+    error?: boolean;
+  } | null>(null);
+  const canShareNative = typeof navigator !== "undefined" && typeof navigator.share === "function";
   const [error, setError] = useState<string | null>(null);
 
   // form upload
@@ -317,6 +328,67 @@ const QuoteDocumentsPage: React.FC = () => {
     }
   }
 
+  /**
+   * ✅ Chia sẻ báo giá cho khách — file y như Tải xuống (docx đã chèn email / SĐT của người chia sẻ).
+   * Bước 1 (bấm "Chia sẻ"): chuẩn bị link tải 30 ngày, và file nếu máy gửi được file.
+   * Bước 2 (bấm "Gửi file" / "Gửi link" / "Chép link"): trình duyệt CHỈ cho mở bảng chia sẻ ngay sau một cú bấm,
+   *   nên không gọi share() sau khi chờ tải file (chờ lâu sẽ bị chặn -> lỗi "Chia sẻ thất bại").
+   */
+  async function onShare(doc: QuoteDoc) {
+    setSharingId(doc.id);
+    setShare(null);
+    try {
+      const r = await api.post(`/quote-documents/${doc.id}/share`);
+      const url = `${API_BASE_URL.replace(/\/$/, "")}/public/quote/${encodeURIComponent(r.data?.token)}`;
+      const days = Number(r.data?.expiresInDays) || 30;
+      // máy có gửi được loại file này không? (thử bằng file rỗng cùng tên / kiểu, khỏi tải file thật cho máy không gửi được)
+      const nav = navigator as Navigator & { canShare?: (d: ShareData) => boolean };
+      const type = doc.mimeType || "application/octet-stream";
+      let file: File | null = null;
+      if (typeof nav.share === "function" && typeof nav.canShare === "function" && nav.canShare({ files: [new File([""], doc.fileName, { type })] })) {
+        const res = await api.get(`/quote-documents/${doc.id}/download`, { responseType: "blob" });
+        file = new File([res.data as Blob], doc.fileName, { type: (res.data as Blob).type || type });
+      }
+      setShare({ id: doc.id, title: doc.title || doc.fileName, url, days, file, note: "" });
+    } catch (err) {
+      console.error("share error", err);
+      const x = err as { response?: { status?: number; data?: { message?: string } } };
+      const msg =
+        x?.response?.status === 404 && !x?.response?.data?.message
+          ? "Máy chủ chưa có chức năng chia sẻ (BE chưa cập nhật)."
+          : x?.response?.data?.message || "Không tạo được link chia sẻ, thử lại sau.";
+      setShare({ id: doc.id, title: "", url: "", days: 0, file: null, note: msg, error: true });
+    } finally {
+      setSharingId(null);
+    }
+  }
+
+  async function shareFile() {
+    if (!share?.file) return;
+    try {
+      await navigator.share({ files: [share.file], title: share.title });
+    } catch (e) {
+      if ((e as DOMException)?.name !== "AbortError") setShare({ ...share, note: "Máy không gửi được file, hãy dùng Gửi link hoặc Chép link." });
+    }
+  }
+  async function shareLink() {
+    if (!share?.url) return;
+    try {
+      await navigator.share({ title: share.title, text: `Báo giá: ${share.title}`, url: share.url });
+    } catch (e) {
+      if ((e as DOMException)?.name !== "AbortError") setShare({ ...share, note: "Không mở được bảng chia sẻ, hãy bấm Chép link." });
+    }
+  }
+  async function copyLink() {
+    if (!share?.url) return;
+    try {
+      await navigator.clipboard.writeText(share.url);
+      setShare({ ...share, note: "Đã chép link. Dán vào Zalo hoặc email gửi khách." });
+    } catch {
+      setShare({ ...share, note: "Không chép tự động được, bôi đen link bên dưới rồi chép." });
+    }
+  }
+
   async function onDelete(doc: QuoteDoc) {
     if (!window.confirm(`Xoá file "${doc.title}"? Không thể hoàn tác.`)) return;
     try {
@@ -468,6 +540,14 @@ const QuoteDocumentsPage: React.FC = () => {
                   >
                     {downloadingId === doc.id ? "Đang tải..." : "Tải xuống"}
                   </button>
+                  <button
+                    className="whitespace-nowrap rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-sm font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                    disabled={sharingId === doc.id}
+                    onClick={() => onShare(doc)}
+                    title="Gửi báo giá cho khách (Zalo, email…), có sẵn email / SĐT của bạn"
+                  >
+                    {sharingId === doc.id ? "Đang chuẩn bị..." : "Chia sẻ"}
+                  </button>
                   <button className="whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100" aria-label="Xem trước" title="Xem trước" onClick={() => onPreview(doc)}>
                     Xem
                   </button>
@@ -482,6 +562,54 @@ const QuoteDocumentsPage: React.FC = () => {
                     </button>
                   )}
                 </div>
+                {share?.id === doc.id && (
+                  <div
+                    className={`border-t px-3 py-2.5 text-xs ${share.error ? "border-rose-100 bg-rose-50 text-rose-800" : "border-indigo-100 bg-indigo-50 text-indigo-900"}`}
+                    role="status"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="font-medium">{share.error ? share.note : `Gửi báo giá cho khách (link dùng được ${share.days} ngày)`}</span>
+                      <button type="button" className="opacity-60 hover:opacity-100" aria-label="Đóng" onClick={() => setShare(null)}>
+                        ✕
+                      </button>
+                    </div>
+                    {!share.error && (
+                      <>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {share.file && (
+                            <button type="button" onClick={shareFile} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700">
+                              Gửi file
+                            </button>
+                          )}
+                          {canShareNative && (
+                            <button
+                              type="button"
+                              onClick={shareLink}
+                              className={`rounded-lg px-3 py-1.5 text-sm font-medium ${share.file ? "border border-indigo-300 bg-white text-indigo-700 hover:bg-indigo-50" : "bg-indigo-600 text-white hover:bg-indigo-700"}`}
+                            >
+                              Gửi link
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={copyLink}
+                            className={`rounded-lg px-3 py-1.5 text-sm font-medium ${share.file || canShareNative ? "border border-indigo-300 bg-white text-indigo-700 hover:bg-indigo-50" : "bg-indigo-600 text-white hover:bg-indigo-700"}`}
+                          >
+                            Chép link
+                          </button>
+                        </div>
+                        <input
+                          readOnly
+                          value={share.url}
+                          onFocus={(e) => e.currentTarget.select()}
+                          className="mt-2 w-full rounded border border-indigo-200 bg-white px-2 py-1 text-[11px] text-slate-700"
+                          aria-label="Link báo giá"
+                        />
+                        {share.note && <div className="mt-1.5">{share.note}</div>}
+                      </>
+                    )}
+                  </div>
+                )}
               </li>
             );
           })}
