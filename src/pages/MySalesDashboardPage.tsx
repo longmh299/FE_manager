@@ -15,7 +15,26 @@ type Summary = {
   holdOutstanding?: number;
   totalOutstanding?: number;
 
-  orderCount: number;
+  orderCount: number; // số hoá đơn đủ tiền trong tháng (tính doanh số)
+  // ✅ doanh số theo NGÀY KHÁCH TRẢ ĐỦ TIỀN (khớp báo cáo kế toán) + hoa hồng sale
+  salesRevenue?: number;
+  returned?: number;
+  saleRate?: number; // 0.01 = 1%; 0 = không tính hoa hồng
+  commission?: number;
+  approvedCount?: number;
+  saleClosed?: { closedBy: string | null; closedAt: string } | null; // kế toán đã chốt số tháng này
+};
+
+/** hoá đơn / phiếu trả được tính doanh số trong tháng */
+type DsInvoice = {
+  invoiceId: string;
+  invoiceCode: string;
+  type: "SALES" | "SALES_RETURN";
+  issueDate: string;
+  dsDate: string;
+  customerName: string;
+  ds: number;
+  commission: number;
 };
 
 type DebtRow = {
@@ -50,6 +69,7 @@ type DashboardResp = {
   invoices?: any[];
   customers?: any[];
   tech?: TechBlock | null;
+  dsInvoices?: DsInvoice[];
 };
 
 /** ✅ Kỹ thuật: hoá đơn bán đã duyệt trong tháng có mình ở ô NV kỹ thuật (BE: buildTechBlock) */
@@ -60,6 +80,7 @@ type TechInvoice = {
   customerName: string;
   saleUserName: string | null;
   goods: number;
+  earnsPct?: boolean; // false = hoá đơn có phụ cấp -> không tính %
   commission: number;
   laborFee: number;
   totalIncome?: number;
@@ -68,6 +89,7 @@ type TechBlock = {
   rate: number;
   summary: { goods: number; commission: number; laborFee: number; totalIncome?: number; laborCount: number; orderCount: number };
   invoices: TechInvoice[];
+  closed?: { closedBy: string | null; closedAt: string } | null;
 };
 
 type InvoiceDetailResp = { ok: boolean; data: any };
@@ -251,6 +273,62 @@ function Kpi({
   );
 }
 
+function DsSection({ rows, rate, closed }: { rows: DsInvoice[]; rate: number; closed?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const hasCom = rate > 0;
+  return (
+    <div className="bg-white rounded-xl shadow-sm border p-3 sm:p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="font-medium">Hoá đơn tính doanh số tháng này</h2>
+          <div className="text-xs text-gray-500">
+            Tính vào ngày khách trả đủ tiền (khớp số kế toán chốt) • {rows.length} dòng
+            {closed ? <span className="ml-1 rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-800">Kế toán đã chốt</span> : null}
+          </div>
+        </div>
+        {rows.length > 0 && (
+          <button type="button" onClick={() => setOpen((v) => !v)} className="px-3 py-1.5 rounded-lg border text-sm hover:bg-gray-50">
+            {open ? "Ẩn chi tiết" : "Xem chi tiết"}
+          </button>
+        )}
+      </div>
+      {open && rows.length > 0 && (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full min-w-[640px] text-sm">
+            <thead className="bg-gray-50 text-left text-gray-600">
+              <tr>
+                <th className="px-3 py-2 font-medium">Số HĐ</th>
+                <th className="px-3 py-2 font-medium">Ngày HĐ</th>
+                <th className="px-3 py-2 font-medium">Ngày đủ tiền</th>
+                <th className="px-3 py-2 font-medium">Khách hàng</th>
+                <th className="px-3 py-2 font-medium text-right">Doanh số</th>
+                {hasCom && <th className="px-3 py-2 font-medium text-right">Hoa hồng</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={`${r.type}-${r.invoiceId}`} className="border-t">
+                  <td className="px-3 py-2 font-medium">
+                    {r.invoiceCode}
+                    {r.type === "SALES_RETURN" && (
+                      <span className="ml-1 rounded-full bg-rose-100 px-1.5 py-0.5 text-[11px] font-medium text-rose-700">Khách trả</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">{r.issueDate}</td>
+                  <td className="px-3 py-2">{r.dsDate}</td>
+                  <td className="px-3 py-2">{r.customerName}</td>
+                  <td className={`px-3 py-2 text-right tabular-nums ${r.ds < 0 ? "text-rose-600" : ""}`}>{money(r.ds)}</td>
+                  {hasCom && <td className={`px-3 py-2 text-right tabular-nums ${r.commission < 0 ? "text-rose-600" : ""}`}>{money(r.commission)}</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TechSection({ tech }: { tech: TechBlock }) {
   const [open, setOpen] = useState(true);
   const s = tech.summary;
@@ -263,6 +341,7 @@ function TechSection({ tech }: { tech: TechBlock }) {
           <h2 className="font-medium">Kỹ thuật</h2>
           <div className="text-xs text-gray-500">
             Hoá đơn bán đã duyệt trong tháng có bạn ở ô NV kỹ thuật • {num(s.orderCount)} hoá đơn
+            {tech.closed ? <span className="ml-1 rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-800">Kế toán đã chốt</span> : null}
           </div>
         </div>
         <button type="button" onClick={() => setOpen((v) => !v)} className="px-3 py-1.5 rounded-lg border text-sm hover:bg-gray-50">
@@ -270,7 +349,7 @@ function TechSection({ tech }: { tech: TechBlock }) {
         </button>
       </div>
       <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Kpi title="Tổng tiền hàng" value={money(s.goods)} subHint="Chưa VAT, đã trừ hàng khách trả, không gồm dịch vụ" />
+        <Kpi title="Tiền hàng tính %" value={money(s.goods)} subHint="Chưa VAT, đã trừ hàng trả, không gồm dịch vụ; HĐ có phụ cấp không tính %" />
         <Kpi title={`Thực nhận (${pct} tiền hàng)`} value={money(s.commission)} />
         <Kpi title="Phụ cấp kỹ thuật" value={money(s.laborFee)} subHint={`${num(s.laborCount)} hoá đơn có phụ cấp kỹ thuật`} />
         <Kpi title="Tổng nhận" value={money(total)} subHint={`Thực nhận ${pct} + phụ cấp kỹ thuật`} />
@@ -297,7 +376,15 @@ function TechSection({ tech }: { tech: TechBlock }) {
                   <td className="px-3 py-2">{r.issueDate}</td>
                   <td className="px-3 py-2">{r.customerName}</td>
                   <td className="px-3 py-2">{r.saleUserName || "—"}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{money(r.goods)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {r.earnsPct === false ? (
+                      <span className="text-gray-400" title="Hoá đơn có phụ cấp kỹ thuật: chỉ ăn phụ cấp, không tính %">
+                        {money(r.goods)}
+                      </span>
+                    ) : (
+                      money(r.goods)
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-right tabular-nums">{money(r.commission)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{num(r.laborFee) > 0 ? money(r.laborFee) : "—"}</td>
                   <td className="px-3 py-2 text-right tabular-nums font-medium">
@@ -418,7 +505,10 @@ const MySalesDashboardPage: React.FC = () => {
     invoices: Array.isArray((dash as any)?.invoices) ? (dash as any).invoices : [],
     customers: Array.isArray((dash as any)?.customers) ? (dash as any).customers : [],
     tech: dash?.tech ?? null,
+    dsInvoices: Array.isArray(dash?.dsInvoices) ? dash!.dsInvoices! : [],
   };
+  const saleRate = num(view.summary.saleRate ?? 0);
+  const saleRatePct = `${(saleRate * 100).toLocaleString("vi-VN", { maximumFractionDigits: 3 })}%`;
 
   // KPI numbers
   const kpiNeedCollect = num((view.summary as any).normalOutstanding ?? view.summary.outstanding);
@@ -594,11 +684,22 @@ const MySalesDashboardPage: React.FC = () => {
 
       {/* KPI */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        <Kpi title="Doanh số" value={money(view.summary.revenue)} subHint="Tiền hàng chưa VAT, không gồm dịch vụ" />
+        <Kpi
+          title="Doanh số"
+          value={money(view.summary.revenue)}
+          subHint={`Tính khi khách trả đủ tiền • ${num(view.summary.orderCount)} HĐ${num(view.summary.returned) ? ` • trừ trả hàng ${money(view.summary.returned)}` : ""}`}
+        />
+        {saleRate > 0 ? (
+          <Kpi title={`Hoa hồng (${saleRatePct})`} value={money(view.summary.commission ?? 0)} subHint="Trên doanh số tháng này" />
+        ) : (
+          <Kpi title="HĐ đủ tiền" value={String(num(view.summary.orderCount))} />
+        )}
         <Kpi title="Đã thu (thực tế)" value={money(kpiCollectedCash)} />
         <Kpi title="Nợ cần thu" value={money(kpiNeedCollect)} highlight={kpiNeedCollect > 0} />
-        <Kpi title="Số đơn" value={String(num(view.summary.orderCount))} />
       </div>
+
+      {/* ✅ hoá đơn tính doanh số (theo ngày trả đủ tiền) */}
+      <DsSection rows={view.dsInvoices} rate={saleRate} closed={!!view.summary.saleClosed} />
 
       {/* ✅ Kỹ thuật */}
       {dash?.tech ? <TechSection tech={dash.tech} /> : null}

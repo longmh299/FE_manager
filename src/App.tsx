@@ -35,6 +35,7 @@ import SalesReturnFormPage from "./pages/SalesReturnFormPage";
 import LedgerPage from "./pages/LedgerPage";
 import SalesLedgerReportPage from "./pages/SalesLedgerReportPage";
 import TechCommissionPage from "./pages/TechCommissionPage"; // ✅ hoa hồng kỹ thuật (kế toán)
+import ReorderPage from "./pages/ReorderPage"; // ✅ gợi ý nhập hàng
 import PaymentAccountsPage from "./pages/PaymentAccountsPage";
 import MySalesDashboardPage from "./pages/MySalesDashboardPage";
 import MyDebtsPage from "./pages/MyDebtsPage";
@@ -190,6 +191,14 @@ const App: React.FC = () => {
           <Route path="debts/by-sale" element={<ReceivablesReport />} />
           <Route path="reports/ledger" element={<LedgerPage />} />
           <Route path="reports/sales-ledger" element={<SalesLedgerReportPage />} />
+          <Route
+            path="reports/reorder"
+            element={
+              <RequireRole roles={["admin", "accountant"]}>
+                <ReorderPage />
+              </RequireRole>
+            }
+          />
           <Route
             path="reports/tech-commission"
             element={

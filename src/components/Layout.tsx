@@ -3,7 +3,6 @@ import React, { useEffect, useMemo, useState } from "react";
 import api from "../api/client";
 import { NavLink, Outlet, useLocation, Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { LowStockBell } from "./LowStockBell";
 import { ChatWidget } from "./ChatWidget";
 import DateLockedAlert from "./DateLockedAlert";
 import { AppDialogHost } from "./AppDialog";
@@ -199,6 +198,7 @@ const Layout: React.FC = () => {
         links: [
           { to: "/machine-stocks", label: "Tồn máy móc" },
           { to: "/part-stocks", label: "Tồn linh kiện" },
+          ...(AA ? [{ to: "/reports/reorder", label: "Gợi ý nhập hàng", hint: "Hàng hết / sắp hết theo tốc độ bán, kèm giá nhập và nhà cung cấp lần cuối" }] : []),
           ...(AA ? [{ to: "/service-items", label: "Hàng dịch vụ", hint: "Công sửa máy, công lắp đặt… không quản tồn" }] : []),
           ...(AA ? [{ to: "/stock-backorders", label: "Hàng chờ bù", badge: boBadge, hint: boBadge ? `${boBadge} dòng linh kiện đang chờ bù` : undefined }] : []),
           ...(canSeeMovements ? [{ to: "/movements", label: "Điều chỉnh tồn / giá vốn" }] : []),
@@ -252,7 +252,7 @@ const Layout: React.FC = () => {
           ...(isAdmin ? [{ to: "/users", label: "Nhân viên & phân quyền" }] : []),
           ...(isAdmin ? [{ to: "/period-close", label: "Chốt sổ kế toán", hint: "Khoá kỳ đã đối soát, không ai sửa được nữa" }] : []),
           ...(canSeeAuditLogs ? [{ to: "/audit-logs", label: "Lịch sử thao tác" }] : []),
-          { to: "/change-password", label: "Đổi mật khẩu" },
+          { to: "/change-password", label: isAdmin ? "Cài đặt hệ thống" : "Đổi mật khẩu", ...(isAdmin ? { hint: "Mật khẩu, mật khẩu cấp 2, tỉ lệ hoa hồng" } : {}) },
         ],
       },
     ];
@@ -579,9 +579,7 @@ const Layout: React.FC = () => {
             Hệ thống quản lý kho
           </h2>
 
-          <div className="flex items-center gap-2">
-            <LowStockBell />
-          </div>
+          {/* chuông cảnh báo tồn đã bỏ: xem ở Kho hàng → Gợi ý nhập hàng */}
           {/* ✅ Trang Dịch tài liệu / Hàng chờ MKT có thanh nút dưới đáy -> ẩn bong bóng chat chung để không che */}
           {!location.pathname.startsWith("/translate") && !location.pathname.startsWith("/mkt") && <ChatWidget />}
         </header>

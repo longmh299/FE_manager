@@ -5,6 +5,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { PinSettingsDialog } from "../components/SecondPassword";
+import CommissionRatesSettings from "../components/CommissionRatesSettings"; // ✅ admin chỉnh tỉ lệ hoa hồng
 
 const ROLE_LABEL: Record<string, string> = { admin: "Quản trị", accountant: "Kế toán", staff: "Nhân viên bán hàng" };
 const MIN_LEN = 6;
@@ -106,6 +107,13 @@ const Banner: React.FC<{ note: Note }> = ({ note }) =>
   ) : null;
 
 const icons = {
+  percent: (
+    <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M19 5 5 19" />
+      <circle cx="7" cy="7" r="2.5" />
+      <circle cx="17" cy="17" r="2.5" />
+    </svg>
+  ),
   contact: (
     <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="3" y="5" width="18" height="14" rx="2" />
@@ -381,6 +389,17 @@ const ChangePasswordPage: React.FC = () => {
             </button>
           </div>
           <p className="mt-3 text-xs text-slate-500">Quên mật khẩu cấp 2? Bấm Đổi mật khẩu cấp 2 rồi chọn “Dùng mã khôi phục” (mã cài trên server).</p>
+        </Card>
+      )}
+
+      {/* ✅ tỉ lệ hoa hồng (chỉ quản trị) */}
+      {role === "admin" && (
+        <Card
+          title="Tỉ lệ hoa hồng"
+          icon={icons.percent}
+          desc="Dùng cho báo cáo Doanh số & hoa hồng NV và trang Doanh số của tôi. Lưu cần mật khẩu cấp 2."
+        >
+          <CommissionRatesSettings />
         </Card>
       )}
 

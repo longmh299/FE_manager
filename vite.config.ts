@@ -6,7 +6,10 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // ✅ 'prompt': có bản mới thì hiện thanh "Cập nhật" (src/components/UpdateBanner.tsx), không bắt Ctrl + Shift + R.
+      //    Không dùng autoUpdate tự tải lại: đang nhập dở hoá đơn sẽ mất.
+      registerType: 'prompt',
+      injectRegister: false, // đăng ký trong UpdateBanner
       includeAssets: ['logo-mcbrother.png'],
       manifest: {
         name: 'Quản Lý Kho - MCBROTHER',
@@ -39,6 +42,7 @@ export default defineConfig({
         ],
       },
       workbox: {
+        clientsClaim: true, // ✅ bản mới nhận quyền điều khiển trang ngay khi bấm Cập nhật -> trang tự tải lại
         // ✅ cache app shell để mở lại lần sau nhanh hơn; KHÔNG cache API calls
         // (dữ liệu tồn kho/hóa đơn luôn phải lấy mới, không được cache)
         navigateFallbackDenylist: [/^\/api\//],
