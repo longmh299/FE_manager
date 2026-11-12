@@ -805,6 +805,7 @@ const InvoicePrintPage: React.FC = () => {
         <div style={{ ...styles.invoiceMeta, marginBottom: cfg.compact ? 4 : 6 }}>
           <div>
             Số: <span style={styles.bold}>{invoice.code}</span>
+            {/^N-\d+$/.test(String(invoice.code || "")) ? <span> (nháp, chưa duyệt)</span> : null}
           </div>
           <div>
             Ngày lập: <span style={styles.bold}>{issueDate}</span>

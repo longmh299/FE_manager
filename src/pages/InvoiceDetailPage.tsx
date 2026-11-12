@@ -98,6 +98,7 @@ type PaymentAccount = {
 type Invoice = {
   id: string | number | null;
   code: string;
+  draftCode?: string | null; // ✅ số nháp N-0045 (giữ lại sau khi duyệt)
   date?: string;
   type: InvoiceType;
 
@@ -2133,6 +2134,7 @@ const InvoiceDetailPage: React.FC = () => {
       const inv: Invoice = {
         id: x.id,
         code: x.code ?? "",
+        draftCode: x.draftCode ?? null,
         date: normalizedDate,
         type: (x.type === "PURCHASE" ? "PURCHASE" : "SALES") as InvoiceType,
 
@@ -3169,7 +3171,9 @@ const InvoiceDetailPage: React.FC = () => {
   const returnState = getReturnState(invoice);
   const returnColor = returnState === "FULL" ? "#7c3aed" : returnState === "PARTIAL" ? "#6d28d9" : "#6b7280";
 
-  const canEditInvoiceCode = status === "DRAFT"; // giữ nguyên policy
+  // ✅ số nháp N-xxxx: số chính thức tự cấp khi duyệt, không gõ tay. Hoá đơn đã có số (mở lại) thì chỉ admin sửa số.
+  const isDraftNumber = !invoice.code || /^N-\d+$/.test(String(invoice.code));
+  const canEditInvoiceCode = status === "DRAFT" && !isCreate && !isDraftNumber && isAdmin;
 
   const title = isCreate ? "Tạo hóa đơn mới" : canEditApprovedAdjust ? "Điều chỉnh hóa đơn (Admin)" : "Chi tiết hóa đơn";
 
@@ -3212,7 +3216,7 @@ const InvoiceDetailPage: React.FC = () => {
         <span style={statusPill}>● {statusText}</span>
         {invoice.code ? (
           <span style={{ marginLeft: "auto", fontSize: 13, color: C.muted }}>
-            Số HĐ: <b style={{ color: C.text }}>{invoice.code}</b>
+            {/^N-\d+$/.test(String(invoice.code)) ? "Số nháp" : "Số HĐ"}: <b style={{ color: C.text }}>{invoice.code}</b>
           </span>
         ) : null}
       </div>
@@ -3301,22 +3305,30 @@ const InvoiceDetailPage: React.FC = () => {
                   <div style={styles.sectionTitle}>Thông tin đơn hàng</div>
 
                   <div style={styles.formRow}>
-                    <label style={styles.label}>Số hóa đơn *</label>
+                    <label style={styles.label}>Số hóa đơn</label>
                     <input
                       style={{
                         ...styles.input,
                         background: canEditInvoiceCode ? "#fff" : "#f8fafc",
                         cursor: canEditInvoiceCode ? "text" : "not-allowed",
                       }}
-                      value={invoice.code ?? ""}
+                      value={isCreate ? "" : invoice.code ?? ""}
                       disabled={!canEditInvoiceCode}
-                      placeholder={canEditInvoiceCode ? "Để trống thì hệ thống tự nhảy số" : "số tự nhảy"}
+                      placeholder={isCreate ? "Lưu xong sẽ có số nháp N-xxxx" : "số tự nhảy"}
                       onChange={(e) => {
                         if (!canEditInvoiceCode) return;
                         markDirty();
                         updateInvoice({ code: e.target.value });
                       }}
                     />
+                    {!isCreate && isDraftNumber && invoice.code ? (
+                      <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
+                        Số nháp. Số hóa đơn chính thức tự cấp khi duyệt.
+                      </div>
+                    ) : null}
+                    {invoice.draftCode && invoice.draftCode !== invoice.code ? (
+                      <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>Từ nháp {invoice.draftCode}</div>
+                    ) : null}
                   </div>
 
                   <div style={styles.rowInline} className="inv-inline">

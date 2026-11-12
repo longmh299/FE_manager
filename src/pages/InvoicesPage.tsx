@@ -56,6 +56,7 @@ type InvoiceListItem = {
 
   status?: InvoiceStatus;
   rejectInfo?: { reason: string | null; at: string; by: string | null } | null; // ✅ nháp bị trả về
+  createdById?: string | null; // ✅ người lập nháp (để admin chỉ thấy "Gửi duyệt" ở nháp của mình)
 };
 
 type InvoiceTypeFilter = "" | "SALES" | "PURCHASE";
@@ -320,6 +321,7 @@ function mapInvoiceRow(x: any): InvoiceListItem {
           paymentStatus: normalizePaymentStatus(x.paymentStatus),
           status: (x.status as InvoiceStatus) ?? "DRAFT",
           rejectInfo: x.rejectInfo ?? null,
+          createdById: x.createdById ? String(x.createdById) : null,
         };
       }
 
@@ -590,10 +592,14 @@ const InvoicesPage: React.FC = () => {
   const [loadingMore, setLoadingMore] = useState(false);
 
   const [role, setRole] = useState<string>("");
+  const [myId, setMyId] = useState<string>("");
   const isStaff = role === "staff";
   const isAdmin = role === "admin";
   const isAccountant = role === "accountant";
   const canApprove = role === "admin" || role === "accountant";
+  // ✅ admin: chỉ hiện nút "Gửi duyệt" ở hoá đơn nháp do chính mình lập (nháp của người khác để họ tự gửi)
+  const canSubmitDraft = (inv: InvoiceListItem) =>
+    inv.status === "DRAFT" && (isStaff || (canApprove && (!isAdmin || (!!myId && inv.createdById === myId))));
 
   const [costAsk, setCostAsk] = useState<null | { items: BackorderCostItem[]; submit: (costs: Record<string, number>) => Promise<void> }>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -630,6 +636,7 @@ const InvoicesPage: React.FC = () => {
       .then((res) => {
         const u = unwrapUser(res);
         setRole(normalizeRole(u));
+        setMyId(String((u as any)?.id ?? (u as any)?.userId ?? ""));
       })
       .catch((err) => {
         console.error("load auth/me error", err);
@@ -718,6 +725,11 @@ const InvoicesPage: React.FC = () => {
       }
 
       mapped.sort((a, b) => {
+        // ✅ hoá đơn nháp (số N-xxxx, chưa duyệt) luôn nằm trên cùng, rồi mới tới số chính thức mới nhất
+        const da = /^N-\d+$/.test(String(a.code || "").trim()) ? 0 : 1;
+        const db = /^N-\d+$/.test(String(b.code || "").trim()) ? 0 : 1;
+        if (da !== db) return da - db;
+
         const pa = invoiceCodeToSortParts(a.code);
         const pb = invoiceCodeToSortParts(b.code);
 
@@ -1435,7 +1447,7 @@ const InvoicesPage: React.FC = () => {
       canPay,
       canAdjust: isAdmin && inv.status === "APPROVED",
       adjustLocked: isAdmin && inv.status === "APPROVED" && inClosedPeriod(inv),
-      showSubmitBtn: (isStaff || canApprove) && inv.status === "DRAFT",
+      showSubmitBtn: canSubmitDraft(inv),
       showRecallBtn: isStaff && inv.status === "SUBMITTED",
       showApproveBtn: canApprove && inv.status === "SUBMITTED" && (isAdmin || String(inv.type) !== "SALES_RETURN"),
       showRejectBtn: canApprove && inv.status === "SUBMITTED" && (isAdmin || String(inv.type) !== "SALES_RETURN"),
@@ -1872,7 +1884,7 @@ const InvoicesPage: React.FC = () => {
 
                 {!loading &&
                   rowsShown.map((inv) => {
-                    const showSubmitBtn = (isStaff || canApprove) && inv.status === "DRAFT";
+                    const showSubmitBtn = canSubmitDraft(inv);
                     const showRecallBtn = isStaff && inv.status === "SUBMITTED";
 
                     const showApproveBtn = canApprove && inv.status === "SUBMITTED" && (isAdmin || String(inv.type) !== "SALES_RETURN");
