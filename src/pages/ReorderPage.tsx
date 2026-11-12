@@ -17,6 +17,7 @@ type Row = {
   qty: number;
   sold: number;
   soldDays: number;
+  stale?: boolean; // kỳ gần không bán được (đã hết hàng) — gợi ý dựa trên 90 / 120 ngày
   daysCover: number | null;
   suggestQty: number;
   severity: "CRITICAL" | "LOW";
@@ -42,6 +43,7 @@ const ReorderPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [kind, setKind] = useState<"" | "PART" | "MACHINE">("");
   const [onlyOut, setOnlyOut] = useState(false);
+  const [hideStale, setHideStale] = useState(false); // ẩn mã gần đây không bán (có thể đã ngừng kinh doanh)
   const [q, setQ] = useState("");
   const [edit, setEdit] = useState<Record<string, string>>({}); // "Nên nhập" người dùng sửa (chỉ để tính tiền trên trang)
   const [exporting, setExporting] = useState(false);
@@ -78,9 +80,9 @@ const ReorderPage: React.FC = () => {
   const shown = useMemo(() => {
     const t = plain(q.trim());
     return rows.filter(
-      (r) => (!kind || r.kind === kind) && (!onlyOut || r.severity === "CRITICAL") && (!t || plain(`${r.sku} ${r.name} ${r.lastSupplier}`).includes(t))
+      (r) => (!kind || r.kind === kind) && (!onlyOut || r.severity === "CRITICAL") && (!hideStale || !r.stale) && (!t || plain(`${r.sku} ${r.name} ${r.lastSupplier}`).includes(t))
     );
-  }, [rows, kind, onlyOut, q]);
+  }, [rows, kind, onlyOut, hideStale, q]);
 
   const sum = useMemo(
     () => ({
@@ -165,6 +167,10 @@ const ReorderPage: React.FC = () => {
           <input type="checkbox" checked={onlyOut} onChange={(e) => setOnlyOut(e.target.checked)} />
           Chỉ mã đã hết hàng
         </label>
+        <label className="ml-2 flex items-center gap-2 text-sm text-slate-700" title="Mã hết hàng, kỳ gần đây không có đơn bán; đang gợi ý dựa trên 90 ngày (linh kiện) / 120 ngày (máy)">
+          <input type="checkbox" checked={hideStale} onChange={(e) => setHideStale(e.target.checked)} />
+          Ẩn mã gần đây không bán
+        </label>
         <input
           aria-label="Tìm mã, tên, nhà cung cấp"
           value={q}
@@ -220,6 +226,7 @@ const ReorderPage: React.FC = () => {
                           {r.severity === "CRITICAL" ? "Hết hàng" : "Sắp hết"}
                         </span>
                         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">{r.kind === "MACHINE" ? "Máy" : "Linh kiện"}</span>
+                        {r.stale && <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700">Gần đây không bán</span>}
                       </div>
                       <div className="text-slate-700">{r.name}</div>
                       {r.note && <div className="mt-0.5 text-xs text-slate-500">{r.note}</div>}

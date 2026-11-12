@@ -6,9 +6,9 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      // ✅ 'prompt': có bản mới thì hiện thanh "Cập nhật" (src/components/UpdateBanner.tsx), không bắt Ctrl + Shift + R.
-      //    Không dùng autoUpdate tự tải lại: đang nhập dở hoá đơn sẽ mất.
-      registerType: 'prompt',
+      // ✅ autoUpdate: bản mới tự cài + nhận quyền ngay (chế độ 'prompt' cũ để bản mới nằm chờ -> trang kẹt giao diện cũ).
+      //    Trang KHÔNG tự tải lại: UpdateBanner hiện thanh "Đã có bản mới — Tải lại" (src/components/UpdateBanner.tsx).
+      registerType: 'autoUpdate',
       injectRegister: false, // đăng ký trong UpdateBanner
       includeAssets: ['logo-mcbrother.png'],
       manifest: {
@@ -42,7 +42,9 @@ export default defineConfig({
         ],
       },
       workbox: {
-        clientsClaim: true, // ✅ bản mới nhận quyền điều khiển trang ngay khi bấm Cập nhật -> trang tự tải lại
+        // ✅ bản mới cài xong là kích hoạt + nhận quyền điều khiển trang ngay (không nằm chờ)
+        skipWaiting: true,
+        clientsClaim: true,
         // ✅ cache app shell để mở lại lần sau nhanh hơn; KHÔNG cache API calls
         // (dữ liệu tồn kho/hóa đơn luôn phải lấy mới, không được cache)
         navigateFallbackDenylist: [/^\/api\//],
