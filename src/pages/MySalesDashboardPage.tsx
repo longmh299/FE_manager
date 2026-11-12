@@ -107,11 +107,42 @@ function money(v: any) {
 function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
+/** "dd/mm/yyyy" (BE đã định dạng sẵn) -> Date; new Date("12/11/2026") sẽ hiểu nhầm thành 11/12 */
+function parseVnDateStr(raw: any): Date | null {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(raw ?? "").trim());
+  return m ? new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])) : null;
+}
 function fmtDateVN(raw: any) {
   if (!raw) return "";
+  if (parseVnDateStr(raw)) return String(raw).trim();
   const d = new Date(raw);
   if (Number.isNaN(d.getTime())) return String(raw);
   return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
+/** ✅ Việt hoá trạng thái hoá đơn / thanh toán (BE trả mã tiếng Anh) */
+const VI_STATUS: Record<string, string> = {
+  PAID: "Đã thu đủ",
+  PARTIAL: "Thu một phần",
+  PARTIALLY_PAID: "Thu một phần",
+  UNPAID: "Chưa thu",
+  OVERPAID: "Thu dư",
+  APPROVED: "Đã duyệt",
+  SUBMITTED: "Chờ duyệt",
+  DRAFT: "Nháp",
+  REJECTED: "Bị trả lại",
+  CANCELLED: "Đã huỷ",
+  CANCELED: "Đã huỷ",
+  POSTED: "Đã ghi sổ",
+};
+const VI_PAY_TYPE: Record<string, string> = { RECEIPT: "Phiếu thu", PAYMENT: "Phiếu chi", REFUND: "Hoàn tiền", ADJUST: "Điều chỉnh" };
+const VI_METHOD: Record<string, string> = { CASH: "Tiền mặt", BANK: "Chuyển khoản", TRANSFER: "Chuyển khoản", CARD: "Thẻ", COD: "Thu hộ (COD)", OTHER: "Khác" };
+const viMap = (m: Record<string, string>, v: any) => {
+  const k = String(v ?? "").trim().toUpperCase();
+  return k ? m[k] || String(v) : "-";
+};
+function viStatus(v: any) {
+  const k = String(v ?? "").trim().toUpperCase();
+  return VI_STATUS[k] || String(v ?? "");
 }
 function safeStr(v: any) {
   return String(v ?? "");
@@ -158,7 +189,7 @@ function pickInvDate(d: any): any {
 }
 function parseTime(d: any): number {
   const raw = pickInvDate(d);
-  const t = new Date(raw).getTime();
+  const t = (parseVnDateStr(raw) ?? new Date(raw)).getTime();
   return Number.isFinite(t) ? t : 0;
 }
 
@@ -273,57 +304,186 @@ function Kpi({
   );
 }
 
-function DsSection({ rows, rate, closed }: { rows: DsInvoice[]; rate: number; closed?: boolean }) {
-  const [open, setOpen] = useState(false);
+/**
+ * ✅ DANH SÁCH TÍNH DOANH SỐ THÁNG NÀY (khớp đúng con số ở ô Doanh số)
+ *  Doanh số tính khi khách TRẢ ĐỦ TIỀN, nên gồm cả hoá đơn lập tháng trước mà tháng này mới trả đủ,
+ *  và trừ phiếu khách trả hàng. Danh sách "Hoá đơn lập trong tháng" bên dưới là theo ngày lập — khác danh sách này.
+ */
+type DsFilter = "ALL" | "THIS" | "PREV" | "RET";
+function DsSection({
+  rows,
+  rate,
+  closed,
+  month,
+  year,
+  onOpen,
+  embedded,
+}: {
+  rows: DsInvoice[];
+  rate: number;
+  closed?: boolean;
+  month?: number;
+  year?: number;
+  onOpen: (id: string) => void;
+  embedded?: boolean; // nằm trong khung chung với "Hoá đơn lập trong tháng"
+}) {
+  const [filter, setFilter] = useState<DsFilter>("ALL");
+  const [q, setQ] = useState("");
   const hasCom = rate > 0;
+  // "dd/mm/yyyy" -> HĐ lập trong tháng đang xem?
+  const inMonth = (d: string) => {
+    const [, mm, yy] = String(d || "").split("/").map(Number);
+    return !month || !year || (mm === month && yy === year);
+  };
+  const groups = useMemo(() => {
+    const sales = rows.filter((r) => r.type === "SALES");
+    const thisM = sales.filter((r) => inMonth(r.issueDate));
+    const prevM = sales.filter((r) => !inMonth(r.issueDate));
+    const rets = rows.filter((r) => r.type === "SALES_RETURN");
+    const sum = (a: DsInvoice[]) => a.reduce((t, r) => t + num(r.ds), 0);
+    return { thisM, prevM, rets, sThis: sum(thisM), sPrev: sum(prevM), sRet: sum(rets) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, month, year]);
+
+  const shown = useMemo(() => {
+    const base = filter === "THIS" ? groups.thisM : filter === "PREV" ? groups.prevM : filter === "RET" ? groups.rets : rows;
+    const t = q.trim().toLowerCase();
+    return t ? base.filter((r) => `${r.invoiceCode} ${r.customerName}`.toLowerCase().includes(t)) : base;
+  }, [filter, q, rows, groups]);
+  const tot = shown.reduce((a, r) => ({ ds: a.ds + num(r.ds), com: a.com + num(r.commission) }), { ds: 0, com: 0 });
+
+  const chip = (k: DsFilter, label: string, count: number, amount?: number) => (
+    <button
+      type="button"
+      onClick={() => setFilter(k)}
+      className={`rounded-lg border px-3 py-2 text-left text-sm ${filter === k ? "border-blue-600 bg-blue-600 text-white" : "bg-white hover:bg-gray-50"}`}
+    >
+      <div className="font-medium">
+        {label} <span className={filter === k ? "text-blue-100" : "text-gray-500"}>({count})</span>
+      </div>
+      {amount !== undefined && <div className={`text-xs tabular-nums ${filter === k ? "text-blue-100" : "text-gray-500"}`}>{money(amount)}</div>}
+    </button>
+  );
+
   return (
-    <div className="bg-white rounded-xl shadow-sm border p-3 sm:p-4">
-      <div className="flex items-start justify-between gap-3">
+    <div className={embedded ? "" : "bg-white rounded-xl shadow-sm border p-3 sm:p-4"}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="font-medium">Hoá đơn tính doanh số tháng này</h2>
+          {!embedded && (
+            <h2 className="font-medium">
+              Hoá đơn tính doanh số tháng {month ? `${month}/${year}` : "này"}
+            </h2>
+          )}
+          {closed ? <span className="mb-1 inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">Kế toán đã chốt</span> : null}
           <div className="text-xs text-gray-500">
-            Tính vào ngày khách trả đủ tiền (khớp số kế toán chốt) • {rows.length} dòng
-            {closed ? <span className="ml-1 rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-800">Kế toán đã chốt</span> : null}
+            Doanh số tính vào <b>ngày khách trả đủ tiền</b>: gồm cả hoá đơn tháng trước mà tháng này mới trả đủ. Cộng các dòng dưới đây đúng bằng ô Doanh số.
           </div>
         </div>
-        {rows.length > 0 && (
-          <button type="button" onClick={() => setOpen((v) => !v)} className="px-3 py-1.5 rounded-lg border text-sm hover:bg-gray-50">
-            {open ? "Ẩn chi tiết" : "Xem chi tiết"}
-          </button>
-        )}
+        <input
+          className="border rounded-lg px-3 py-2 text-sm w-full sm:w-64 bg-white"
+          placeholder="Tìm mã hoá đơn / khách hàng"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          disabled={!rows.length}
+        />
       </div>
-      {open && rows.length > 0 && (
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead className="bg-gray-50 text-left text-gray-600">
-              <tr>
-                <th className="px-3 py-2 font-medium">Số HĐ</th>
-                <th className="px-3 py-2 font-medium">Ngày HĐ</th>
-                <th className="px-3 py-2 font-medium">Ngày đủ tiền</th>
-                <th className="px-3 py-2 font-medium">Khách hàng</th>
-                <th className="px-3 py-2 font-medium text-right">Doanh số</th>
-                {hasCom && <th className="px-3 py-2 font-medium text-right">Hoa hồng</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={`${r.type}-${r.invoiceId}`} className="border-t">
-                  <td className="px-3 py-2 font-medium">
-                    {r.invoiceCode}
-                    {r.type === "SALES_RETURN" && (
-                      <span className="ml-1 rounded-full bg-rose-100 px-1.5 py-0.5 text-[11px] font-medium text-rose-700">Khách trả</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2">{r.issueDate}</td>
-                  <td className="px-3 py-2">{r.dsDate}</td>
-                  <td className="px-3 py-2">{r.customerName}</td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${r.ds < 0 ? "text-rose-600" : ""}`}>{money(r.ds)}</td>
-                  {hasCom && <td className={`px-3 py-2 text-right tabular-nums ${r.commission < 0 ? "text-rose-600" : ""}`}>{money(r.commission)}</td>}
+
+      <div className={`mt-3 grid grid-cols-2 gap-2 ${embedded ? "2xl:grid-cols-4" : "lg:grid-cols-4"}`}>
+        {chip("ALL", "Tất cả", rows.length, groups.sThis + groups.sPrev + groups.sRet)}
+        {chip("THIS", "HĐ lập tháng này", groups.thisM.length, groups.sThis)}
+        {chip("PREV", "HĐ tháng trước, nay trả đủ", groups.prevM.length, groups.sPrev)}
+        {chip("RET", "Khách trả hàng", groups.rets.length, groups.sRet)}
+      </div>
+
+      {!rows.length ? (
+        <div className="mt-3 rounded-lg border bg-gray-50 py-8 text-center text-sm text-gray-400">Tháng này chưa có hoá đơn nào trả đủ tiền</div>
+      ) : !shown.length ? (
+        <div className="mt-3 rounded-lg border bg-gray-50 py-8 text-center text-sm text-gray-400">Không có kết quả phù hợp</div>
+      ) : (
+        <>
+          {/* điện thoại: dạng thẻ */}
+          <div className="mt-3 space-y-2 sm:hidden">
+            {shown.map((r) => (
+              <button
+                type="button"
+                key={`${r.type}-${r.invoiceId}`}
+                onClick={() => r.type === "SALES" && onOpen(r.invoiceId)}
+                className="w-full rounded-xl border p-3 text-left hover:bg-gray-50"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1 font-semibold">
+                      {r.invoiceCode}
+                      {r.type === "SALES_RETURN" ? (
+                        <span className="rounded-full bg-rose-100 px-1.5 py-0.5 text-[11px] font-medium text-rose-700">Khách trả</span>
+                      ) : !inMonth(r.issueDate) ? (
+                        <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">HĐ tháng trước</span>
+                      ) : null}
+                    </div>
+                    <div className="truncate text-sm text-gray-700">{r.customerName}</div>
+                    <div className="text-xs text-gray-500">
+                      Lập {r.issueDate} • đủ tiền {r.dsDate}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className={`font-semibold tabular-nums ${r.ds < 0 ? "text-rose-600" : ""}`}>{money(r.ds)}</div>
+                    {hasCom && <div className={`text-xs tabular-nums ${r.commission < 0 ? "text-rose-600" : "text-gray-500"}`}>HH {money(r.commission)}</div>}
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {/* máy tính: dạng bảng */}
+          <div className="mt-3 hidden overflow-x-auto sm:block">
+            <table className="w-full min-w-[620px] text-sm">
+              <thead className="bg-gray-50 text-left text-gray-600">
+                <tr>
+                  <th className="px-2 py-2 font-medium">Số HĐ</th>
+                  <th className="px-2 py-2 font-medium">Ngày lập</th>
+                  <th className="whitespace-nowrap px-2 py-2 font-medium">Ngày đủ tiền</th>
+                  <th className="px-2 py-2 font-medium">Khách hàng</th>
+                  <th className="px-2 py-2 font-medium text-right">Doanh số</th>
+                  {hasCom && <th className="px-2 py-2 font-medium text-right">Hoa hồng</th>}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {shown.map((r) => (
+                  <tr
+                    key={`${r.type}-${r.invoiceId}`}
+                    className={`border-t ${r.type === "SALES" ? "cursor-pointer hover:bg-gray-50" : ""}`}
+                    onClick={() => r.type === "SALES" && onOpen(r.invoiceId)}
+                  >
+                    <td className="whitespace-nowrap px-2 py-2 font-medium">
+                      {r.invoiceCode}
+                      {r.type === "SALES_RETURN" ? (
+                        <span className="mt-0.5 block w-fit rounded-full bg-rose-100 px-1.5 py-0.5 text-[11px] font-medium text-rose-700">Khách trả</span>
+                      ) : !inMonth(r.issueDate) ? (
+                        <span className="mt-0.5 block w-fit rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">HĐ tháng trước</span>
+                      ) : null}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-2">{r.issueDate}</td>
+                    <td className="whitespace-nowrap px-2 py-2">{r.dsDate}</td>
+                    <td className="px-2 py-2">{r.customerName}</td>
+                    <td className={`whitespace-nowrap px-2 py-2 text-right tabular-nums ${r.ds < 0 ? "text-rose-600" : ""}`}>{money(r.ds)}</td>
+                    {hasCom && <td className={`whitespace-nowrap px-2 py-2 text-right tabular-nums ${r.commission < 0 ? "text-rose-600" : ""}`}>{money(r.commission)}</td>}
+                  </tr>
+                ))}
+                <tr className="border-t bg-gray-50 font-semibold">
+                  <td className="px-2 py-2" colSpan={4}>
+                    Cộng {shown.length} dòng
+                  </td>
+                  <td className={`whitespace-nowrap px-2 py-2 text-right tabular-nums ${tot.ds < 0 ? "text-rose-600" : ""}`}>{money(tot.ds)}</td>
+                  {hasCom && <td className="px-2 py-2 text-right tabular-nums">{money(tot.com)}</td>}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-2 text-right text-sm font-semibold sm:hidden">
+            Cộng {shown.length} dòng: {money(tot.ds)}
+            {hasCom ? ` • HH ${money(tot.com)}` : ""}
+          </div>
+        </>
       )}
     </div>
   );
@@ -418,6 +578,7 @@ const MySalesDashboardPage: React.FC = () => {
   // ✅ month/year filter (match BE)
   const now = useMemo(() => new Date(), []);
   const [month, setMonth] = useState<number>(now.getMonth() + 1);
+  const [listView, setListView] = useState<"DS" | "ISSUED">("DS"); // khung hoá đơn: tính doanh số | lập trong tháng
   const [year, setYear] = useState<number>(now.getFullYear());
 
   // history tabs + search
@@ -604,7 +765,7 @@ const MySalesDashboardPage: React.FC = () => {
         <div className="flex items-start sm:items-center justify-between gap-4 flex-col sm:flex-row">
           <div className="min-w-0">
             <h1 className="text-xl sm:text-2xl font-semibold">Doanh thu của tôi</h1>
-            <p className="text-sm text-gray-500">Nhân viên SALE</p>
+            <p className="text-sm text-gray-500">Nhân viên kinh doanh</p>
             <p className="text-xs text-gray-500 mt-1">Khoảng thời gian: {periodLabel}</p>
           </div>
 
@@ -698,22 +859,54 @@ const MySalesDashboardPage: React.FC = () => {
         <Kpi title="Nợ cần thu" value={money(kpiNeedCollect)} highlight={kpiNeedCollect > 0} />
       </div>
 
-      {/* ✅ hoá đơn tính doanh số (theo ngày trả đủ tiền) */}
-      <DsSection rows={view.dsInvoices} rate={saleRate} closed={!!view.summary.saleClosed} />
-
       {/* ✅ Kỹ thuật */}
       {dash?.tech ? <TechSection tech={dash.tech} /> : null}
 
       {/* Content */}
       <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 items-stretch">
-        {/* History */}
+        {/* ✅ 1 khung hoá đơn, 2 cách xem: tính doanh số (mặc định) | lập trong tháng */}
         <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border p-3 sm:p-4 flex flex-col min-h-0">
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="font-medium">Hoá đơn tháng {view.period?.month ?? month}/{view.period?.year ?? year}</h2>
+            <div className="inline-flex w-full overflow-hidden rounded-lg border bg-white sm:w-auto" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={listView === "DS"}
+                onClick={() => setListView("DS")}
+                className={`flex-1 px-3 py-2 text-sm ${listView === "DS" ? "bg-blue-600 text-white" : "hover:bg-gray-50"}`}
+              >
+                Tính doanh số ({view.dsInvoices.length})
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={listView === "ISSUED"}
+                onClick={() => setListView("ISSUED")}
+                className={`flex-1 px-3 py-2 text-sm ${listView === "ISSUED" ? "bg-blue-600 text-white" : "hover:bg-gray-50"}`}
+              >
+                Lập trong tháng ({historyAll.length})
+              </button>
+            </div>
+          </div>
+
+          {listView === "DS" ? (
+            <DsSection
+              embedded
+              rows={view.dsInvoices}
+              rate={saleRate}
+              closed={!!view.summary.saleClosed}
+              month={view.period?.month ?? month}
+              year={view.period?.year ?? year}
+              onOpen={(id) => openInvoice(id)}
+            />
+          ) : (
+          <>
           <div className="flex flex-col gap-3 mb-3">
             <div className="flex items-start sm:items-center justify-between gap-3 flex-col sm:flex-row">
               <div className="min-w-0">
-                <h2 className="font-medium">Lịch sử hoá đơn bán</h2>
                 <div className="text-xs text-gray-500">
-                  Theo ngày phát hành hoá đơn • {historyFiltered.length} dòng
+                  Theo ngày lập hoá đơn, để theo dõi thu tiền • {historyFiltered.length} dòng. Hoá đơn chưa trả đủ chưa tính doanh số.
                 </div>
               </div>
 
@@ -796,7 +989,7 @@ const MySalesDashboardPage: React.FC = () => {
                           <div className="text-sm text-gray-700 truncate">{customer}</div>
                           {(r?.paymentStatus || r?.status) && (
                             <div className="text-xs text-gray-500 mt-0.5">
-                              {safeStr(r?.paymentStatus || r?.status || "")}
+                              {viStatus(r?.paymentStatus || r?.status || "")}
                             </div>
                           )}
                         </div>
@@ -876,7 +1069,7 @@ const MySalesDashboardPage: React.FC = () => {
                             <div className="font-medium">{code || "(Chưa có mã)"}</div>
                             {(r?.paymentStatus || r?.status) && (
                               <div className="text-xs text-gray-500">
-                                {safeStr(r?.paymentStatus || r?.status || "")}
+                                {viStatus(r?.paymentStatus || r?.status || "")}
                               </div>
                             )}
                           </td>
@@ -918,6 +1111,8 @@ const MySalesDashboardPage: React.FC = () => {
               </div>
             )}
           </div>
+          </>
+          )}
         </div>
 
         {/* Quick debt */}
@@ -1099,7 +1294,7 @@ function InvoiceDetailView({ inv }: { inv: any }) {
         <div>
           <div className="text-sm text-gray-500">Ngày: {fmtDateVN(issueDate)}</div>
           <div className="text-xs text-gray-400">
-            Trạng thái: {safeStr(inv.status || "")} • Thanh toán: {safeStr(inv.paymentStatus || "")}
+            Trạng thái: {viStatus(inv.status || "")} • Thanh toán: {viStatus(inv.paymentStatus || "")}
           </div>
         </div>
 
@@ -1226,9 +1421,9 @@ function InvoiceDetailView({ inv }: { inv: any }) {
                 {paymentRows.map((p: any) => (
                   <tr key={p.paymentId} className="border-b last:border-0">
                     <td className="py-2 px-2">{fmtDateVN(p.date)}</td>
-                    <td className="px-2">{p.type || "-"}</td>
+                    <td className="px-2">{viMap(VI_PAY_TYPE, p.type)}</td>
                     <td className="px-2">{p.account || "-"}</td>
-                    <td className="px-2">{p.method || "-"}</td>
+                    <td className="px-2">{viMap(VI_METHOD, p.method)}</td>
                     <td className="px-2">{p.refNo || "-"}</td>
                     <td className="text-right px-2 font-semibold">{money(p.amount)}</td>
                     <td className="text-right px-2">{money(p.normal)}</td>

@@ -228,7 +228,7 @@ const PaymentAccountsPage: React.FC = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
-            <label className="block text-sm font-medium mb-1">Code</label>
+            <label className="block text-sm font-medium mb-1">Mã</label>
             <input
               value={form.code}
               onChange={(e) => setForm((p) => ({ ...p, code: e.target.value }))}
@@ -331,13 +331,13 @@ const PaymentAccountsPage: React.FC = () => {
         <table className="min-w-full text-xs sm:text-sm">
           <thead className="bg-slate-100 sticky top-0 z-10">
             <tr className="text-slate-700">
-              <th className="border px-2 py-2 text-left">Code</th>
+              <th className="border px-2 py-2 text-left">Mã</th>
               <th className="border px-2 py-2 text-left">Tên</th>
               <th className="border px-2 py-2 text-left">Loại</th>
               <th className="border px-2 py-2 text-left">Ngân hàng</th>
               <th className="border px-2 py-2 text-left">Số TK</th>
               <th className="border px-2 py-2 text-left">Chủ TK</th>
-              <th className="border px-2 py-2 text-center">Active</th>
+              <th className="border px-2 py-2 text-center">Đang dùng</th>
               <th className="border px-2 py-2 text-left">Ghi chú</th>
               <th className="border px-2 py-2 text-center">Thao tác</th>
             </tr>
@@ -347,7 +347,7 @@ const PaymentAccountsPage: React.FC = () => {
               <tr key={r.id} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50"}>
                 <td className="border px-2 py-2">{r.code}</td>
                 <td className="border px-2 py-2">{r.name}</td>
-                <td className="border px-2 py-2">{r.type}</td>
+                <td className="border px-2 py-2">{r.type === "CASH" ? "Tiền mặt" : r.type === "BANK" ? "Ngân hàng" : r.type}</td>
                 <td className="border px-2 py-2">{r.bankName || ""}</td>
                 <td className="border px-2 py-2">{r.accountNo || ""}</td>
                 <td className="border px-2 py-2">{r.holder || ""}</td>
