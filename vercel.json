@@ -2,6 +2,10 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
     {
+      "source": "/bg/:code",
+      "destination": "https://be-manager-lyck.onrender.com/api/public/quote/:code"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

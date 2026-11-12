@@ -339,7 +339,10 @@ const QuoteDocumentsPage: React.FC = () => {
     setShare(null);
     try {
       const r = await api.post(`/quote-documents/${doc.id}/share`);
-      const url = `${API_BASE_URL.replace(/\/$/, "")}/public/quote/${encodeURIComponent(r.data?.token)}`;
+      // ✅ link ngắn trên tên miền web: <web>/bg/<mã 8 ký tự> (Vercel chuyển tiếp sang BE — xem vercel.json).
+      //    Chạy thử trên máy (npm run dev) không có chuyển tiếp -> dùng thẳng địa chỉ BE.
+      const code = encodeURIComponent(r.data?.code || r.data?.token || "");
+      const url = import.meta.env.DEV ? `${API_BASE_URL.replace(/\/$/, "")}/public/quote/${code}` : `${window.location.origin}/bg/${code}`;
       const days = Number(r.data?.expiresInDays) || 30;
       // máy có gửi được loại file này không? (thử bằng file rỗng cùng tên / kiểu, khỏi tải file thật cho máy không gửi được)
       const nav = navigator as Navigator & { canShare?: (d: ShareData) => boolean };
