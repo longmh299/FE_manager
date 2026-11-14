@@ -145,11 +145,35 @@ const Layout: React.FC = () => {
         .catch(() => {});
     pull();
     window.addEventListener("invoice:changed", pull); // gửi duyệt / duyệt / từ chối xong -> cập nhật số ngay
-    const t = window.setInterval(pull, 60_000); // nhân viên khác vừa gửi duyệt
+
+    // ✅ chỉ hỏi định kỳ (60s) khi tab đang mở trước mặt. Tab ẩn / thu nhỏ / khoá màn hình thì ngừng,
+    //    để database (Neon) được ngủ, không đốt giờ chạy qua đêm. Quay lại tab là hỏi ngay 1 lần.
+    let t: number | undefined;
+    const startPolling = () => {
+      if (t !== undefined) return;
+      t = window.setInterval(pull, 60_000); // nhân viên khác vừa gửi duyệt
+    };
+    const stopPolling = () => {
+      if (t === undefined) return;
+      window.clearInterval(t);
+      t = undefined;
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        pull();
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+    if (document.visibilityState === "visible") startPolling();
+    document.addEventListener("visibilitychange", onVisibility);
+
     return () => {
       alive = false;
       window.removeEventListener("invoice:changed", pull);
-      window.clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisibility);
+      stopPolling();
     };
   }, [isAdmin, isAccountant, location.pathname]);
 
@@ -251,6 +275,7 @@ const Layout: React.FC = () => {
         links: [
           ...(isAdmin ? [{ to: "/users", label: "Nhân viên & phân quyền" }] : []),
           ...(isAdmin ? [{ to: "/period-close", label: "Chốt sổ kế toán", hint: "Khoá kỳ đã đối soát, không ai sửa được nữa" }] : []),
+          ...(isAdmin ? [{ to: "/system", label: "Sao lưu & hệ thống", hint: "Tình trạng web, bản sao lưu, mail dự phòng" }] : []),
           ...(canSeeAuditLogs ? [{ to: "/audit-logs", label: "Lịch sử thao tác" }] : []),
           { to: "/change-password", label: isAdmin ? "Cài đặt hệ thống" : "Đổi mật khẩu", ...(isAdmin ? { hint: "Mật khẩu, mật khẩu cấp 2, tỉ lệ hoa hồng" } : {}) },
         ],

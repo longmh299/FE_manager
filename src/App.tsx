@@ -36,6 +36,7 @@ import LedgerPage from "./pages/LedgerPage";
 import SalesLedgerReportPage from "./pages/SalesLedgerReportPage";
 import TechCommissionPage from "./pages/TechCommissionPage"; // ✅ hoa hồng kỹ thuật (kế toán)
 import ReorderPage from "./pages/ReorderPage"; // ✅ gợi ý nhập hàng
+import SystemBackupPage from "./pages/SystemBackupPage"; // ✅ sao lưu & hệ thống (admin)
 import PaymentAccountsPage from "./pages/PaymentAccountsPage";
 import MySalesDashboardPage from "./pages/MySalesDashboardPage";
 import MyDebtsPage from "./pages/MyDebtsPage";
@@ -86,6 +87,14 @@ const App: React.FC = () => {
           <Route path="items" element={<ItemsPage />} />
           <Route path="items-master" element={<ItemsMasterPage />} />
           <Route path="partners" element={<CustomersPage />} />
+          <Route
+            path="system"
+            element={
+              <RequireRole roles={["admin"]}>
+                <SystemBackupPage />
+              </RequireRole>
+            }
+          />
           <Route
             path="partners/merge"
             element={
