@@ -340,6 +340,7 @@ type ApiInvoiceLine = {
   qty: any;
   price: any;
   amount: any;
+  noVat?: boolean;
   item?: { name: string; sku?: string | null; unit?: string | null } | null;
 };
 
@@ -356,6 +357,7 @@ type ApiInvoice = {
   partnerTax?: string | null;
   subtotal?: any;
   tax?: any;
+  taxPercent?: string | number | null;
   total?: any;
   shipFee?: any;
   shipTax?: any;
@@ -371,6 +373,7 @@ type Line = {
   qty: number;
   price: number;
   amount: number;
+  noVat?: boolean; // ✅ dòng không chịu VAT
 };
 
 // ================= styles =================
@@ -618,6 +621,7 @@ const InvoicePrintPage: React.FC = () => {
         qty,
         price,
         amount,
+        noVat: l.noVat === true,
       };
     });
   }, [invoice, unitByItemId]);
@@ -673,9 +677,18 @@ const InvoicePrintPage: React.FC = () => {
   const shipTax = toNum(invoice.shipTax);
   const laborFee = toNum(invoice.laborFee);
 
-  const hasTax = tax > 0.0001;
-  const taxPercent = subtotal > 0 ? (tax / subtotal) * 100 : 0;
-  const taxPercentStr = hasTax ? taxPercent.toFixed(0) : "";
+  // ✅ có dòng "Không VAT": thuế chỉ tính trên phần còn lại, % lấy theo thuế suất lưu trên hoá đơn
+  const hasTax = tax + shipTax > 0.0001;
+  const noVatCount = lines.filter((l) => l.noVat).length;
+  const taxableSubtotal = lines.reduce((s, l) => s + (l.noVat ? 0 : l.amount), 0);
+  const storedPct = invoice.taxPercent;
+  const taxPercent =
+    storedPct != null && storedPct !== ""
+      ? toNum(storedPct)
+      : taxableSubtotal > 0
+        ? (tax / taxableSubtotal) * 100
+        : 0;
+  const taxPercentStr = hasTax ? String(Math.round(taxPercent * 100) / 100).replace(".", ",") : "";
   const totalText = numberToVietnamese(total);
 
   const customerName = partner?.name ?? invoice.partnerName ?? "";
@@ -851,7 +864,10 @@ const InvoicePrintPage: React.FC = () => {
               <tr key={l.id}>
                 <td style={{ ...tdStyle, ...styles.tdCenter }}>{idx + 1}</td>
                 <td style={{ ...tdStyle, ...styles.tdCenter }}>{l.code || "-"}</td>
-                <td style={tdStyle}>{l.name}</td>
+                <td style={tdStyle}>
+                  {l.name}
+                  {l.noVat && noVatCount > 0 && hasTax ? <i style={{ fontSize: "0.9em" }}> (không VAT)</i> : null}
+                </td>
                 <td style={{ ...tdStyle, ...styles.tdCenter }}>{l.unit}</td>
                 <td style={{ ...tdStyle, ...styles.tdCenter }}>{l.qty}</td>
                 <td style={{ ...tdStyle, ...styles.tdRight }}>{formatMoney(l.price)}</td>
@@ -882,7 +898,7 @@ const InvoicePrintPage: React.FC = () => {
             {hasTax && (
               <tr>
                 <td colSpan={6} style={moneyRowLabelStyle}>
-                  Thuế GTGT ({taxPercentStr}%)
+                  Thuế GTGT ({taxPercentStr}%){noVatCount > 0 ? ", không tính hàng ghi (không VAT)" : ""}
                 </td>
                 <td colSpan={1} style={moneyRowValueStyle}>
                   {formatMoney(tax + shipTax)} đ
