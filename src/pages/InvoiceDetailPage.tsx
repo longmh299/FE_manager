@@ -50,6 +50,7 @@ type InvoiceLine = {
   price: number;
   backorderNote?: string; // ghi chú xuất âm linh kiện
   backorderCost?: number; // giá vốn tạm khi chưa từng nhập
+  noVat?: boolean; // ✅ dòng không chịu VAT (hoá đơn vẫn 1 thuế suất chung)
   _imp?: ImpMeta; // ✅ MỚI: dòng đến từ "Nhập từ file" (chỉ dùng trên giao diện, payload KHÔNG gửi trường này)
 };
 
@@ -631,6 +632,7 @@ const INV_CSS = `
   .inv-ui .inv-inline { flex-direction: column !important; gap: 0 !important; }
   .inv-ui .inv-line-grid { grid-template-columns: 72px minmax(0,1fr) 32px; row-gap: 6px; }
   .inv-ui .inv-col-prod { grid-column: 1 / -1; }
+  .inv-ui .inv-novat { padding-right: 0 !important; }
   .inv-ui .inv-line-head, .inv-ui .inv-col-stt, .inv-ui .inv-col-total { display: none !important; }
   .inv-ui .inv-sum-row { flex-wrap: wrap !important; row-gap: 6px; }
   .inv-ui .inv-sum-label { width: 120px !important; }
@@ -1403,12 +1405,16 @@ const QuickCreateItemModal: React.FC<{
 function calcTotal(lines: InvoiceLine[]) {
   return lines.reduce((s, l) => s + l.qty * l.price, 0);
 }
+/** ✅ tiền hàng chịu thuế: bỏ các dòng tick "Không VAT" */
+function calcTaxableSubtotal(lines: InvoiceLine[]) {
+  return lines.reduce((s, l) => s + (l.noVat ? 0 : l.qty * l.price), 0);
+}
 function recalcTotals(lines: InvoiceLine[], taxPercent?: number, shipFee = 0, laborFee = 0) {
   const subtotal = calcTotal(lines);
   let tax = 0;
   let shipTax = 0;
   if (taxPercent && taxPercent > 0) {
-    tax = Math.round((subtotal * taxPercent) / 100);
+    tax = Math.round((calcTaxableSubtotal(lines) * taxPercent) / 100);
     shipTax = Math.round((shipFee * taxPercent) / 100);
   }
   const totalAmount = subtotal + tax + shipFee + shipTax + laborFee;
@@ -2106,14 +2112,18 @@ const InvoiceDetailPage: React.FC = () => {
           price: Number(l.unitPrice ?? l.price ?? 0),
           backorderNote: l.backorderNote ?? "",
           backorderCost: l.backorderCost != null ? Number(l.backorderCost) : 0,
+          noVat: l.noVat === true,
         })) ?? [];
 
       const subtotalFromApi = x.subtotal != null ? Number(x.subtotal) : calcTotal(lines);
       const taxFromApi = x.tax != null ? Number(x.tax) : 0;
       const totalFromApi = x.total != null ? Number(x.total) : subtotalFromApi + taxFromApi;
 
+      // ✅ thuế suất lưu trên hoá đơn; hoá đơn cũ chưa có thì suy theo phần tiền hàng chịu thuế
       let taxPercent = 0;
-      if (subtotalFromApi > 0 && taxFromApi > 0) taxPercent = +((taxFromApi * 100) / subtotalFromApi).toFixed(2);
+      const taxableFromLines = calcTaxableSubtotal(lines);
+      if (x.taxPercent != null && x.taxPercent !== "") taxPercent = Number(x.taxPercent) || 0;
+      else if (taxableFromLines > 0 && taxFromApi > 0) taxPercent = +((taxFromApi * 100) / taxableFromLines).toFixed(2);
 
       const rawDate = x.date ?? x.issueDate ?? x.createdAt ?? "";
       const normalizedDate = normalizeDateForInput(rawDate);
@@ -2581,6 +2591,7 @@ const InvoiceDetailPage: React.FC = () => {
         itemName: l.itemName,
         backorderNote: (l.backorderNote || "").trim() || null,
         backorderCost: Number(l.backorderCost || 0) > 0 ? Number(l.backorderCost) : null,
+        noVat: l.noVat === true,
       })),
     };
 
@@ -3046,6 +3057,7 @@ const InvoiceDetailPage: React.FC = () => {
   const paidWarranty = Math.max(0, paidTotal - paidNormal);
 
   const vatAmount = Math.max(0, toNum(invoice.tax));
+  const noVatLineCount = invoice.lines.filter((l) => l.noVat).length;
   const returnedTotal =
     invoice.type === "SALES" && invoice.returnMeta ? Math.max(0, toNum(invoice.returnMeta.returnedTotal)) : 0;
 
@@ -3062,7 +3074,14 @@ const InvoiceDetailPage: React.FC = () => {
   // ô Thuế VAT (%) — dùng chung cho hoá đơn bán và hoá đơn nhập
   const vatRow = (
     <div className="inv-sum-row" style={styles.summaryRow}>
-      <span className="inv-sum-label" style={styles.summaryLabel}>Thuế VAT</span>
+      <span className="inv-sum-label" style={styles.summaryLabel}>
+        Thuế VAT
+        {noVatLineCount > 0 && Number(invoice.taxPercent || 0) > 0 && (
+          <span style={{ display: "block", fontSize: 11.5, fontWeight: 500, color: "#b45309" }}>
+            Không tính {noVatLineCount} dòng
+          </span>
+        )}
+      </span>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
       <div
@@ -3762,6 +3781,8 @@ const InvoiceDetailPage: React.FC = () => {
               )}
 
               {invoice.lines.map((line, idx) => {
+                // ✅ ô "Không VAT" chỉ hiện khi hoá đơn có thuế (hoặc dòng đã tick sẵn)
+                const showNoVat = Number(invoice.taxPercent || 0) > 0 || !!line.noVat;
                 // ✅ FIX: search cũ dùng .toLowerCase().includes() nên gõ không dấu
                 // (vd "may ep") sẽ KHÔNG khớp được với tên có dấu ("Máy ép") — đây
                 // chính là lý do trước giờ phải đổi tên/mã sản phẩm mới tìm ra được.
@@ -4109,6 +4130,32 @@ const InvoiceDetailPage: React.FC = () => {
                       </button>
                     </div>
                   </div>
+                  {showNoVat && (
+                    <label
+                      className="inv-novat"
+                      title="Dòng này vẫn cộng vào tiền hàng nhưng không tính thuế VAT"
+                      style={{
+                        display: "flex",
+                        justifyContent: "flex-end",
+                        alignItems: "center",
+                        gap: 6,
+                        fontSize: 12.5,
+                        fontWeight: line.noVat ? 600 : 500,
+                        color: line.noVat ? "#b45309" : C.muted,
+                        padding: "0 46px 6px 0",
+                        cursor: locked ? "default" : "pointer",
+                        userSelect: "none",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!!line.noVat}
+                        disabled={locked}
+                        onChange={(e) => handleLineChange(idx, "noVat", e.target.checked)}
+                      />
+                      Không VAT
+                    </label>
+                  )}
                   {showBackorder && (
                     <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: 10, margin: "4px 0 10px", display: "grid", gap: 6 }}>
                       {status === "DRAFT" && shortQty > 0 && (

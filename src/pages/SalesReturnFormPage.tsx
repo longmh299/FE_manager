@@ -51,6 +51,7 @@ type RefInvoiceDetail = {
     qty: any;
     price: any;
     amount?: any;
+    noVat?: boolean;
   }>;
 };
 
@@ -267,10 +268,26 @@ export default function SalesReturnFormPage() {
     [lines]
   );
 
+  // ✅ hàng tick "Không VAT" trên hoá đơn gốc: trả lại cũng không tính VAT (giống BE)
+  const noVatItemIds = useMemo(() => {
+    const ls = refDetail?.lines || [];
+    const taxable = new Set(ls.filter((l) => !l.noVat).map((l) => String(l.itemId)));
+    return new Set(ls.map((l) => String(l.itemId)).filter((x) => !taxable.has(x)));
+  }, [refDetail]);
+
+  const taxableSubtotal = useMemo(
+    () =>
+      lines.reduce(
+        (s, l) => s + (noVatItemIds.has(String(l.itemId)) ? 0 : Number(l.qty || 0) * Number(l.price || 0)),
+        0
+      ),
+    [lines, noVatItemIds]
+  );
+
   const taxAmount = useMemo(() => {
     const pct = clampPct(taxPercent);
-    return roundMoney((toNum(subtotal) * pct) / 100);
-  }, [subtotal, taxPercent]);
+    return roundMoney((toNum(taxableSubtotal) * pct) / 100);
+  }, [taxableSubtotal, taxPercent]);
 
   const grossTotal = useMemo(() => roundMoney(toNum(subtotal) + toNum(taxAmount)), [subtotal, taxAmount]);
 
@@ -296,11 +313,11 @@ export default function SalesReturnFormPage() {
 
   const refTaxPctDerived = useMemo(() => {
     if (refDetail?.taxPercent != null) return clampPct(refDetail.taxPercent);
-    const sub = toNum(refSubtotal);
+    const sub = (refDetail?.lines || []).reduce((s, l) => s + (l.noVat ? 0 : toNum(l.qty) * toNum(l.price)), 0);
     const tx = toNum(refTax);
     if (sub <= 0 || tx <= 0) return 0;
     return clampPct(roundMoney((tx / sub) * 100));
-  }, [refDetail, refSubtotal, refTax]);
+  }, [refDetail, refTax]);
 
   useEffect(() => {
     (async () => {
@@ -435,6 +452,7 @@ export default function SalesReturnFormPage() {
               qty: l.qty,
               price: l.price,
               amount: l.amount,
+              noVat: l.noVat === true,
             }))
           : [],
       };
@@ -681,7 +699,7 @@ export default function SalesReturnFormPage() {
     }
 
     const pct = clampPct(taxPercent);
-    const computedTax = roundMoney((toNum(subtotal) * pct) / 100);
+    const computedTax = roundMoney((toNum(taxableSubtotal) * pct) / 100);
 
     const body: any = {
       type: "SALES_RETURN",
@@ -1206,6 +1224,9 @@ export default function SalesReturnFormPage() {
           </div>
           <div>
             <b>VAT ({clampPct(taxPercent)}%):</b> {formatMoney(taxAmount)}
+            {taxableSubtotal < subtotal - 0.5 && (
+              <span style={{ fontSize: 13, color: "#b45309" }}> (không tính hàng không VAT)</span>
+            )}
           </div>
           <div>
             <b>Tổng trả (Gross):</b> {formatMoney(grossTotal)}
