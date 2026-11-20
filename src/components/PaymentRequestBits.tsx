@@ -11,6 +11,8 @@ export type PRStatus = "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
 export type PRAccount = { id: string; code: string; name: string; type?: string; bankName?: string | null; accountNo?: string | null };
 
 export type PaymentRequestRow = {
+  isDeposit?: boolean; // ✅ yêu cầu thu cọc (chưa có hoá đơn)
+  partner?: { id: string; name: string; phone?: string | null } | null;
   id: string;
   status: PRStatus;
   amount: number;

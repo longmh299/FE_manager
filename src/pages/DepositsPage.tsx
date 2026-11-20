@@ -4,6 +4,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import api, { postOnce } from "../api/client";
+import { PinActionDialog } from "../components/SecondPassword";
+import { useAuth } from "../context/AuthContext";
 
 type Kind = "RECEIPT" | "PAYMENT";
 type Account = { id: string; name: string; type?: string; isActive?: boolean };
@@ -75,6 +77,11 @@ const DepositsPage: React.FC = () => {
   const [accountId, setAccountId] = useState("");
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // gỡ trừ cọc nhầm (admin + mật khẩu cấp 2)
+  const { user } = useAuth();
+  const isAdmin = String(user?.role || "").toLowerCase() === "admin";
+  const [unapply, setUnapply] = useState<{ dep: Deposit; invoiceId: string; invoiceCode: string | null; amount: number } | null>(null);
 
   // hoàn cọc
   const [refund, setRefund] = useState<{ dep: Deposit; amount: string; date: string; accountId: string; note: string } | null>(null);
@@ -340,9 +347,21 @@ const DepositsPage: React.FC = () => {
                       {d.allocations.length > 0 && (
                         <div className="text-xs text-slate-400">
                           {d.allocations.map((a) => (
-                            <Link key={a.invoiceId} to={`/invoices/${a.invoiceId}`} className="mr-1 hover:underline">
-                              {a.invoiceCode || "HĐ"}
-                            </Link>
+                            <span key={a.invoiceId} className="mr-1 whitespace-nowrap">
+                              <Link to={`/invoices/${a.invoiceId}`} className="hover:underline">
+                                {a.invoiceCode || "HĐ"}
+                              </Link>
+                              {isAdmin && (
+                                <button
+                                  type="button"
+                                  title="Gỡ khoản trừ cọc nhầm khỏi hoá đơn này"
+                                  onClick={() => setUnapply({ dep: d, invoiceId: a.invoiceId, invoiceCode: a.invoiceCode, amount: a.amount })}
+                                  className="ml-0.5 text-rose-500 hover:text-rose-700"
+                                >
+                                  ✕
+                                </button>
+                              )}
+                            </span>
                           ))}
                         </div>
                       )}
@@ -416,6 +435,24 @@ const DepositsPage: React.FC = () => {
           </tbody>
         </table>
       </div>
+
+      <PinActionDialog
+        open={!!unapply}
+        tone="danger"
+        title="Gỡ trừ tiền cọc?"
+        subtitle={unapply ? `${money(unapply.amount)} của phiếu ${unapply.dep.code || ""} đã trừ vào HĐ ${unapply.invoiceCode || ""}` : undefined}
+        confirmLabel="Gỡ trừ cọc"
+        onClose={() => setUnapply(null)}
+        onSubmit={async (pin) => {
+          if (!unapply) return;
+          await api.post(`/deposits/${unapply.dep.id}/unapply`, { invoiceId: unapply.invoiceId, pin });
+          setUnapply(null);
+          setMsg({ ok: true, text: "Đã gỡ, tiền quay lại thành cọc còn dư. Hoá đơn được tính lại số còn nợ." });
+          load();
+        }}
+      >
+        <p className="text-sm text-slate-600">Tiền quay lại thành cọc chưa dùng, hoá đơn sẽ tăng lại số còn phải thu / phải trả.</p>
+      </PinActionDialog>
     </div>
   );
 };

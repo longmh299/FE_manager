@@ -3,6 +3,8 @@
 //   - Mọi hoá đơn MÌNH bán còn nợ (không giới hạn tháng), gom theo khách, nợ lâu nhất lên đầu
 //   - "Báo đã thu": gửi phiếu thu nợ -> quản trị duyệt mới thành phiếu thu (chưa duyệt thì công nợ chưa đổi)
 //   - Tab "Phiếu thu nợ đã gửi": theo dõi chờ duyệt / đã duyệt (số phiếu PT) / bị từ chối (lý do), tự huỷ khi báo nhầm
+import { normPayReqs } from "../utils/payReq";
+import DepositRequestDialog from "../components/DepositRequestDialog";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import api from "../api/client";
@@ -360,6 +362,7 @@ const MyDebtsPage: React.FC = () => {
   const [debts, setDebts] = useState<DebtResp | null>(null);
   const [reqs, setReqs] = useState<PaymentRequestRow[] | null>(null);
   const [accounts, setAccounts] = useState<PRAccount[]>([]);
+  const [depOpen, setDepOpen] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [stFilter, setStFilter] = useState<"" | PRStatus>("");
@@ -374,7 +377,7 @@ const MyDebtsPage: React.FC = () => {
     try {
       const [d, r] = await Promise.all([api.get("/payment-requests/my-debts"), api.get("/payment-requests", { params: { mine: 1 } })]);
       setDebts(d.data);
-      setReqs(r.data);
+      setReqs(normPayReqs(r.data));
       window.dispatchEvent(new Event("payreq:changed"));
     } catch (e: any) {
       setErr(apiErr(e, "Không tải được công nợ"));
@@ -444,10 +447,30 @@ const MyDebtsPage: React.FC = () => {
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Công nợ của tôi</h1>
           <p className="mt-0.5 text-sm text-slate-500">Khách nào còn nợ, trả tiền rồi thì bấm “Báo đã thu” để quản trị duyệt.</p>
         </div>
-        <Link to="/me/sales" className="text-sm font-medium text-sky-700 hover:underline">
-          ← Doanh số của tôi
-        </Link>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setDepOpen(true)}
+            className="rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-600"
+          >
+            + Báo khách đặt cọc
+          </button>
+          <Link to="/me/sales" className="text-sm font-medium text-sky-700 hover:underline">
+            ← Doanh số của tôi
+          </Link>
+        </div>
       </div>
+
+      <DepositRequestDialog
+        open={depOpen}
+        accounts={accounts}
+        onClose={() => setDepOpen(false)}
+        onSent={(amt) => {
+          setDepOpen(false);
+          toast.push({ type: "success", title: "Đã gửi", message: `Đã báo khách cọc ${money(amt)}đ. Chờ duyệt.` });
+          load();
+        }}
+      />
 
       {/* KPI */}
       <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
@@ -626,9 +649,13 @@ const MyDebtsPage: React.FC = () => {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <StatusChip status={r.status} />
-                        <Link to={`/invoices/${r.invoice.id}`} className="font-medium text-slate-900 hover:text-sky-700 hover:underline">
-                          HĐ {r.invoice.code}
-                        </Link>
+                        {r.isDeposit ? (
+                          <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-800">Thu cọc</span>
+                        ) : (
+                          <Link to={`/invoices/${r.invoice.id}`} className="font-medium text-slate-900 hover:text-sky-700 hover:underline">
+                            HĐ {r.invoice.code}
+                          </Link>
+                        )}
                         <span className="truncate text-sm text-slate-600">{r.invoice.customerName}</span>
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
@@ -694,7 +721,7 @@ const MyDebtsPage: React.FC = () => {
         open={!!cancelTarget}
         tone="danger"
         title="Huỷ phiếu thu nợ này?"
-        subtitle={cancelTarget ? <>HĐ {cancelTarget.invoice.code} · {money(cancelTarget.amount)}đ</> : null}
+        subtitle={cancelTarget ? <>{cancelTarget.isDeposit ? "Thu cọc" : `HĐ ${cancelTarget.invoice.code}`} · {money(cancelTarget.amount)}đ</> : null}
         onClose={() => !cancelBusy && setCancelTarget(null)}
         footer={
           <>
