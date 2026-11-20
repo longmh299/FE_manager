@@ -1,4 +1,5 @@
 // src/pages/InvoiceDetailPage.tsx
+import DepositApplyBox from "../components/DepositApplyBox";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import api from "../api/client";
@@ -4625,6 +4626,22 @@ const InvoiceDetailPage: React.FC = () => {
                 </div>
               </div>
             </div>
+
+            {/* ✅ tiền đặt cọc của khách / NCC: trừ vào hoá đơn */}
+            {!isCreate && invoice.id && (
+              <DepositApplyBox
+                invoiceId={String(invoice.id)}
+                invoiceType={String(invoice.type || "")}
+                partnerId={invoice.partnerId ? String(invoice.partnerId) : undefined}
+                status={String(invoice.status || "")}
+                debtNow={debtNow}
+                canManage={["admin", "accountant"].includes(String(me.role || "").trim().toLowerCase())}
+                onApplied={async () => {
+                  await loadInvoiceIfNeeded();
+                  await loadPaymentHistoryForInvoice();
+                }}
+              />
+            )}
 
             {message && (
               <div style={{ ...styles.notice, ...(message.type === "success" ? styles.noticeSuccess : styles.noticeError) }}>

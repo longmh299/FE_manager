@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import PartnerDepositBadge from "../components/PartnerDepositBadge";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 
@@ -115,6 +116,7 @@ const CustomerDetailPage: React.FC = () => {
 
   return (
     <div className="p-4 space-y-4 text-sm">
+      {id && <PartnerDepositBadge partnerId={String(id)} />}
       <div>
         {backLink}
         <div className="mt-2 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">

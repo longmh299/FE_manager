@@ -28,6 +28,7 @@ import InvoiceDetailPage from "./pages/InvoiceDetailPage";
 import ReceivablesReport from "./pages/ReceivablesReportPage";
 import PaymentsMissingAccountPage from "./pages/PaymentsMissingAccountPage";
 import CashbookPage from "./pages/CashbookPage";
+import DepositsPage from "./pages/DepositsPage";
 import StockBackordersPage from "./pages/StockBackordersPage";
 import PartnerMergePage from "./pages/PartnerMergePage";
 import SalesReturnsPage from "./pages/SalesReturnsPage";
@@ -230,6 +231,14 @@ const App: React.FC = () => {
             element={
               <RequireRole roles={["admin", "accountant"]}>
                 <CashbookPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="deposits"
+            element={
+              <RequireRole roles={["admin", "accountant"]}>
+                <DepositsPage />
               </RequireRole>
             }
           />

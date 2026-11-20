@@ -239,6 +239,7 @@ const Layout: React.FC = () => {
         icon: "money",
         links: [
           ...(AA ? [{ to: "/cashbook", label: "Thu chi (sổ quỹ)", badge: prBadge.pending, hint: prBadge.pending ? `${prBadge.pending} phiếu thu nợ chờ duyệt` : undefined }] : []),
+          ...(AA ? [{ to: "/deposits", label: "Tiền đặt cọc" }] : []),
           ...(AA ? [{ to: "/debts/by-sale", label: "Công nợ khách hàng" }] : []),
           ...(isAdmin ? [{ to: "/payment-accounts", label: "Tài khoản nhận tiền" }] : []), // ✅ thêm/sửa TK: chỉ quản trị
         ],

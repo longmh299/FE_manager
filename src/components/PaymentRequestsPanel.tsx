@@ -3,6 +3,7 @@
 //   - Phiếu từ hoá đơn, nút thu tiền, hoàn tiền, nhân viên báo thu nợ đều vào đây
 //   - Kế toán và quản trị duyệt được cả tiền mặt lẫn chuyển khoản (server trả canDecide).
 //   - Duyệt = lập phiếu PT/PC thật (vào sổ quỹ / tài khoản, đổi công nợ hoá đơn)
+import { normPayReqs } from "../utils/payReq";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import api from "../api/client";
@@ -64,7 +65,7 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
     setRows(null);
     try {
       const res = await api.get("/payment-requests", { params: { status: status || undefined } });
-      setRows(Array.isArray(res.data) ? res.data : []);
+      setRows(normPayReqs(res.data));
     } catch (e: any) {
       setErr(apiErr(e, "Không tải được danh sách phiếu chờ duyệt"));
       setRows([]);
@@ -240,9 +241,13 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
                       <span className="text-xs text-slate-500">gửi {viDateTime(r.createdAt)}</span>
                     </div>
                     <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-sm">
-                      <Link to={`/invoices/${r.invoice.id}`} className="font-medium text-sky-700 hover:underline">
-                        HĐ {r.invoice.code}
-                      </Link>
+                      {r.isDeposit ? (
+                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-800">Thu cọc</span>
+                      ) : (
+                        <Link to={`/invoices/${r.invoice.id}`} className="font-medium text-sky-700 hover:underline">
+                          HĐ {r.invoice.code}
+                        </Link>
+                      )}
                       <span className="text-slate-400">·</span>
                       <span className="truncate text-slate-800">{r.invoice.customerName}</span>
                     </div>
@@ -318,7 +323,7 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
       <DialogShell
         open={!!approve}
         title={approve?.r.type === "PAYMENT" ? "Duyệt & lập phiếu chi" : "Duyệt & lập phiếu thu"}
-        subtitle={approve ? <>HĐ {approve.r.invoice.code} · {approve.r.invoice.customerName} · NV {approve.r.requestedBy.username}</> : null}
+        subtitle={approve ? <>{approve.r.isDeposit ? "Thu cọc" : `HĐ ${approve.r.invoice.code}`} · {approve.r.invoice.customerName} · NV {approve.r.requestedBy.username}</> : null}
         onClose={() => !busy && setApprove(null)}
         width="max-w-lg"
         footer={
@@ -401,7 +406,7 @@ const PaymentRequestsPanel: React.FC<{ onChanged?: () => void }> = ({ onChanged 
         open={!!reject}
         tone="danger"
         title="Từ chối phiếu"
-        subtitle={reject ? <>HĐ {reject.r.invoice.code} · {money(reject.r.amount)}đ · NV {reject.r.requestedBy.username}</> : null}
+        subtitle={reject ? <>{reject.r.isDeposit ? "Thu cọc" : `HĐ ${reject.r.invoice.code}`} · {money(reject.r.amount)}đ · NV {reject.r.requestedBy.username}</> : null}
         onClose={() => !busy && setReject(null)}
         footer={
           <>
