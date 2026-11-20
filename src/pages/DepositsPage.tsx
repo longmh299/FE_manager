@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import api, { postOnce } from "../api/client";
 import { PinActionDialog } from "../components/SecondPassword";
+import NewPartnerInline from "../components/NewPartnerInline";
 import { useAuth } from "../context/AuthContext";
 
 type Kind = "RECEIPT" | "PAYMENT";
@@ -244,6 +245,16 @@ const DepositsPage: React.FC = () => {
                 setPartnerId("");
               }}
             />
+            {!partnerId && partnerMatches.length === 0 && pq.trim().length >= 2 && (
+              <NewPartnerInline
+                name={pq.trim()}
+                onCreated={(p) => {
+                  setPartners((arr) => (arr.some((x) => x.id === p.id) ? arr : [...arr, p]));
+                  setPartnerId(p.id);
+                  setPq(p.name);
+                }}
+              />
+            )}
             {partnerMatches.length > 0 && (
               <div className="absolute z-10 mt-1 w-full rounded-lg border border-slate-200 bg-white shadow-lg">
                 {partnerMatches.map((p) => (
