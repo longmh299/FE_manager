@@ -17,7 +17,10 @@ const DepositApplyBox: React.FC<{
   debtNow: number;
   canManage: boolean;
   onApplied: () => void | Promise<void>;
-}> = ({ invoiceId, invoiceType, partnerId, status, debtNow, canManage, onApplied }) => {
+  // ✅ hoá đơn nháp / lập mới: chọn trước khoản cọc, tự trừ lúc bấm Gửi duyệt
+  onPlanChange?: (plan: Array<{ depositId: string; amount: number }>) => void;
+}> = ({ invoiceId, invoiceType, partnerId, status, debtNow, canManage, onApplied, onPlanChange }) => {
+  const [plan, setPlan] = useState<Record<string, boolean>>({});
   const [deps, setDeps] = useState<Dep[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -40,6 +43,22 @@ const DepositApplyBox: React.FC<{
   useEffect(() => {
     load();
   }, [load, invoiceId]);
+
+  useEffect(() => {
+    if (!onPlanChange) return;
+    let left = Math.max(0, debtNow);
+    const out: Array<{ depositId: string; amount: number }> = [];
+    for (const d of deps) {
+      if (!plan[d.id] || left <= 0) continue;
+      const typed = amt[d.id] != null && amt[d.id] !== "" ? Number(String(amt[d.id]).replace(/[^\d]/g, "")) || 0 : null;
+      const v = Math.min(typed ?? Number(d.remaining || 0), Number(d.remaining || 0), left);
+      if (v > 0) {
+        out.push({ depositId: d.id, amount: v });
+        left -= v;
+      }
+    }
+    onPlanChange(out);
+  }, [plan, amt, deps, debtNow, onPlanChange]);
 
   if (!okType || deps.length === 0) return null;
   const total = deps.reduce((s, d) => s + Number(d.remaining || 0), 0);
@@ -72,7 +91,37 @@ const DepositApplyBox: React.FC<{
           xem
         </Link>
       </div>
-      {!okStatus && <div style={{ color: "#92400e", marginTop: 4 }}>Gửi duyệt / duyệt hoá đơn xong mới trừ tiền cọc được.</div>}
+      {!okStatus && !canManage && (
+        <div style={{ color: "#92400e", marginTop: 4 }}>
+          Gửi duyệt hoá đơn, admin / kế toán sẽ trừ tiền cọc lúc duyệt.
+        </div>
+      )}
+      {!okStatus && canManage && (
+        <>
+          <div style={{ color: "#92400e", marginTop: 4 }}>Tick khoản cọc muốn trừ, web tự trừ khi bấm <b>Gửi duyệt</b>.</div>
+          {deps.map((d) => (
+            <label key={d.id} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginTop: 6, cursor: "pointer" }}>
+              <input type="checkbox" checked={!!plan[d.id]} onChange={(e) => setPlan((m) => ({ ...m, [d.id]: e.target.checked }))} />
+              <span style={{ minWidth: 200 }}>
+                {d.code || "Phiếu cọc"} · {viDate(d.date)} · còn <b>{money(d.remaining)}</b>
+                {d.note ? <span style={{ color: "#78716c" }}> · {d.note}</span> : null}
+              </span>
+              {plan[d.id] && (
+                <input
+                  inputMode="numeric"
+                  placeholder={Math.round(Math.min(Number(d.remaining || 0), Math.max(0, debtNow))).toLocaleString("vi-VN")}
+                  value={amt[d.id] ?? ""}
+                  onChange={(e) => {
+                    const n = Number(e.target.value.replace(/[^\d]/g, "")) || 0;
+                    setAmt((m) => ({ ...m, [d.id]: n ? n.toLocaleString("vi-VN") : "" }));
+                  }}
+                  style={{ width: 130, padding: "4px 8px", border: "1px solid #d6d3d1", borderRadius: 6, textAlign: "right" }}
+                />
+              )}
+            </label>
+          ))}
+        </>
+      )}
       {okStatus && debtNow <= 0 && <div style={{ color: "#92400e", marginTop: 4 }}>Hoá đơn đã thu đủ.</div>}
       {okStatus && debtNow > 0 && canManage &&
         deps.map((d) => {
