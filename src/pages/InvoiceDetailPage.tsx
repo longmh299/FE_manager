@@ -1479,6 +1479,22 @@ const InvoiceDetailPage: React.FC = () => {
   const [depositPlan, setDepositPlan] = useState<Array<{ depositId: string; amount: number }>>([]);
   const depositPlanRef = useRef(depositPlan);
   depositPlanRef.current = depositPlan;
+  const plannedDeposit = () => depositPlanRef.current.reduce((t, x) => t + x.amount, 0);
+  // tick / bỏ tick cọc khi đang chọn "đã thanh toán đủ": tính lại số tiền thu thêm
+  const onDepositPlan = (p: Array<{ depositId: string; amount: number }>) => {
+    const prevSum = depositPlanRef.current.reduce((t, x) => t + x.amount, 0);
+    const sum = p.reduce((t, x) => t + x.amount, 0);
+    depositPlanRef.current = p;
+    setDepositPlan(p);
+    if (sum === prevSum) return;
+    setInvoice((prev) => {
+      if (!prev || prev.paymentStatus !== "PAID" || prev.status === "APPROVED") return prev;
+      const paid = Math.max(0, calcCollectible(prev) - sum);
+      if (Number(prev.paidAmount || 0) === paid) return prev;
+      setDirtySinceLastSave(true);
+      return { ...prev, paidAmount: paid };
+    });
+  };
   const isAdmin = String(me.role || "").trim().toLowerCase() === "admin";
   const isStaffRole = String(me.role || "").trim().toLowerCase() === "staff";
   // ✅ MỚI: quyền tạo nhanh mã hàng trong hoá đơn (khớp BE: POST /items chỉ accountant|admin)
@@ -2516,7 +2532,8 @@ const InvoiceDetailPage: React.FC = () => {
     setInvoice((prev) => {
       if (!prev) return prev;
 
-      const totalBase = calcCollectible(prev);
+      // ✅ có tick trừ cọc: "đã thanh toán đủ" = phần còn lại sau cọc
+      const totalBase = Math.max(0, calcCollectible(prev) - plannedDeposit());
 
       let paidAmount = prev.paidAmount ?? 0;
       if (status === "UNPAID") paidAmount = 0;
@@ -2528,7 +2545,8 @@ const InvoiceDetailPage: React.FC = () => {
   }
 
   function buildUpdatePayload(inv: Invoice) {
-    const totalBase = calcCollectible(inv);
+    // ✅ có tick trừ cọc: phần thu thêm tối đa = phải thu − cọc sẽ trừ
+    const totalBase = inv.status === "APPROVED" ? calcCollectible(inv) : Math.max(0, calcCollectible(inv) - plannedDeposit());
     let paidAmount = Number(inv.paidAmount ?? 0) || 0;
     const paymentStatus = (inv.paymentStatus ?? "UNPAID") as PaymentStatus;
 
@@ -4655,8 +4673,8 @@ const InvoiceDetailPage: React.FC = () => {
                 invoiceType={String(invoice.type || "")}
                 partnerId={invoice.partnerId ? String(invoice.partnerId) : undefined}
                 status={isCreate ? "DRAFT" : String(invoice.status || "")}
-                debtNow={debtNow}
-                onPlanChange={setDepositPlan}
+                debtNow={isCreate || (invoice.status ?? "DRAFT") === "DRAFT" ? collectible : debtNow}
+                onPlanChange={onDepositPlan}
                 canManage={["admin", "accountant"].includes(String(me.role || "").trim().toLowerCase())}
                 onApplied={async () => {
                   await loadInvoiceIfNeeded();
