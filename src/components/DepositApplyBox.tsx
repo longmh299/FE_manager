@@ -20,7 +20,23 @@ const DepositApplyBox: React.FC<{
   // ✅ hoá đơn nháp / lập mới: chọn trước khoản cọc, tự trừ lúc bấm Gửi duyệt
   onPlanChange?: (plan: Array<{ depositId: string; amount: number }>) => void;
 }> = ({ invoiceId, invoiceType, partnerId, status, debtNow, canManage, onApplied, onPlanChange }) => {
-  const [plan, setPlan] = useState<Record<string, boolean>>({});
+  const planKey = `depPlan:${partnerId || ""}`;
+  const [plan, setPlan] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem(`depPlan:${partnerId || ""}`) || "{}");
+    } catch {
+      return {};
+    }
+  });
+  useEffect(() => {
+    try {
+      if (Object.values(plan).some(Boolean)) sessionStorage.setItem(planKey, JSON.stringify(plan));
+      else sessionStorage.removeItem(planKey);
+    } catch {
+      /* trình duyệt chặn lưu tạm: bỏ qua */
+    }
+  }, [plan, planKey]);
+  const [planTotal, setPlanTotal] = useState(0);
   const [deps, setDeps] = useState<Dep[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -57,6 +73,7 @@ const DepositApplyBox: React.FC<{
         left -= v;
       }
     }
+    setPlanTotal(out.reduce((t, x) => t + x.amount, 0));
     onPlanChange(out);
   }, [plan, amt, deps, debtNow, onPlanChange]);
 
@@ -72,6 +89,11 @@ const DepositApplyBox: React.FC<{
     setBusy(d.id);
     try {
       await postOnce(`/deposits/${d.id}/apply`, { invoiceId, amount: v });
+      try {
+        sessionStorage.removeItem(planKey);
+      } catch {
+        /* bỏ qua */
+      }
       setAmt((m) => ({ ...m, [d.id]: "" }));
       await load();
       await onApplied();
@@ -120,6 +142,11 @@ const DepositApplyBox: React.FC<{
               )}
             </label>
           ))}
+          {planTotal > 0 && (
+            <div style={{ marginTop: 8, color: "#92400e" }}>
+              Sẽ trừ cọc <b>{money(planTotal)}</b> → sau khi gửi duyệt, còn phải thu <b>{money(Math.max(0, debtNow - planTotal))}</b>
+            </div>
+          )}
         </>
       )}
       {okStatus && debtNow <= 0 && <div style={{ color: "#92400e", marginTop: 4 }}>Hoá đơn đã thu đủ.</div>}
