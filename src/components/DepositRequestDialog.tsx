@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import api, { postOnce } from "../api/client";
 import { DialogShell } from "./SecondPassword";
+import NewPartnerInline from "./NewPartnerInline";
 import { vnToday, type PRAccount } from "./PaymentRequestBits";
 
 type P = { id: string; name: string; code?: string | null; phone?: string | null };
@@ -103,6 +104,15 @@ const DepositRequestDialog: React.FC<{ open: boolean; accounts: PRAccount[]; onC
             setQ(e.target.value);
           }}
         />
+        {!partner && opts.length === 0 && q.trim().length >= 2 && (
+          <NewPartnerInline
+            name={q.trim()}
+            onCreated={(p) => {
+              setPartner(p);
+              setOpts([]);
+            }}
+          />
+        )}
         {!partner && opts.length > 0 && (
           <div className="absolute z-10 mt-1 w-full rounded-lg border border-slate-200 bg-white shadow-lg">
             {opts.map((p) => (
