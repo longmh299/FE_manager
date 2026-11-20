@@ -72,7 +72,11 @@ const DepositApplyBox: React.FC<{
           xem
         </Link>
       </div>
-      {!okStatus && <div style={{ color: "#92400e", marginTop: 4 }}>Gửi duyệt / duyệt hoá đơn xong mới trừ tiền cọc được.</div>}
+      {!okStatus && (
+        <div style={{ color: "#92400e", marginTop: 4 }}>
+          Lưu và <b>gửi duyệt</b> hoá đơn xong, nút <b>Trừ tiền cọc</b> sẽ hiện ở đây.
+        </div>
+      )}
       {okStatus && debtNow <= 0 && <div style={{ color: "#92400e", marginTop: 4 }}>Hoá đơn đã thu đủ.</div>}
       {okStatus && debtNow > 0 && canManage &&
         deps.map((d) => {

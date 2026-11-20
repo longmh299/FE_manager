@@ -4628,12 +4628,12 @@ const InvoiceDetailPage: React.FC = () => {
             </div>
 
             {/* ✅ tiền đặt cọc của khách / NCC: trừ vào hoá đơn */}
-            {!isCreate && invoice.id && (
+            {!!invoice.partnerId && (
               <DepositApplyBox
-                invoiceId={String(invoice.id)}
+                invoiceId={String(invoice.id || "")}
                 invoiceType={String(invoice.type || "")}
                 partnerId={invoice.partnerId ? String(invoice.partnerId) : undefined}
-                status={String(invoice.status || "")}
+                status={isCreate ? "DRAFT" : String(invoice.status || "")}
                 debtNow={debtNow}
                 canManage={["admin", "accountant"].includes(String(me.role || "").trim().toLowerCase())}
                 onApplied={async () => {
