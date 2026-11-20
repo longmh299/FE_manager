@@ -144,7 +144,7 @@ const DepositApplyBox: React.FC<{
           ))}
           {planTotal > 0 && (
             <div style={{ marginTop: 8, color: "#92400e" }}>
-              Sẽ trừ cọc <b>{money(planTotal)}</b> → sau khi gửi duyệt, còn phải thu <b>{money(Math.max(0, debtNow - planTotal))}</b>
+              Sẽ trừ cọc <b>{money(planTotal)}</b> khi gửi duyệt → khách còn phải trả <b>{money(Math.max(0, debtNow - planTotal))}</b> (thu luôn thì nhập số này vào “Số tiền đã thu” hoặc chọn “Đã thanh toán đủ”)
             </div>
           )}
         </>
