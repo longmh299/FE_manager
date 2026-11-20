@@ -1475,6 +1475,10 @@ const InvoiceDetailPage: React.FC = () => {
 
   // ✅ AUTH: lấy role từ BE (/me), fallback localStorage
   const [me, setMe] = useState<{ id?: string; role?: string }>({});
+  // ✅ khoản cọc tick sẵn lúc lập hoá đơn, trừ khi gửi duyệt
+  const [depositPlan, setDepositPlan] = useState<Array<{ depositId: string; amount: number }>>([]);
+  const depositPlanRef = useRef(depositPlan);
+  depositPlanRef.current = depositPlan;
   const isAdmin = String(me.role || "").trim().toLowerCase() === "admin";
   const isStaffRole = String(me.role || "").trim().toLowerCase() === "staff";
   // ✅ MỚI: quyền tạo nhanh mã hàng trong hoá đơn (khớp BE: POST /items chỉ accountant|admin)
@@ -2842,8 +2846,20 @@ const InvoiceDetailPage: React.FC = () => {
           await api.post(`/invoices/${invoice.id}/submit`);
           window.dispatchEvent(new Event("invoice:changed")); // ✅ cập nhật số hoá đơn chờ duyệt ở menu
           updateInvoice({ status: "SUBMITTED" });
-          setMessage({ type: "success", text: "Đã gửi duyệt." });
-          toastSuccess("Đã gửi duyệt.");
+          // ✅ trừ tiền cọc đã tick lúc lập hoá đơn
+          let depOk = 0;
+          for (const p of depositPlanRef.current) {
+            try {
+              await postOnce(`/deposits/${p.depositId}/apply`, { invoiceId: invoice.id, amount: p.amount });
+              depOk += p.amount;
+            } catch (e: unknown) {
+              const x = e as { response?: { data?: { message?: string } } };
+              toastError(x?.response?.data?.message || "Không trừ được tiền cọc, vào hoá đơn trừ lại.", "Trừ cọc");
+            }
+          }
+          const sentText = depOk > 0 ? `Đã gửi duyệt, đã trừ ${formatMoney(depOk)} đ tiền cọc.` : "Đã gửi duyệt.";
+          setMessage({ type: "success", text: sentText });
+          toastSuccess(sentText);
           closeConfirm();
           gotoListSoon(invoice.type);
         } catch (err: any) {
@@ -4635,6 +4651,7 @@ const InvoiceDetailPage: React.FC = () => {
                 partnerId={invoice.partnerId ? String(invoice.partnerId) : undefined}
                 status={isCreate ? "DRAFT" : String(invoice.status || "")}
                 debtNow={debtNow}
+                onPlanChange={setDepositPlan}
                 canManage={["admin", "accountant"].includes(String(me.role || "").trim().toLowerCase())}
                 onApplied={async () => {
                   await loadInvoiceIfNeeded();
