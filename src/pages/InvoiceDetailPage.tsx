@@ -2857,6 +2857,11 @@ const InvoiceDetailPage: React.FC = () => {
               toastError(x?.response?.data?.message || "Không trừ được tiền cọc, vào hoá đơn trừ lại.", "Trừ cọc");
             }
           }
+          try {
+            if (invoice.partnerId) sessionStorage.removeItem(`depPlan:${invoice.partnerId}`);
+          } catch {
+            /* bỏ qua */
+          }
           const sentText = depOk > 0 ? `Đã gửi duyệt, đã trừ ${formatMoney(depOk)} đ tiền cọc.` : "Đã gửi duyệt.";
           setMessage({ type: "success", text: sentText });
           toastSuccess(sentText);
