@@ -5,6 +5,7 @@
 //   - Tab "Phiếu thu nợ đã gửi": theo dõi chờ duyệt / đã duyệt (số phiếu PT) / bị từ chối (lý do), tự huỷ khi báo nhầm
 import { normPayReqs } from "../utils/payReq";
 import DepositRequestDialog from "../components/DepositRequestDialog";
+import MyDepositsSection from "../components/MyDepositsSection";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import api from "../api/client";
@@ -363,6 +364,7 @@ const MyDebtsPage: React.FC = () => {
   const [reqs, setReqs] = useState<PaymentRequestRow[] | null>(null);
   const [accounts, setAccounts] = useState<PRAccount[]>([]);
   const [depOpen, setDepOpen] = useState(false);
+  const [depKey, setDepKey] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [stFilter, setStFilter] = useState<"" | PRStatus>("");
@@ -467,10 +469,13 @@ const MyDebtsPage: React.FC = () => {
         onClose={() => setDepOpen(false)}
         onSent={(amt) => {
           setDepOpen(false);
+          setDepKey((k) => k + 1);
           toast.push({ type: "success", title: "Đã gửi", message: `Đã báo khách cọc ${money(amt)}đ. Chờ duyệt.` });
           load();
         }}
       />
+
+      <MyDepositsSection refreshKey={depKey} />
 
       {/* KPI */}
       <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
