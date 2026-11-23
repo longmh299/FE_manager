@@ -1484,6 +1484,10 @@ const InvoiceDetailPage: React.FC = () => {
   const onDepositPlan = (p: Array<{ depositId: string; amount: number }>) => {
     const prevSum = depositPlanRef.current.reduce((t, x) => t + x.amount, 0);
     const sum = p.reduce((t, x) => t + x.amount, 0);
+    const same =
+      p.length === depositPlanRef.current.length &&
+      p.every((x, i) => x.depositId === depositPlanRef.current[i]?.depositId && x.amount === depositPlanRef.current[i]?.amount);
+    if (same) return; // không đổi thì không vẽ lại (tránh lặp)
     depositPlanRef.current = p;
     setDepositPlan(p);
     if (sum === prevSum) return;
