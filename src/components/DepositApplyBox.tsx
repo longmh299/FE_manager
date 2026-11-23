@@ -1,6 +1,6 @@
 // src/components/DepositApplyBox.tsx
 // ✅ Trên hoá đơn: khách / NCC còn tiền cọc thì hiện để trừ vào hoá đơn.
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import api, { postOnce } from "../api/client";
 
@@ -37,6 +37,10 @@ const DepositApplyBox: React.FC<{
     }
   }, [plan, planKey]);
   const [planTotal, setPlanTotal] = useState(0);
+  // giữ hàm báo kế hoạch trong ref: hàm cha đổi mỗi lần vẽ lại, đưa vào deps sẽ lặp vô hạn
+  const onPlanRef = useRef(onPlanChange);
+  onPlanRef.current = onPlanChange;
+  const lastPlanSig = useRef("");
   const [deps, setDeps] = useState<Dep[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -61,7 +65,7 @@ const DepositApplyBox: React.FC<{
   }, [load, invoiceId]);
 
   useEffect(() => {
-    if (!onPlanChange) return;
+    if (!onPlanRef.current) return;
     let left = Math.max(0, debtNow);
     const out: Array<{ depositId: string; amount: number }> = [];
     for (const d of deps) {
@@ -74,8 +78,12 @@ const DepositApplyBox: React.FC<{
       }
     }
     setPlanTotal(out.reduce((t, x) => t + x.amount, 0));
-    onPlanChange(out);
-  }, [plan, amt, deps, debtNow, onPlanChange]);
+    // chỉ báo lên khi kế hoạch thật sự đổi
+    const sig = out.map((x) => `${x.depositId}:${x.amount}`).join("|");
+    if (sig === lastPlanSig.current) return;
+    lastPlanSig.current = sig;
+    onPlanRef.current(out);
+  }, [plan, amt, deps, debtNow]);
 
   if (!okType || deps.length === 0) return null;
   const total = deps.reduce((s, d) => s + Number(d.remaining || 0), 0);
