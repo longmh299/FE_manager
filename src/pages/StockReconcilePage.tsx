@@ -24,6 +24,7 @@ import {
   readFileRows,
   reconcile,
 } from "../utils/stockReconcile";
+import { exportStandardizedFile } from "../utils/stockReconcileExport";
 
 type KindFilter = "" | "MACHINE" | "PART";
 type View = "ALL" | "MATCHED" | "FUZZY" | "UNMATCHED" | "DIFF";
@@ -594,6 +595,20 @@ const StockReconcilePage: React.FC = () => {
     saveAs(new Blob([buf]), `doi_soat_ton_${stamp}.xlsx`);
   };
 
+  // ✅ xuất lại đúng file kho đã tải lên + 2 cột Mã / Tên hệ thống, tô màu dòng cần sửa (cho kho chuẩn hoá mã)
+  const exportStandardized = async () => {
+    if (!book || !usedSheets.length) return;
+    try {
+      const st = await exportStandardizedFile({ book, colsMap, usedSheets, rows: all, fileName });
+      push({
+        type: "success",
+        message: `Đã xuất: ${st.fix} dòng cần sửa mã/tên, ${st.fuzzy} dòng gần giống cần xem lại, ${st.missing} dòng chưa có trên hệ thống.`,
+      });
+    } catch (e) {
+      push({ type: "error", message: errMsg(e, "Không xuất được file.") });
+    }
+  };
+
   const colSelect = (label: string, field: "code" | "name" | "qty") => (
     <label className="flex flex-col gap-1 text-xs text-slate-600">
       {label}
@@ -855,6 +870,14 @@ const StockReconcilePage: React.FC = () => {
                 <span className="inline-flex items-center gap-1"><i className="inline-block h-3 w-3 rounded bg-rose-200" /> không khớp</span>
                 <button type="button" onClick={exportExcel} className="rounded-lg border px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50">
                   Xuất Excel
+                </button>
+                <button
+                  type="button"
+                  onClick={exportStandardized}
+                  title="Xuất lại đúng file kho đã tải lên, thêm 2 cột Mã / Tên hệ thống; dòng cần sửa tô vàng, gần giống tô cam, chưa có trên hệ thống tô đỏ"
+                  className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-sm text-blue-800 hover:bg-blue-100"
+                >
+                  Xuất file kho (chuẩn mã)
                 </button>
               </div>
             </div>
