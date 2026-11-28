@@ -1,7 +1,7 @@
 // src/pages/StockReconcilePage.tsx
 // ✅ Đối soát tồn thực tế (file Excel) với tồn hệ thống — CHỈ XEM, không ghi gì vào kho.
 //  - Tải file kiểm kê (xlsx / xls / csv) -> tự dò cột Mã / Tên / Số lượng (chỉnh lại được)
-//  - Trùng mã / trùng tên: ghép thẳng; gần giống: nền vàng (bỏ ghép được); không khớp: nền đỏ
+//  - Trùng mã / trùng tên: ghép thẳng (vẫn bỏ ghép / chọn hàng khác được); gần giống: nền vàng (bỏ ghép được); không khớp: nền đỏ
 //  - Chênh lệch = HỆ THỐNG − THỰC TẾ (+ = hệ thống thừa, − = hệ thống thiếu); xuất Excel giữ nguyên màu
 //  - Chọn được ngày lấy tồn hệ thống (tồn cuối ngày, tính từ báo cáo nhập – xuất – tồn)
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -133,6 +133,8 @@ function saveAliases(m: Map<string, string>) {
     /* trình duyệt chặn lưu: vẫn ghép được trong lần này */
   }
 }
+// ✅ ghép tự động (xanh): vẫn cho bỏ ghép / chọn hàng khác — trùng mã hay trùng tên chưa chắc đã là cùng 1 hàng
+const isAuto = (st: MatchStatus) => st === "EXACT_BOTH" || st === "EXACT_CODE" || st === "EXACT_NAME";
 const isMatched = (st: MatchStatus) => st === "EXACT_BOTH" || st === "EXACT_CODE" || st === "EXACT_NAME" || st === "MANUAL";
 
 function errMsg(e: unknown, fallback: string) {
@@ -950,7 +952,7 @@ const StockReconcilePage: React.FC = () => {
                       </td>
                       <td className="px-2 py-2 text-right">
                         <div className="flex flex-col items-end gap-1">
-                          {r.status === "FUZZY" && r.file && (
+                          {(r.status === "FUZZY" || isAuto(r.status)) && r.file && (
                             <button
                               type="button"
                               onClick={() => setPicker({ file: r.file!, currentId: r.sys?.itemId })}
@@ -960,12 +962,20 @@ const StockReconcilePage: React.FC = () => {
                               Chọn hàng khác
                             </button>
                           )}
-                          {r.status === "FUZZY" && (
+                          {(r.status === "FUZZY" || isAuto(r.status)) && (
                             <button
                               type="button"
                               onClick={() => unpair(r.key)}
-                              title="Hai dòng này không phải cùng một mặt hàng"
-                              className="whitespace-nowrap rounded-lg border border-amber-400 bg-white px-2 py-1 text-xs text-amber-900 hover:bg-amber-100"
+                              title={
+                                r.status === "FUZZY"
+                                  ? "Hai dòng này không phải cùng một mặt hàng"
+                                  : "Trùng mã / tên nhưng thực ra là 2 mặt hàng khác nhau? Bỏ ghép (bấm \"Ghép lại\" ở trên để hoàn tác)"
+                              }
+                              className={`whitespace-nowrap rounded-lg border bg-white px-2 py-1 text-xs ${
+                                r.status === "FUZZY"
+                                  ? "border-amber-400 text-amber-900 hover:bg-amber-100"
+                                  : "border-slate-300 text-slate-700 hover:bg-slate-100"
+                              }`}
                             >
                               Bỏ ghép
                             </button>
