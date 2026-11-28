@@ -76,7 +76,9 @@ type DashboardResp = {
 type TechInvoice = {
   invoiceId: string;
   invoiceCode: string;
+  type?: "SALES" | "SALES_RETURN";
   issueDate: string;
+  dsDate?: string; // ngày khách trả đủ tiền (ngày tính hoa hồng)
   customerName: string;
   saleUserName: string | null;
   goods: number;
@@ -500,7 +502,7 @@ function TechSection({ tech }: { tech: TechBlock }) {
         <div>
           <h2 className="font-medium">Kỹ thuật</h2>
           <div className="text-xs text-gray-500">
-            Hoá đơn bán đã duyệt trong tháng có bạn ở ô NV kỹ thuật • {num(s.orderCount)} hoá đơn
+            Hoá đơn có bạn ở ô NV kỹ thuật, tính khi khách trả đủ tiền • {num(s.orderCount)} hoá đơn
             {tech.closed ? <span className="ml-1 rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-800">Kế toán đã chốt</span> : null}
           </div>
         </div>
@@ -509,7 +511,7 @@ function TechSection({ tech }: { tech: TechBlock }) {
         </button>
       </div>
       <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Kpi title="Tiền hàng tính %" value={money(s.goods)} subHint="Chưa VAT, đã trừ hàng trả, không gồm dịch vụ; HĐ có phụ cấp không tính %" />
+        <Kpi title="Tiền hàng tính %" value={money(s.goods)} subHint="Chưa VAT, không gồm dịch vụ, khách trả hàng trừ âm; HĐ có phụ cấp không tính %" />
         <Kpi title={`Thực nhận (${pct} tiền hàng)`} value={money(s.commission)} />
         <Kpi title="Phụ cấp kỹ thuật" value={money(s.laborFee)} subHint={`${num(s.laborCount)} hoá đơn có phụ cấp kỹ thuật`} />
         <Kpi title="Tổng nhận" value={money(total)} subHint={`Thực nhận ${pct} + phụ cấp kỹ thuật`} />
@@ -520,7 +522,7 @@ function TechSection({ tech }: { tech: TechBlock }) {
             <thead className="bg-gray-50 text-left text-gray-600">
               <tr>
                 <th className="px-3 py-2 font-medium">Số HĐ</th>
-                <th className="px-3 py-2 font-medium">Ngày</th>
+                <th className="px-3 py-2 font-medium" title="Ngày khách trả đủ tiền (ngày tính hoa hồng)">Ngày đủ tiền</th>
                 <th className="px-3 py-2 font-medium">Khách hàng</th>
                 <th className="px-3 py-2 font-medium">NV bán</th>
                 <th className="px-3 py-2 font-medium text-right">Tiền hàng</th>
@@ -532,8 +534,11 @@ function TechSection({ tech }: { tech: TechBlock }) {
             <tbody>
               {tech.invoices.map((r) => (
                 <tr key={r.invoiceId} className="border-t">
-                  <td className="px-3 py-2 font-medium">{r.invoiceCode}</td>
-                  <td className="px-3 py-2">{r.issueDate}</td>
+                  <td className="px-3 py-2 font-medium">
+                    {r.invoiceCode}
+                    {r.type === "SALES_RETURN" && <span className="ml-1 rounded bg-rose-100 px-1.5 py-0.5 text-[11px] font-normal text-rose-800">trả hàng</span>}
+                  </td>
+                  <td className="px-3 py-2">{r.dsDate || r.issueDate}</td>
                   <td className="px-3 py-2">{r.customerName}</td>
                   <td className="px-3 py-2">{r.saleUserName || "—"}</td>
                   <td className="px-3 py-2 text-right tabular-nums">
