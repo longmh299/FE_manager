@@ -18,8 +18,10 @@ import { useAuth } from "../context/AuthContext";
 type Inv = {
   invoiceId: string;
   invoiceCode: string;
+  type?: "SALES" | "SALES_RETURN"; // phiếu khách trả hàng: tiền hàng / thực nhận âm
   issueDate: string;
   approvedDate: string;
+  dsDate?: string; // ngày khách trả đủ tiền (ngày tính hoa hồng); bản chốt cũ không có
   customerName: string;
   saleUserName: string | null;
   goods: number;
@@ -29,7 +31,7 @@ type Inv = {
   laborFee: number;
   totalIncome: number;
 };
-type Sum = { goods: number; commission: number; laborFee: number; totalIncome: number; serviceAmount: number; laborCount: number; orderCount: number };
+type Sum = { goods: number; commission: number; laborFee: number; totalIncome: number; serviceAmount: number; laborCount: number; orderCount: number; returnCount?: number };
 type Tech = { techKey: string; techName: string; summary: Sum; invoices: Inv[] };
 type Closed = { closedBy: string | null; closedAt: string } | null;
 type Report = { month: number; year: number; rate: number; summary: Sum; techs: Tech[]; closed?: Closed };
@@ -186,8 +188,8 @@ const TechView: React.FC<ViewProps> = ({ month, year, push }) => {
     <div>
       <div className="mt-3 flex flex-wrap items-end gap-3">
         <p className="mr-auto max-w-3xl text-sm text-slate-600">
-          Hoá đơn bán đã duyệt trong tháng có tên ở ô NV kỹ thuật. Thực nhận = {pct} tiền hàng (chưa VAT, không gồm dịch vụ, đã trừ hàng
-          khách trả tới hết tháng). Hoá đơn <b>có phụ cấp kỹ thuật</b> (sửa chữa, bảo trì) thì <b>chỉ ăn phụ cấp, không tính %</b>. Tổng
+          Hoá đơn bán có tên ở ô NV kỹ thuật, tính vào <b>tháng khách trả đủ tiền</b> (hoá đơn duyệt trước 11/2026: tháng duyệt). Thực
+          nhận = {pct} tiền hàng (chưa VAT, không gồm dịch vụ); khách trả hàng thì trừ âm vào tháng trả. Hoá đơn <b>có phụ cấp kỹ thuật</b> (sửa chữa, bảo trì) thì <b>chỉ ăn phụ cấp, không tính %</b>. Tổng
           nhận = thực nhận + phụ cấp.
         </p>
         <button
@@ -212,7 +214,7 @@ const TechView: React.FC<ViewProps> = ({ month, year, push }) => {
 
       <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         {[
-          { t: "Tiền hàng tính %", v: s?.goods ?? 0, h: `${s?.orderCount ?? 0} hoá đơn` },
+          { t: "Tiền hàng tính %", v: s?.goods ?? 0, h: `${s?.orderCount ?? 0} hoá đơn đủ tiền${s?.returnCount ? ` • ${s.returnCount} phiếu trả hàng` : ""}` },
           { t: `Thực nhận (${pct})`, v: s?.commission ?? 0 },
           { t: "Phụ cấp kỹ thuật", v: s?.laborFee ?? 0, h: `${s?.laborCount ?? 0} hoá đơn có phụ cấp` },
           { t: "Tổng phải trả kỹ thuật", v: s?.totalIncome ?? 0, strong: true },
@@ -278,7 +280,7 @@ const TechView: React.FC<ViewProps> = ({ month, year, push }) => {
                             <thead className="text-left text-slate-500">
                               <tr>
                                 <th className="py-1.5 pr-2 font-medium">Số HĐ</th>
-                                <th className="py-1.5 pr-2 font-medium">Ngày duyệt</th>
+                                <th className="py-1.5 pr-2 font-medium" title="Ngày khách trả đủ tiền (ngày tính hoa hồng)">Ngày đủ tiền</th>
                                 <th className="py-1.5 pr-2 font-medium">Khách hàng</th>
                                 <th className="py-1.5 pr-2 font-medium">NV bán</th>
                                 <th className="py-1.5 pr-2 text-right font-medium">Tiền hàng</th>
@@ -295,8 +297,11 @@ const TechView: React.FC<ViewProps> = ({ month, year, push }) => {
                                     <Link className="font-medium text-sky-700 hover:underline" to={`/invoices/${r.invoiceId}`}>
                                       {r.invoiceCode}
                                     </Link>
+                                    {r.type === "SALES_RETURN" && (
+                                      <span className="ml-1 rounded bg-rose-100 px-1.5 py-0.5 text-[11px] text-rose-800">trả hàng</span>
+                                    )}
                                   </td>
-                                  <td className="py-1.5 pr-2">{r.approvedDate}</td>
+                                  <td className="py-1.5 pr-2" title={`Ngày duyệt: ${r.approvedDate}`}>{r.dsDate || r.approvedDate}</td>
                                   <td className="py-1.5 pr-2">{r.customerName}</td>
                                   <td className="py-1.5 pr-2">{r.saleUserName || "—"}</td>
                                   <td className="py-1.5 pr-2 text-right tabular-nums">
