@@ -491,8 +491,105 @@ function DsSection({
   );
 }
 
-function TechSection({ tech }: { tech: TechBlock }) {
+// ✅ kỹ thuật theo dõi hoá đơn đã đi làm (GET /me/tech-jobs) — không có số tiền hoá đơn / công nợ
+type TechJob = {
+  invoiceId: string;
+  invoiceCode: string;
+  issueDate: string;
+  approvedDate: string;
+  customerName: string;
+  saleUserName: string | null;
+  status: "PAID" | "PENDING";
+  dsMonth: string | null;
+  earnsPct: boolean;
+  commission: number;
+  laborFee: number;
+  total: number;
+};
+type TechJobsResp = {
+  pending: TechJob[];
+  monthJobs: TechJob[];
+  pendingSummary: { count: number; commission: number; laborFee: number; total: number };
+};
+type TechTab = "PAID" | "PENDING" | "MONTH";
+
+function TechJobsTable({ rows, showStatus }: { rows: TechJob[]; showStatus: boolean }) {
+  if (!rows.length) return <div className="mt-3 rounded-lg border border-dashed p-4 text-center text-sm text-gray-500">Không có hoá đơn nào.</div>;
+  const tot = rows.reduce((t, r) => ({ c: t.c + num(r.commission), l: t.l + num(r.laborFee), a: t.a + num(r.total) }), { c: 0, l: 0, a: 0 });
+  return (
+    <div className="mt-3 overflow-x-auto">
+      <table className="w-full min-w-[760px] text-sm">
+        <thead className="bg-gray-50 text-left text-gray-600">
+          <tr>
+            <th className="px-3 py-2 font-medium">Số HĐ</th>
+            <th className="px-3 py-2 font-medium">Ngày lập</th>
+            <th className="px-3 py-2 font-medium">Khách hàng</th>
+            <th className="px-3 py-2 font-medium">NV bán</th>
+            <th className="px-3 py-2 font-medium">Trạng thái</th>
+            <th className="px-3 py-2 font-medium text-right">Hoa hồng</th>
+            <th className="px-3 py-2 font-medium text-right">Phụ cấp KT</th>
+            <th className="px-3 py-2 font-medium text-right">Tổng</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.invoiceId} className="border-t">
+              <td className="px-3 py-2 font-medium">{r.invoiceCode}</td>
+              <td className="px-3 py-2">{r.issueDate}</td>
+              <td className="px-3 py-2">{r.customerName}</td>
+              <td className="px-3 py-2">{r.saleUserName || "—"}</td>
+              <td className="px-3 py-2">
+                {r.status === "PAID" ? (
+                  <span className="whitespace-nowrap rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800">
+                    {showStatus && r.dsMonth ? `Đã tính HH tháng ${r.dsMonth}` : "Đã tính HH"}
+                  </span>
+                ) : (
+                  <span className="whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-900" title="Khách chưa trả đủ tiền: hoa hồng / phụ cấp tính khi khách trả đủ">
+                    Chưa trả đủ
+                  </span>
+                )}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">
+                {r.earnsPct ? money(r.commission) : <span className="text-gray-400" title="Hoá đơn có phụ cấp kỹ thuật: chỉ ăn phụ cấp">—</span>}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">{num(r.laborFee) > 0 ? money(r.laborFee) : "—"}</td>
+              <td className="px-3 py-2 text-right tabular-nums font-medium">{money(r.total)}</td>
+            </tr>
+          ))}
+          <tr className="border-t bg-gray-50 font-semibold">
+            <td className="px-3 py-2" colSpan={5}>
+              Tổng ({rows.length} hoá đơn)
+            </td>
+            <td className="px-3 py-2 text-right tabular-nums">{money(tot.c)}</td>
+            <td className="px-3 py-2 text-right tabular-nums">{money(tot.l)}</td>
+            <td className="px-3 py-2 text-right tabular-nums">{money(tot.a)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TechSection({ tech, month, year }: { tech: TechBlock; month: number; year: number }) {
   const [open, setOpen] = useState(true);
+  const [tab, setTab] = useState<TechTab>("PAID");
+  const [jobs, setJobs] = useState<TechJobsResp | null>(null);
+  const [jobsErr, setJobsErr] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api
+      .get("/me/tech-jobs", { params: { month, year } })
+      .then((res) => {
+        if (!alive) return;
+        setJobs(res?.data?.data ?? null);
+        setJobsErr(null);
+      })
+      .catch((e) => alive && setJobsErr(e?.response?.data?.message || "Không tải được hoá đơn kỹ thuật."));
+    return () => {
+      alive = false;
+    };
+  }, [month, year]);
+  const ps = jobs?.pendingSummary;
   const s = tech.summary;
   const total = hasVal(s.totalIncome) ? num(s.totalIncome) : num(s.commission) + num(s.laborFee);
   return (
@@ -509,13 +606,61 @@ function TechSection({ tech }: { tech: TechBlock }) {
           {open ? "Ẩn chi tiết" : "Xem chi tiết"}
         </button>
       </div>
-      <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="mt-3 grid grid-cols-2 lg:grid-cols-5 gap-3">
         <Kpi title="Tiền hàng tính hoa hồng" value={money(s.goods)} subHint="Chưa VAT, không gồm dịch vụ, khách trả hàng trừ âm; HĐ có phụ cấp không tính hoa hồng" />
         <Kpi title="Thực nhận" value={money(s.commission)} />
         <Kpi title="Phụ cấp kỹ thuật" value={money(s.laborFee)} subHint={`${num(s.laborCount)} hoá đơn có phụ cấp kỹ thuật`} />
         <Kpi title="Tổng nhận" value={money(total)} subHint="Thực nhận + phụ cấp kỹ thuật" />
+        <Kpi
+          title="Hoa hồng đang chờ"
+          value={money(num(ps?.total))}
+          subHint={`${num(ps?.count)} hoá đơn khách chưa trả đủ • nhận khi khách trả đủ`}
+          highlight={num(ps?.count) > 0}
+        />
       </div>
-      {open && tech.invoices.length > 0 && (
+      {open && (
+        <div className="mt-3 inline-flex w-full overflow-hidden rounded-lg border bg-white sm:w-auto" role="tablist">
+          {(
+            [
+              ["PAID", `Đã tính hoa hồng (${tech.invoices.length})`],
+              ["PENDING", `Chờ khách trả (${jobs?.pending.length ?? 0})`],
+              ["MONTH", `Đã đi làm trong tháng (${jobs?.monthJobs.length ?? 0})`],
+            ] as Array<[TechTab, string]>
+          ).map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              role="tab"
+              aria-selected={tab === k}
+              onClick={() => setTab(k)}
+              className={`flex-1 whitespace-nowrap px-3 py-2 text-sm ${tab === k ? "bg-blue-600 text-white" : "hover:bg-gray-50"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+      {open && tab !== "PAID" && jobsErr && <div className="mt-3 text-sm text-red-600">{jobsErr}</div>}
+      {open && tab === "PENDING" && jobs && (
+        <>
+          <div className="mt-2 text-xs text-gray-500">
+            Mọi hoá đơn có bạn ở ô NV kỹ thuật mà khách chưa trả đủ tiền (cả tháng trước). Hoa hồng / phụ cấp là dự kiến, tính vào tháng khách trả đủ.
+          </div>
+          <TechJobsTable rows={jobs.pending} showStatus={false} />
+        </>
+      )}
+      {open && tab === "MONTH" && jobs && (
+        <>
+          <div className="mt-2 text-xs text-gray-500">
+            Hoá đơn có bạn ở ô NV kỹ thuật, duyệt trong tháng {month}/{year}. Hoa hồng của hoá đơn chưa trả đủ là dự kiến.
+          </div>
+          <TechJobsTable rows={jobs.monthJobs} showStatus />
+        </>
+      )}
+      {open && tab === "PAID" && tech.invoices.length === 0 && (
+        <div className="mt-3 rounded-lg border border-dashed p-4 text-center text-sm text-gray-500">Tháng này chưa có hoá đơn nào khách trả đủ tiền.</div>
+      )}
+      {open && tab === "PAID" && tech.invoices.length > 0 && (
         <div className="mt-3 overflow-x-auto">
           <table className="w-full min-w-[760px] text-sm">
             <thead className="bg-gray-50 text-left text-gray-600">
@@ -863,7 +1008,7 @@ const MySalesDashboardPage: React.FC = () => {
       </div>
 
       {/* ✅ Kỹ thuật */}
-      {dash?.tech ? <TechSection tech={dash.tech} /> : null}
+      {dash?.tech ? <TechSection tech={dash.tech} month={dash.period?.month ?? month} year={dash.period?.year ?? year} /> : null}
 
       {/* Content */}
       <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 items-stretch">
