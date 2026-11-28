@@ -494,7 +494,6 @@ function DsSection({
 function TechSection({ tech }: { tech: TechBlock }) {
   const [open, setOpen] = useState(true);
   const s = tech.summary;
-  const pct = `${(num(tech.rate) * 100).toLocaleString("vi-VN", { maximumFractionDigits: 2 })}%`;
   const total = hasVal(s.totalIncome) ? num(s.totalIncome) : num(s.commission) + num(s.laborFee);
   return (
     <div className="bg-white rounded-xl shadow-sm border p-3 sm:p-4">
@@ -511,10 +510,10 @@ function TechSection({ tech }: { tech: TechBlock }) {
         </button>
       </div>
       <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Kpi title="Tiền hàng tính %" value={money(s.goods)} subHint="Chưa VAT, không gồm dịch vụ, khách trả hàng trừ âm; HĐ có phụ cấp không tính %" />
-        <Kpi title={`Thực nhận (${pct} tiền hàng)`} value={money(s.commission)} />
+        <Kpi title="Tiền hàng tính hoa hồng" value={money(s.goods)} subHint="Chưa VAT, không gồm dịch vụ, khách trả hàng trừ âm; HĐ có phụ cấp không tính hoa hồng" />
+        <Kpi title="Thực nhận" value={money(s.commission)} />
         <Kpi title="Phụ cấp kỹ thuật" value={money(s.laborFee)} subHint={`${num(s.laborCount)} hoá đơn có phụ cấp kỹ thuật`} />
-        <Kpi title="Tổng nhận" value={money(total)} subHint={`Thực nhận ${pct} + phụ cấp kỹ thuật`} />
+        <Kpi title="Tổng nhận" value={money(total)} subHint="Thực nhận + phụ cấp kỹ thuật" />
       </div>
       {open && tech.invoices.length > 0 && (
         <div className="mt-3 overflow-x-auto">
@@ -543,7 +542,7 @@ function TechSection({ tech }: { tech: TechBlock }) {
                   <td className="px-3 py-2">{r.saleUserName || "—"}</td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {r.earnsPct === false ? (
-                      <span className="text-gray-400" title="Hoá đơn có phụ cấp kỹ thuật: chỉ ăn phụ cấp, không tính %">
+                      <span className="text-gray-400" title="Hoá đơn có phụ cấp kỹ thuật: chỉ ăn phụ cấp, không tính hoa hồng">
                         {money(r.goods)}
                       </span>
                     ) : (
@@ -674,7 +673,6 @@ const MySalesDashboardPage: React.FC = () => {
     dsInvoices: Array.isArray(dash?.dsInvoices) ? dash!.dsInvoices! : [],
   };
   const saleRate = num(view.summary.saleRate ?? 0);
-  const saleRatePct = `${(saleRate * 100).toLocaleString("vi-VN", { maximumFractionDigits: 3 })}%`;
 
   // KPI numbers
   const kpiNeedCollect = num((view.summary as any).normalOutstanding ?? view.summary.outstanding);
@@ -856,7 +854,7 @@ const MySalesDashboardPage: React.FC = () => {
           subHint={`Tính khi khách trả đủ tiền • ${num(view.summary.orderCount)} HĐ${num(view.summary.returned) ? ` • trừ trả hàng ${money(view.summary.returned)}` : ""}`}
         />
         {saleRate > 0 ? (
-          <Kpi title={`Hoa hồng (${saleRatePct})`} value={money(view.summary.commission ?? 0)} subHint="Trên doanh số tháng này" />
+          <Kpi title="Hoa hồng" value={money(view.summary.commission ?? 0)} subHint="Trên doanh số tháng này" />
         ) : (
           <Kpi title="HĐ đủ tiền" value={String(num(view.summary.orderCount))} />
         )}
